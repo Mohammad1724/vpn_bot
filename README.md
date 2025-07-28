@@ -23,7 +23,7 @@
 sudo curl -sSL [https://raw.github.com/Mohammad1724/vpn_bot/main/install.sh]
 
 
-# ☄️ نصب دستی
+## ☄️ نصب دستی
 1. پیش‌نیازها
 مطمئن شوید که Python 3 و pip روی سیستم شما نصب هستند:
 sudo apt update
