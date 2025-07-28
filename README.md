@@ -19,7 +19,6 @@
 # دانلود و اجرای اسکریپت نصب
 
 
-```bash
 sudo curl -sSL [https://raw.github.com/Mohammad1724/vpn_bot/main/install.sh]
 
 
