@@ -44,54 +44,64 @@ mkdir -p $PROJECT_DIR
 cd $PROJECT_DIR
 check_success "ایجاد دایرکتوری"
 
-echo -e "${YELLOW}🔧 ایجاد محیط مجازی Python...${NC}"
-python3 -m venv venv
-source venv/bin/activate
-check_success "ایجاد محیط مجازی"
+# --- گرفتن اطلاعات از کاربر ---
+echo -e "${BLUE}\n💡 لطفاً اطلاعات مورد نیاز ربات را وارد کنید:${NC}"
 
-echo -e "${YELLOW}📚 نصب کتابخانه‌های مورد نیاز...${NC}"
-pip install --upgrade pip
-pip install -r requirements.txt
-check_success "نصب کتابخانه‌ها"
+read -p "توکن ربات تلگرام شما (از @BotFather دریافت کنید): " BOT_TOKEN_INPUT
+read -p "آیدی عددی تلگرام ادمین (برای دریافت، پیامک 'myid/' را به @userinfobot بفرستید): " ADMIN_ID_INPUT
+read -p "آدرس پنل Hiddify شما (مثال: https://your-panel.com): " HIDDIFY_URL_INPUT
+read -p "API Key پنل Hiddify شما: " HIDDIFY_KEY_INPUT
+read -p "شناسه پذیرنده زرین‌پال شما (اختیاری، اگر ندارید خالی بگذارید): " ZARINPAL_MERCHANT_INPUT
+read -p "شماره کارت بانکی برای پرداخت دستی (اختیاری، اگر ندارید خالی بگذارید): " CARD_NUMBER_INPUT
+read -p "نام صاحب کارت بانکی (اختیاری): " CARD_HOLDER_NAME_INPUT
+read -p "یوزرنیم تلگرام پشتیبانی شما (مثال: @my_support): " SUPPORT_USERNAME_INPUT
+read -p "شماره تماس پشتیبانی شما (مثال: 09123456789): " SUPPORT_PHONE_INPUT
+read -p "آدرس وب‌هوک ربات (اختیاری، برای تأیید پرداخت خودکار زرین‌پال): " WEBHOOK_URL_INPUT
 
-echo -e "${YELLOW}📝 ایجاد فایل‌های پروژه...${NC}"
+# --- ایجاد فایل‌های پروژه ---
+echo -e "${YELLOW}\n📝 ایجاد فایل‌های پروژه...${NC}"
 
-# ایجاد فایل config.py
-cat > config.py << 'EOF'
+# ایجاد فایل config.py با اطلاعات ورودی کاربر
+cat > config.py << EOF
 """
 تنظیمات ربات فروش VPN
-لطفاً تمام مقادیر را با اطلاعات واقعی خود جایگزین کنید
 """
 
 # اطلاعات ربات تلگرام
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
+BOT_TOKEN = "$BOT_TOKEN_INPUT"
 
 # لیست آیدی ادمین‌ها
-ADMIN_IDS = [123456789] # اینجا باید آیدی تلگرام خودتان را قرار دهید
+ADMIN_IDS = [$ADMIN_ID_INPUT]
 
 # اطلاعات پنل HiddiFy  
-HIDDIFY_API_URL = "https://your-panel.com" # آدرس پنل Hiddify شما
-HIDDIFY_API_KEY = "your-api-key" # API Key پنل Hiddify شما
+HIDDIFY_API_URL = "$HIDDIFY_URL_INPUT"
+HIDDIFY_API_KEY = "$HIDDIFY_KEY_INPUT"
 
 # زرین‌پال
-ZARINPAL_MERCHANT_ID = "" # کد مرچنت زرین پال شما (اختیاری)
+ZARINPAL_MERCHANT_ID = "$ZARINPAL_MERCHANT_INPUT"
 
 # اطلاعات کارت
-CARD_NUMBER = "6037-9977-****-****" # شماره کارت بانکی برای پرداخت دستی
-CARD_HOLDER_NAME = "نام صاحب کارت" # نام صاحب کارت بانکی
+CARD_NUMBER = "$CARD_NUMBER_INPUT"
+CARD_HOLDER_NAME = "$CARD_HOLDER_NAME_INPUT"
 
 # پشتیبانی
-SUPPORT_USERNAME = "@your_support" # یوزرنیم تلگرام پشتیبانی
-SUPPORT_PHONE = "09123456789" # شماره تماس پشتیبانی
+SUPPORT_USERNAME = "$SUPPORT_USERNAME_INPUT"
+SUPPORT_PHONE = "$SUPPORT_PHONE_INPUT"
 
 # وب‌هوک (اختیاری، برای تأیید خودکار پرداخت زرین‌پال)
-BOT_WEBHOOK_URL = "" 
+BOT_WEBHOOK_URL = "$WEBHOOK_URL_INPUT" 
 EOF
-
 echo -e "${GREEN}✅ فایل config.py ایجاد شد${NC}"
 
-# ایجاد فایل bot.py
-# توجه: محتوای کامل bot.py اینجا قرار می‌گیرد
+# ایجاد فایل requirements.txt
+cat > requirements.txt << EOF
+pyTelegramBotAPI==4.14.0
+requests==2.31.0
+EOF
+echo -e "${GREEN}✅ فایل requirements.txt ایجاد شد${NC}"
+
+# ایجاد فایل bot.py (محتوای کامل bot.py باید اینجا قرار گیرد)
+# توجه: محتوای کامل bot.py در ادامه توضیح داده شده است، اما برای خودکارسازی، باید آن را اینجا جایگذاری کنید.
 cat > bot.py << 'EOF'
 import telebot
 import sqlite3
@@ -102,6 +112,7 @@ import uuid
 import os
 from config import *
 
+# ==================== Database Manager ====================
 class DatabaseManager:
     def __init__(self):
         self.db_name = 'vpn_bot.db'
@@ -152,7 +163,7 @@ class DatabaseManager:
         conn.commit()
         conn.close()
         
-        # اضافه کردن سرویس‌های پیش‌فرض
+        # اضافه کردن سرویس‌های پیش‌فرض فقط در صورتی که جدولی خالی باشد
         self.add_default_services()
     
     def add_default_services(self):
@@ -281,6 +292,36 @@ class DatabaseManager:
             'total_income': total_income
         }
 
+    def add_service(self, name, price, duration, traffic, description):
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO services (name, price, duration_days, traffic_gb, description)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (name, price, duration, traffic, description))
+        conn.commit()
+        conn.close()
+
+    def update_service(self, service_id, name, price, duration, traffic, description):
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE services 
+            SET name = ?, price = ?, duration_days = ?, traffic_gb = ?, description = ?
+            WHERE id = ?
+        ''', (name, price, duration, traffic, description, service_id))
+        conn.commit()
+        conn.close()
+
+    def delete_service(self, service_id):
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM services WHERE id = ?', (service_id,))
+        conn.commit()
+        conn.close()
+
+
+# ==================== Hiddify Manager ====================
 class HiddifyManager:
     def __init__(self):
         self.api_url = HIDDIFY_API_URL.rstrip('/')
@@ -293,10 +334,12 @@ class HiddifyManager:
                 'Authorization': f'Bearer {self.api_key}',
                 'Content-Type': 'application/json'
             }
-            response = requests.get(f'{self.api_url}/api/v1/admin/user/', 
+            # Try to get a small list of users to confirm connection
+            response = requests.get(f'{self.api_url}/api/v1/admin/user/?limit=1', 
                                   headers=headers, timeout=10)
             return response.status_code == 200
-        except:
+        except Exception as e:
+            print(f"Hiddify connection test failed: {e}")
             return False
     
     def create_user(self, username, traffic_limit_gb, expire_days):
@@ -323,12 +366,14 @@ class HiddifyManager:
                 # Hiddify API might return 'subscription_url' or 'config_url'
                 return result.get('subscription_url') or result.get('config_url')
             
+            print(f"Hiddify user creation failed: {response.status_code} - {response.text}")
             return None
             
         except Exception as e:
             print(f"Error creating user: {e}")
             return None
 
+# ==================== Payment Manager ====================
 class PaymentManager:
     def __init__(self):
         self.zarinpal_merchant = ZARINPAL_MERCHANT_ID
@@ -357,9 +402,11 @@ class PaymentManager:
                     authority = result['data']['authority']
                     return f"https://www.zarinpal.com/pg/StartPay/{authority}"
             
+            print(f"Zarinpal payment request failed: {response.status_code} - {response.text}")
             return None
             
-        except:
+        except Exception as e:
+            print(f"Error creating Zarinpal payment URL: {e}")
             return None
 
 # ایجاد instance ها
@@ -368,7 +415,7 @@ hiddify = HiddifyManager()
 payment = PaymentManager()
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# کیبوردها
+# ==================== Keyboards ====================
 def main_keyboard():
     keyboard = telebot.types.InlineKeyboardMarkup(row_width=2)
     keyboard.add(
@@ -414,7 +461,19 @@ def admin_keyboard():
     )
     return keyboard
 
-# هندلرهای اصلی
+def admin_services_manage_keyboard():
+    keyboard = telebot.types.InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
+        telebot.types.InlineKeyboardButton("➕ افزودن سرویس", callback_data="admin_add_service"),
+        telebot.types.InlineKeyboardButton("✏️ ویرایش سرویس", callback_data="admin_edit_service_list")
+    )
+    keyboard.add(
+        telebot.types.InlineKeyboardButton("🗑️ حذف سرویس", callback_data="admin_delete_service_list")
+    )
+    keyboard.add(telebot.types.InlineKeyboardButton("🔙 پنل ادمین", callback_data="admin_back"))
+    return keyboard
+
+# ==================== Handlers ====================
 @bot.message_handler(commands=['start'])
 def start_command(message):
     user_id = message.from_user.id
@@ -590,7 +649,7 @@ def start_purchase(call, service_id):
         ))
     
     # اطلاعات کارت به کارت
-    if CARD_NUMBER:
+    if CARD_NUMBER and CARD_HOLDER_NAME:
         payment_text += f"""
 
 💳 کارت به کارت:
@@ -605,7 +664,9 @@ def start_purchase(call, service_id):
     keyboard.add(telebot.types.InlineKeyboardButton(
         "✅ پرداخت کردم", callback_data=f"paid_{order_id}"
     ))
-    keyboard.types.InlineKeyboardButton("❌ انصراف", callback_data="back_main")
+    keyboard.add(telebot.types.InlineKeyboardButton(
+        "❌ انصراف", callback_data="back_main"
+    ))
     
     payment_text += "\n\n⚠️ بعد از پرداخت، دکمه 'پرداخت کردم' را بزنید."
     
@@ -839,6 +900,7 @@ def handle_admin_callback(call):
         bot.edit_message_text(orders_text, call.message.chat.id, call.message.message_id, reply_markup=keyboard, parse_mode='Markdown')
 
     elif call.data == "admin_services":
+        # نمایش منوی مدیریت سرویس‌ها
         services = db.get_services()
         service_list_text = "📦 **لیست سرویس‌ها:**\n\n"
         if services:
@@ -850,17 +912,148 @@ def handle_admin_callback(call):
                 service_list_text += f"   حجم: {service[4]} GB\n"
                 service_list_text += "----------\n"
         else:
-            service_list_text = "سرویسی تعریف نشده است. از دستور /addservice استفاده کنید."
+            service_list_text = "سرویسی تعریف نشده است."
         
-        keyboard = telebot.types.InlineKeyboardMarkup()
-        keyboard.add(telebot.types.InlineKeyboardButton("🔙 پنل ادمین", callback_data="admin_back"))
-        bot.edit_message_text(service_list_text, call.message.chat.id, call.message.message_id, reply_markup=keyboard, parse_mode='Markdown')
+        bot.edit_message_text(service_list_text, call.message.chat.id, call.message.message_id, reply_markup=admin_services_manage_keyboard(), parse_mode='Markdown')
+        
+    elif call.data == "admin_add_service":
+        msg = bot.send_message(call.message.chat.id, "➕ لطفاً اطلاعات سرویس جدید را در یک خط و با فرمت زیر وارد کنید:\n\n`نام_سرویس قیمت مدت_روز حجم_گیگ توضیحات`\n\nمثال: `پکیج_یک_ماهه 50000 30 50 مناسب_استفاده_شخصی`")
+        bot.register_next_step_handler(msg, add_service_step)
+
+    elif call.data == "admin_edit_service_list":
+        services = db.get_services()
+        if not services:
+            bot.answer_callback_query(call.id, "❌ سرویسی برای ویرایش وجود ندارد!")
+            return
+        
+        keyboard = telebot.types.InlineKeyboardMarkup(row_width=1)
+        for service in services:
+            keyboard.add(telebot.types.InlineKeyboardButton(f"✏️ {service[1]} (ID: {service[0]})", callback_data=f"edit_service_{service[0]}"))
+        keyboard.add(telebot.types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_services"))
+        
+        bot.edit_message_text("✏️ سرویس مورد نظر برای ویرایش را انتخاب کنید:", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
+
+    elif call.data.startswith("edit_service_"):
+        service_id = int(call.data.split("_")[2])
+        service = db.get_service(service_id)
+        if not service:
+            bot.answer_callback_query(call.id, "❌ سرویس یافت نشد!")
+            return
+        
+        msg = bot.send_message(call.message.chat.id, f"✏️ برای ویرایش سرویس **{service[1]} (ID: {service_id})**، لطفاً اطلاعات جدید را در یک خط و با فرمت زیر وارد کنید:\n\n`نام_جدید قیمت_جدید مدت_روز_جدید حجم_گیگ_جدید توضیحات_جدید`\n\n(می‌توانید اطلاعات قبلی را ببینید: `{service[1]} {service[2]} {service[3]} {service[4]} {service[5]}`)\n\nمثال: `پکیج_پلاس 60000 30 60 پکیج_بهتر`", parse_mode='Markdown')
+        bot.register_next_step_handler(msg, lambda m: edit_service_step(m, service_id))
+
+    elif call.data == "admin_delete_service_list":
+        services = db.get_services()
+        if not services:
+            bot.answer_callback_query(call.id, "❌ سرویسی برای حذف وجود ندارد!")
+            return
+        
+        keyboard = telebot.types.InlineKeyboardMarkup(row_width=1)
+        for service in services:
+            keyboard.add(telebot.types.InlineKeyboardButton(f"🗑️ {service[1]} (ID: {service[0]})", callback_data=f"delete_service_{service[0]}"))
+        keyboard.add(telebot.types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_services"))
+        
+        bot.edit_message_text("🗑️ سرویس مورد نظر برای حذف را انتخاب کنید:", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
+
+    elif call.data.startswith("delete_service_"):
+        service_id = int(call.data.split("_")[2])
+        service = db.get_service(service_id)
+        if not service:
+            bot.answer_callback_query(call.id, "❌ سرویس یافت نشد!")
+            return
+        
+        db.delete_service(service_id)
+        bot.answer_callback_query(call.id, f"✅ سرویس '{service[1]}' با موفقیت حذف شد.")
+        # Refresh the services list
+        handle_admin_callback(call) # Re-call to update the message with new list
         
     elif call.data == "admin_back":
         admin_command(call.message)
 
+# ==================== Admin Commands for Services ====================
+def add_service_step(message):
+    if message.from_user.id not in ADMIN_IDS:
+        bot.reply_to(message, "❌ دسترسی غیرمجاز!")
+        return
+    
+    try:
+        parts = message.text.split(maxsplit=4) # Split into 5 parts: name, price, duration, traffic, description
+        if len(parts) != 5:
+            msg = bot.send_message(message.chat.id, """
+❌ فرمت نادرست!
 
-# دستورات ادمین
+✅ فرمت صحیح:
+`نام_سرویس قیمت مدت_روز حجم_گیگ توضیحات`
+
+📝 مثال:
+`پکیج_جدید 75000 60 100 پکیج_دو_ماهه_با_تخفیف`
+""")
+            bot.register_next_step_handler(msg, add_service_step) # Ask again
+            return
+        
+        name = parts[0].replace('_', ' ')
+        price = int(parts[1])
+        duration = int(parts[2])
+        traffic = int(parts[3])
+        description = parts[4].replace('_', ' ')
+        
+        db.add_service(name, price, duration, traffic, description)
+        bot.send_message(message.chat.id, f"✅ سرویس '{name}' با موفقیت اضافه شد!")
+        
+        # Display updated services list
+        call = telebot.types.CallbackQuery(id=0, from_user=message.from_user, message=message, data="admin_services")
+        handle_admin_callback(call)
+        
+    except ValueError:
+        msg = bot.send_message(message.chat.id, "❌ قیمت، مدت و حجم باید عدد باشند!\nلطفاً دوباره وارد کنید.")
+        bot.register_next_step_handler(msg, add_service_step)
+    except Exception as e:
+        bot.send_message(message.chat.id, f"❌ خطا: {str(e)}")
+        call = telebot.types.CallbackQuery(id=0, from_user=message.from_user, message=message, data="admin_services")
+        handle_admin_callback(call)
+
+def edit_service_step(message, service_id):
+    if message.from_user.id not in ADMIN_IDS:
+        bot.reply_to(message, "❌ دسترسی غیرمجاز!")
+        return
+    
+    try:
+        parts = message.text.split(maxsplit=4) # Split into 5 parts
+        if len(parts) != 5:
+            msg = bot.send_message(message.chat.id, """
+❌ فرمت نادرست برای ویرایش!
+
+✅ فرمت صحیح:
+`نام_جدید قیمت_جدید مدت_روز_جدید حجم_گیگ_جدید توضیحات_جدید`
+
+لطفاً دوباره وارد کنید.
+""")
+            bot.register_next_step_handler(msg, lambda m: edit_service_step(m, service_id))
+            return
+        
+        name = parts[0].replace('_', ' ')
+        price = int(parts[1])
+        duration = int(parts[2])
+        traffic = int(parts[3])
+        description = parts[4].replace('_', ' ')
+        
+        db.update_service(service_id, name, price, duration, traffic, description)
+        bot.send_message(message.chat.id, f"✅ سرویس با ID **{service_id}** با موفقیت ویرایش شد.")
+        
+        # Display updated services list
+        call = telebot.types.CallbackQuery(id=0, from_user=message.from_user, message=message, data="admin_services")
+        handle_admin_callback(call)
+
+    except ValueError:
+        msg = bot.send_message(message.chat.id, "❌ قیمت، مدت و حجم باید عدد باشند!\nلطفاً دوباره وارد کنید.")
+        bot.register_next_step_handler(msg, lambda m: edit_service_step(m, service_id))
+    except Exception as e:
+        bot.send_message(message.chat.id, f"❌ خطا: {str(e)}")
+        call = telebot.types.CallbackQuery(id=0, from_user=message.from_user, message=message, data="admin_services")
+        handle_admin_callback(call)
+
+# ==================== Other Admin Commands ====================
 @bot.message_handler(commands=['activate'])
 def activate_service(message):
     if message.from_user.id not in ADMIN_IDS:
@@ -885,6 +1078,7 @@ def activate_service(message):
             return
         
         # ایجاد کاربر در HiddiFy
+        # order[1] is user_id, order[11] is traffic_gb, order[10] is duration_days
         username = f"user_{order[1]}_{order_id}"
         config_url = hiddify.create_user(username, order[11], order[10])
         
@@ -930,53 +1124,11 @@ def activate_service(message):
             try:
                 bot.send_message(order[1], config_text, parse_mode='Markdown')
                 bot.reply_to(message, f"✅ سرویس برای کاربر {order[1]} فعال شد!")
-            except:
-                bot.reply_to(message, f"✅ سرویس فعال شد اما کاربر را بلاک کرده!")
+            except Exception as e:
+                bot.reply_to(message, f"✅ سرویس فعال شد اما در ارسال به کاربر {order[1]} خطا رخ داد: {e} (کاربر شاید بلاک کرده است)")
         else:
-            bot.reply_to(message, "❌ خطا در ایجاد سرویس در پنل HiddiFy!")
+            bot.reply_to(message, "❌ خطا در ایجاد سرویس در پنل HiddiFy! لطفاً API Key و URL پنل را بررسی کنید.")
             
-    except Exception as e:
-        bot.reply_to(message, f"❌ خطا: {str(e)}")
-
-@bot.message_handler(commands=['addservice'])
-def add_service_cmd(message):
-    if message.from_user.id not in ADMIN_IDS:
-        return
-    
-    try:
-        # فرمت: /addservice نام قیمت مدت_روز حجم_گیگ توضیحات
-        parts = message.text.split(maxsplit=5)
-        if len(parts) != 6:
-            bot.reply_to(message, """
-❌ فرمت نادرست!
-
-✅ فرمت صحیح:
-/addservice نام قیمت مدت_روز حجم_گیگ توضیحات
-
-📝 مثال:
-/addservice پکیج_جدید 75000 60 100 پکیج_دو_ماهه_با_تخفیف
-""")
-            return
-        
-        name = parts[1].replace('_', ' ')
-        price = int(parts[2])
-        duration = int(parts[3])
-        traffic = int(parts[4])
-        description = parts[5].replace('_', ' ')
-        
-        conn = sqlite3.connect('vpn_bot.db')
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO services (name, price, duration_days, traffic_gb, description)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (name, price, duration, traffic, description))
-        conn.commit()
-        conn.close()
-        
-        bot.reply_to(message, f"✅ سرویس '{name}' با موفقیت اضافه شد!")
-        
-    except ValueError:
-        bot.reply_to(message, "❌ قیمت، مدت و حجم باید عدد باشند!")
     except Exception as e:
         bot.reply_to(message, f"❌ خطا: {str(e)}")
 
@@ -1091,42 +1243,25 @@ def show_recent_orders(message):
 
 if __name__ == "__main__":
     print("🚀 در حال راه‌اندازی ربات...")
-    print(f"🤖 نام ربات: {bot.get_me().first_name}")
-    print(f"🆔 یوزرنیم: @{bot.get_me().username}")
-    print("✅ ربات آماده است!")
-    
+    # Attempt to get bot info, but handle potential errors (e.g., invalid token)
+    try:
+        bot_info = bot.get_me()
+        print(f"🤖 نام ربات: {bot_info.first_name}")
+        print(f"🆔 یوزرنیم: @{bot_info.username}")
+        print("✅ ربات آماده است!")
+    except Exception as e:
+        print(f"❌ خطا در دریافت اطلاعات ربات. توکن ربات صحیح نیست یا ارتباط برقرار نشد: {e}")
+        print("لطفاً فایل config.py را بررسی و اصلاح کنید.")
+        exit(1) # Exit if bot token is invalid
+
     try:
         bot.infinity_polling(none_stop=True)
     except Exception as e:
         print(f"❌ خطا در اجرای ربات: {e}")
 EOF
-
 echo -e "${GREEN}✅ فایل bot.py ایجاد شد${NC}"
 
-# ایجاد systemd service
-echo -e "${YELLOW}⚙️ ایجاد سرویس systemd...${NC}"
-cat > /etc/systemd/system/vpn-bot.service << EOF
-[Unit]
-Description=VPN Sales Bot
-After=network.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=$PROJECT_DIR
-Environment=PATH=$PROJECT_DIR/venv/bin
-ExecStart=$PROJECT_DIR/venv/bin/python bot.py
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl daemon-reload
-check_success "ایجاد سرویس"
-
-# اسکریپت مدیریت
+# ایجاد فایل manage.sh
 cat > manage.sh << 'EOF'
 #!/bin/bash
 
@@ -1143,9 +1278,9 @@ show_menu() {
     echo "2. توقف ربات" 
     echo "3. وضعیت ربات"
     echo "4. مشاهده لاگ‌ها"
-    echo "5. ویرایش تنظیمات"
+    echo "5. ویرایش تنظیمات (config.py)"
     echo "6. بازنشانی ربات"
-    echo "7. تنظیم فایروال"
+    echo "7. تنظیم فایروال (UFW)"
     echo "8. خروج"
     echo -n "انتخاب کنید [1-8]: "
 }
@@ -1188,11 +1323,16 @@ edit_config() {
 restart_bot() {
     echo -e "${YELLOW}🔄 در حال بازنشانی ربات...${NC}"
     systemctl restart vpn-bot
-    echo -e "${GREEN}✅ ربات بازنشانی شد${NC}"
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}✅ ربات بازنشانی شد${NC}"
+    else
+        echo -e "${RED}❌ خطا در بازنشانی ربات${NC}"
+    fi
 }
 
 setup_firewall() {
     echo -e "${YELLOW}🔥 تنظیم فایروال...${NC}"
+    apt install ufw -y
     ufw --force enable
     ufw allow ssh
     ufw allow 443
@@ -1218,11 +1358,9 @@ while true; do
     read -p "برای ادامه Enter بزنید..."
 done
 EOF
+echo -e "${GREEN}✅ فایل manage.sh ایجاد شد${NC}"
 
-chmod +x manage.sh
-check_success "ایجاد اسکریپت مدیریت"
-
-# اسکریپت بک‌آپ
+# ایجاد فایل backup.sh
 mkdir -p /opt/backups
 cat > backup.sh << 'EOF'
 #!/bin/bash
@@ -1231,38 +1369,162 @@ BACKUP_DIR="/opt/backups"
 PROJECT_DIR="/opt/vpn-bot"
 
 echo "🗄️ ایجاد بک‌آپ..."
-tar -czf "$BACKUP_DIR/vpn-bot-backup-$DATE.tar.gz" -C "$PROJECT_DIR" .
+tar -czf "$BACKUP_DIR/vpn-bot-backup-$DATE.tar.gz" -C "$PROJECT_DIR" bot.py config.py vpn_bot.db
 
 # حذف بک‌آپ‌های قدیمی (بیشتر از 7 روز)
 find "$BACKUP_DIR" -name "vpn-bot-backup-*.tar.gz" -mtime +7 -delete
 
 echo "✅ بک‌آپ ذخیره شد: vpn-bot-backup-$DATE.tar.gz"
 EOF
+echo -e "${GREEN}✅ فایل backup.sh ایجاد شد${NC}"
 
-chmod +x backup.sh
+# ایجاد فایل README.md (محتوای کامل README.md باید اینجا قرار گیرد)
+# توجه: محتوای کامل README.md در ادامه توضیح داده شده است، اما برای خودکارسازی، باید آن را اینجا جایگذاری کنید.
+cat > README.md << 'EOF'
+# 🤖 ربات فروش VPN
 
-# اضافه کردن cron job برای بک‌آپ روزانه
-(crontab -l 2>/dev/null; echo "0 2 * * * /opt/vpn-bot/backup.sh >> /var/log/vpn-bot-backup.log 2>&1") | crontab -
+ربات تلگرام پیشرفته برای فروش خودکار سرویس‌های VPN با پنل HiddiFy
 
-echo -e "${GREEN}✅ نصب با موفقیت تکمیل شد!${NC}"
+## ✨ ویژگی‌ها
+
+- 🛒 **فروش خودکار** سرویس‌های VPN
+- 💳 پشتیبانی از **درگاه‌های پرداخت ایرانی** (زرین‌پال و کارت به کارت)
+- 🔗 اتصال مستقیم به **پنل HiddiFy** برای ایجاد خودکار کانفیگ
+- 👨‍💼 **پنل مدیریت کامل** با دستورات ادمین
+- 📊 **گزارش‌گیری و آمار** لحظه‌ای
+- 💬 **پشتیبانی از کاربران**
+- 🔄 **بک‌آپ خودکار** روزانه از دیتابیس و فایل‌ها
+- ➕➖ **مدیریت سرویس‌ها** (افزودن، ویرایش، حذف) از داخل ربات
+
+## 🚀 نصب سریع و خودکار
+
+با استفاده از این دستور، ربات به صورت کامل روی سرور شما نصب و راه‌اندازی می‌شود. این دستور تمام پیش‌نیازها را نصب کرده، فایل‌های پروژه را ایجاد کرده، اطلاعات اولیه را از شما می‌گیرد و ربات را به عنوان یک سرویس سیستمی (Systemd) تنظیم می‌کند.
+
+```bash
+sudo curl -sSL [https://raw.githubusercontent.com/yourusername/vpn-sales-bot/main/install.sh](https://raw.githubusercontent.com/yourusername/vpn-sales-bot/main/install.sh) | sudo bash
+
+نکته مهم: مطمئن شوید که https://raw.githubusercontent.com/yourusername/vpn-sales-bot/main/install.sh را با لینک install.sh در ریپازیتوری خودتان جایگزین کنید. پس از اجرای این دستور، سوالاتی از شما پرسیده می‌شود که باید پاسخ دهید.
+⚙️ پیکربندی
+پس از نصب، تمام اطلاعات پیکربندی در فایل config.py ذخیره می‌شود. می‌توانید این فایل را در هر زمان با استفاده از اسکریپت manage.sh ویرایش کنید.
+اطلاعات ضروری که هنگام نصب از شما پرسیده می‌شود:
+ * توکن ربات تلگرام: از @BotFather دریافت کنید.
+ * آیدی عددی تلگرام ادمین: برای دریافت، پیامک /myid را به @userinfobot بفرستید.
+ * آدرس پنل Hiddify شما: مثال: https://your-panel.com (بدون /api یا /admin).
+ * API Key پنل Hiddify شما: از بخش تنظیمات/API پنل Hiddify خود دریافت کنید.
+ * شناسه پذیرنده زرین‌پال شما: (اختیاری).
+ * شماره کارت بانکی برای پرداخت دستی: (اختیاری).
+ * نام صاحب کارت بانکی: (اختیاری).
+ * یوزرنیم تلگرام پشتیبانی شما: مثال: @my_support.
+ * شماره تماس پشتیبانی شما: مثال: 09123456789.
+ * آدرس وب‌هوک ربات: (اختیاری، برای تأیید پرداخت خودکار زرین‌پال). اگر از زرین‌پال استفاده می‌کنید و می‌خواهید پرداخت‌ها به صورت خودکار تایید شوند، باید آدرس IP/دامنه سرور خود را به علاوه /verify اینجا قرار دهید. مثال: http://your_server_ip_or_domain:PORT. (این بخش نیاز به دانش بیشتر و راه‌اندازی وب‌سرور دارد. برای شروع می‌توانید خالی بگذارید و تایید پرداخت‌ها را دستی انجام دهید.)
+🛠️ مدیریت ربات
+پس از نصب، می‌توانید از اسکریپت manage.sh برای مدیریت آسان ربات استفاده کنید. ابتدا به دایرکتوری پروژه بروید:
+cd /opt/vpn-bot
+
+سپس اسکریپت مدیریت را اجرا کنید:
+./manage.sh
+
+این اسکریپت یک منوی تعاملی برای انجام عملیات زیر فراهم می‌کند:
+ * شروع/توقف/وضعیت ربات
+ * مشاهده لاگ‌ها
+ * ویرایش فایل config.py
+ * بازنشانی ربات
+ * تنظیم فایروال (UFW)
+📱 دستورات ربات تلگرام
+برای کاربران عادی
+ * /start - شروع تعامل با ربات و نمایش منوی اصلی.
+ * دکمه‌های اینلاین برای خرید سرویس، مشاهده سرویس‌های من، پشتیبانی و راهنما.
+برای ادمین‌ها
+ * /admin - دسترسی به پنل مدیریت ربات.
+   * از این پنل می‌توانید به آمار ربات، لیست کاربران و سفارشات دسترسی پیدا کنید.
+   * همچنین بخش سرویس‌ها امکان افزودن، ویرایش و حذف پلن‌های VPN را به صورت تعاملی فراهم می‌کند.
+ * /activate ORDER_ID - فعال‌سازی یک سفارش خاص (با جایگزینی ORDER_ID با شناسه سفارش).
+   (این دستور بیشتر برای فعال‌سازی دستی پس از پرداخت کارت به کارت استفاده می‌شود)
+ * /stats - مشاهده آمار کلی ربات (تعداد کاربران، درآمد و...).
+ * /broadcast پیام_شما - ارسال یک پیام همگانی به تمام کاربران فعال ربات.
+ * /orders - مشاهده ۱۰ سفارش اخیر در ربات.
+🔧 عیب‌یابی
+مشکلات رایج
+ربات پاسخ نمی‌دهد یا کار نمی‌کند:
+ * وضعیت سرویس را بررسی کنید:
+   sudo systemctl status vpn-bot
+
+   مطمئن شوید که سرویس در حال اجرا (active (running)) باشد.
+ * لاگ‌های ربات را بررسی کنید:
+   sudo journalctl -u vpn-bot -f
+
+   به دنبال پیام‌های خطا یا هشدار باشید.
+خطا در اتصال به پنل Hiddify:
+ * آدرس پنل (HIDDIFY_API_URL) و API Key (HIDDIFY_API_KEY) را در config.py با دقت بررسی کنید. از اسکریپت manage.sh گزینه 5 را برای ویرایش استفاده کنید.
+ * مطمئن شوید که سرور شما می‌تواند به آدرس پنل Hiddify متصل شود (مثلاً با ping your-hiddify-panel.com یا curl -I https://your-hiddify-panel.com).
+مشکل در پایگاه داده SQLite:
+در موارد نادر، ممکن است فایل‌های جانبی دیتابیس دچار مشکل شوند. می‌توانید آن‌ها را حذف کرده و ربات را restart کنید (دیتابیس اصلی vpn_bot.db نباید حذف شود):
+rm /opt/vpn-bot/vpn_bot.db-wal
+rm /opt/vpn-bot/vpn_bot.db-shm
+sudo systemctl restart vpn-bot
+
+🤝 مشارکت
+از هرگونه مشارکت در بهبود این پروژه استقبال می‌شود! اگر ایده‌ای برای ویژگی جدید دارید، باگ پیدا کردید یا می‌خواهید کدی را بهبود بخشید، لطفاً مراحل زیر را دنبال کنید:
+ * پروژه را Fork کنید.
+ * یک Branch جدید برای تغییرات خود ایجاد کنید (git checkout -b feature/your-feature-name).
+ * تغییرات خود را Commit کنید (git commit -m 'Add new feature').
+ * تغییرات را به ریپازیتوری خود Push کنید (git push origin feature/your-feature-name).
+ * یک Pull Request به این ریپازیتوری ایجاد کنید.
+📄 لایسنس
+این پروژه تحت لایسنس MIT منتشر شده است. برای اطلاعات بیشتر، به فایل LICENSE (اگر وجود دارد) مراجعه کنید.
+📞 پشتیبانی
+اگر سؤالی دارید یا به کمک نیاز دارید، می‌توانید از طریق راه‌های زیر با ما در تماس باشید:
+ * تلگرام: [@YourUsername] (با یوزرنیم پشتیبانی خود جایگزین کنید)
+ * ایمیل: [your@email.com] (با ایمیل پشتیبانی خود جایگزین کنید)
+ * Issues: GitHub Issues (با آدرس ریپازیتوری خود جایگزین کنید)
+EOF
+echo -e "{GREEN}✅ فایل README.md ایجاد شد{NC}"
+echo -e "{YELLOW}🔧 ایجاد محیط مجازی Python...{NC}"
+python3 -m venv venv
+source venv/bin/activate
+check_success "ایجاد محیط مجازی"
+echo -e "{YELLOW}📚 نصب کتابخانه‌های مورد نیاز...{NC}"
+pip install --upgrade pip
+pip install -r requirements.txt
+check_success "نصب کتابخانه‌ها"
+اجازه اجرایی شدن اسکریپت‌ها
+chmod +x manage.sh backup.sh
+check_success "تنظیم مجوزهای اجرایی"
+ایجاد systemd service
+echo -e "{YELLOW}⚙️ ایجاد سرویس systemd...{NC}"
+cat > /etc/systemd/system/vpn-bot.service << EOF
+[Unit]
+Description=VPN Sales Bot
+After=network.target
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$PROJECT_DIR
+Environment=PATH=$PROJECT_DIR/venv/bin
+ExecStart=$PROJECT_DIR/venv/bin/python bot.py
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+check_success "ایجاد سرویس"
+اضافه کردن cron job برای بک‌آپ روزانه
+(crontab -l 2>/dev/null; echo "0 2 * * * $PROJECT_DIR/backup.sh >> /var/log/vpn-bot-backup.log 2>&1") | crontab -
+check_success "تنظیم Cron Job برای بک‌آپ"
+echo -e "{GREEN}✅ نصب با موفقیت تکمیل شد\!{NC}"
 echo ""
-echo -e "${BLUE}📋 مراحل باقی‌مانده:${NC}"
-echo "1. فایل config.py را ویرایش کنید:"
-echo "   nano $PROJECT_DIR/config.py"
+echo -e "{BLUE}📋 مراحل باقی‌مانده:{NC}"
+echo "1. ربات را شروع کنید:"
+echo "   cd PROJECT\_DIR && ./manage.sh"
+echo "   سپس گزینه '1. شروع ربات' را انتخاب کنید."
 echo ""
-echo "2. اطلاعات زیر را وارد کنید:"
-echo "   - توکن ربات تلگرام"
-echo "   - آیدی ادمین‌ها" 
-echo "   - اطلاعات پنل HiddiFy"
-echo "   - اطلاعات درگاه پرداخت (اختیاری: اگر از زرین‌پال استفاده می‌کنید)"
+echo "2. در پنل ادمین ربات (دستور /admin)، وارد بخش '📦 سرویس‌ها' شوید و پلن‌های مورد نظرتان را اضافه/ویرایش کنید."
 echo ""
-echo "3. برای مدیریت ربات از اسکریپت استفاده کنید:"
-echo "   cd $PROJECT_DIR && ./manage.sh"
-echo ""
-echo -e "${YELLOW}🔗 فایل‌های مهم:${NC}"
+echo -e "{YELLOW}🔗 فایل‌های مهم:${NC}"
 echo "   📁 پروژه: $PROJECT_DIR"
 echo "   ⚙️ تنظیمات: $PROJECT_DIR/config.py"
-echo "   🤖 ربات: $PROJECT_DIR/bot.py"
-echo "   🛠️ مدیریت: $PROJECT_DIR/manage.sh"
+echo "   🤖 ربات: PROJECT\_DIR/bot.py"
+echo "   🛠️ مدیریت: $PROJECT\_DIR/manage.sh"
 echo ""
-echo -e "${GREEN}🎉 موفق باشید!${NC}"
+echo -e "${GREEN}🎉 موفق باشید\!{NC}"
