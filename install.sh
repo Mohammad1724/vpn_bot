@@ -594,3 +594,67 @@ def start_purchase(call, service_id):
         payment_text += f"""
 
 💳 کارت به کارت:
+
+{CARD_NUMBER}
+به نام: {CARD_HOLDER_NAME}
+
+📱 شماره تماس جهت تأیید:
+{SUPPORT_PHONE}
+"""
+        
+    keyboard.add(telebot.types.InlineKeyboardButton(
+        "✅ پرداخت کردم", callback_data=f"paid_{order_id}"
+    ))
+    keyboard.types.InlineKeyboardButton("❌ انصراف", callback_data="back_main")
+    
+    payment_text += "\n\n⚠️ بعد از پرداخت، دکمه 'پرداخت کردم' را بزنید."
+    
+    bot.edit_message_text(payment_text, call.message.chat.id, 
+                        call.message.message_id, reply_markup=keyboard, 
+                        parse_mode='Markdown')
+
+def handle_payment_confirmation(call, order_id):
+    order = db.get_order(order_id)
+    if not order:
+        bot.answer_callback_query(call.id, "❌ سفارش یافت نشد!")
+        return
+    
+    text = f"""
+✅ درخواست پرداخت شما ثبت شد!
+
+🆔 شماره سفارش: #{order_id}
+📱 سرویس: {order[8]}
+💰 مبلغ: {order[3]:,} تومان
+
+📋 وضعیت: در انتظار تأیید پرداخت
+
+⏰ زمان بررسی: حداکثر ۱۰ دقیقه
+📞 پشتیبانی: {SUPPORT_USERNAME}
+
+✨ بعد از تأیید، سرویس شما فوراً فعال خواهد شد!
+"""
+    
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id)
+    
+    # اطلاع به ادمین‌ها
+    admin_text = f"""
+🔔 درخواست پرداخت جدید!
+
+👤 کاربر: {call.from_user.first_name}
+🆔 یوزرنیم: @{call.from_user.username or 'ندارد'}
+📱 آیدی: {call.from_user.id}
+
+🛒 سرویس: {order[8]}
+💰 مبلغ: {order[3]:,} تومان
+🆔 شماره سفارش: #{order_id}
+
+برای فعال‌سازی: /activate {order_id}
+"""
+    
+    for admin_id in ADMIN_IDS:
+        try:
+            bot.send_message(admin_id, admin_text)
+        except:
+            pass
+
+def 
