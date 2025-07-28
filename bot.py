@@ -655,34 +655,4 @@ def handle_admin_callback(call):
 👥 کل کاربران: {stats['total_users']:,}
 📦 سفارشات امروز: {stats['today_orders']}
 💰 درآمد امروز: {stats['today_income']:,} تومان
-💎 کل درآمد: {stats['total_income']:,} تومان
-
-🔧 وضعیت سیستم: {"✅ عادی" if hiddify.test_connection() else "❌ خطا در اتصال"}
-
-📅 {datetime.now().strftime('%Y/%m/%d %H:%M')}
-"""
-        
-        keyboard = telebot.types.InlineKeyboardMarkup()
-        keyboard.add(telebot.types.InlineKeyboardButton("🔄 بروزرسانی", callback_data="admin_stats"))
-        keyboard.add(telebot.types.InlineKeyboardButton("🔙 پنل ادمین", callback_data="admin_back"))
-        
-        bot.edit_message_text(stats_text, call.message.chat.id, 
-                            call.message.message_id, reply_markup=keyboard)
-    
-    elif call.data == "admin_test":
-        hiddify_status = "✅ متصل" if hiddify.test_connection() else "❌ قطع"
-        
-        test_text = f"""
-🔧 تست سیستم
-
-🌐 اتصال HiddiFy: {hiddify_status}
-💳 درگاه پرداخت: {"✅ فعال" if payment.zarinpal_merchant else "❌ غیرفعال"}
-💾 دیتابیس: ✅ فعال
-
-📡 آدرس API: {HIDDIFY_API_URL}
-🔑 کلید API: {"✅ تنظیم شده" if HIDDIFY_API_KEY else "❌ تنظیم نشده"}
-
-⚙️ تست شده در: {datetime.now().strftime('%H:%M:%S')}
-"""
-        
-        keyboard = telebot.types.InlineKeyboardMarkup()
+💎 کل درآمد: 
