@@ -19,7 +19,7 @@
 
 ```bash
 # دانلود و اجرای اسکریپت نصب
-sudo curl -sSL [https://raw.githubusercontent.com/yourusername/vpn-sales-bot/main/install.sh](https://raw.githubusercontent.com/yourusername/vpn-sales-bot/main/install.sh) | sudo bash
+sudo curl -sSL [https://raw.github.com/Mohammad1724/vpn_bot/main/install.sh](https://raw.githubusercontent.com/yourusername/vpn-sales-bot/main/install.sh) | sudo bash
 
 نکته: مطمئن شوید که https://raw.githubusercontent.com/yourusername/vpn-sales-bot/main/install.sh را با لینک install.sh در ریپازیتوری خودتان جایگزین کنید.
 📦 نصب دستی
