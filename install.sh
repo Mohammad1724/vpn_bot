@@ -1,14 +1,19 @@
 #!/bin/bash
 
-echo "🚀 نصب  ربات فروش VPN (با رفع ارور pip)..."
+echo "🚀 نصب  ربات فروش VPN"
 
 # آپدیت لیست پکیج‌ها
 apt update
 
-# نصب پایتون، pip و venv (اگر نباشه)
+# نصب پکیج‌های لازم (python, pip, venv, git)
 apt install python3 python3-pip python3-venv git -y
 
-# کلون کردن ریپو به دایرکتوری جدید (برای جلوگیری از overwrite)
+# اگر دایرکتوری وجود داشت، پاک کن برای overwrite
+if [ -d "/root/vpn_bot" ]; then
+    rm -rf /root/vpn_bot
+fi
+
+# کلون کردن ریپو به دایرکتوری جدید (برای تمایز)
 git clone https://github.com/Mohammad1724/vpn_bot.git /root/vpn_bot
 
 # رفتن به دایرکتوری
@@ -20,20 +25,18 @@ python3 -m venv myenv
 # فعال کردن venv
 source myenv/bin/activate
 
-# نصب وابستگی‌ها داخل venv (حالا بدون ارور کار می‌کنه)
-pip install -r requirements.txt
+# نصب و آپدیت وابستگی‌ها داخل venv
+pip install --upgrade -r requirements.txt
 
-# غیرفعال کردن venv (برای تمیز بودن)
+# غیرفعال کردن venv
 deactivate
 
-# کپی فایل نمونه env
-cp .env.example .env
+# چک و ساخت فایل .env
+if [ -f ".env.example" ]; then
+    cp .env.example .env
+else
+    echo "# فایل .env خالی ساخته شد (چون .env.example وجود نداشت)" > .env
+    echo "⚠️ هشدار: .env.example در ریپو نبود. تنظیمات رو حالا وارد کنید."
+fi
 
-echo "✅  نصب کامل شد! (وابستگی‌ها در venv نصب شدن)"
-echo "⚠️ لطفا فایل .env را ویرایش کنید: nano .env"
-echo "▶️ برای اجرا:"
-echo "   cd /root/vpn_bot"
-echo "   source myenv/bin/activate"
-echo "   python3 vpn_bot.py"
-echo "   (برای خروج از venv: deactivate)"
-echo "نکته: اگر می‌خوای بات همیشه اجرا بشه، از screen یا systemd استفاده کن."
+# پرسیدن 
