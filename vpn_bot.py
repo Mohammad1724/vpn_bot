@@ -295,9 +295,8 @@ def process_receipt(message, order_id):
                     "✅ رسید شما دریافت شد\n⏳ در حال بررسی...\n\n"
                     "معمولا در کمتر از 5 دقیقه تایید می‌شود.")
 
-@bot.callback
-@bot.callback_query_handler(func=lambda call: call.data.startswith('confirm_'))
-def confirm_order(call):
+@bot.callback_query_handler(func=lambda call: True)  # این درستشه – برای همه callbackها
+def some_function(call):  # اسم فانکشن هر چی که هست، نگه دار
     order_id = call.data.split('_')[1]
     data = load_data()
     
