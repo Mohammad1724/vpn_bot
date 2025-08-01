@@ -7,6 +7,9 @@ import io
 import logging
 import json
 import random
+import sys
+import shutil
+import time
 
 # ---------- Setup Section: Create .env if not exists ----------
 def setup_env():
@@ -45,6 +48,7 @@ bot = telebot.TeleBot(BOT_TOKEN)
 
 CONFIG_FILE = 'configs.json'
 PAYMENT_FILE = 'payments.json'
+BACKUP_DIR = 'backups'
 
 def load_configs():
     if os.path.exists(CONFIG_FILE):
@@ -157,7 +161,16 @@ def admin_panel(message):
     btn_del = types.InlineKeyboardButton('حذف کانفیگ', callback_data='delete_config')
     btn_pending = types.InlineKeyboardButton('رسیدهای در انتظار', callback_data='pending_payments')
     btn_stats = types.InlineKeyboardButton('آمار', callback_data='stats')
-    markup.add(btn_add, btn_del, btn_pending, btn_stats)
+    btn_backup = types.InlineKeyboardButton('دریافت بکاپ', callback_data='backup')
+    btn_log = types.InlineKeyboardButton('دریافت لاگ', callback_data='get_log')
+    btn_restart = types.InlineKeyboardButton('ریستارت ربات', callback_data='restart_bot')
+    btn_stop = types.InlineKeyboardButton('توقف ربات', callback_data='stop_bot')
+    btn_delete = types.InlineKeyboardButton('حذف کامل ربات', callback_data='delete_bot')
+    markup.add(btn_add, btn_del)
+    markup.add(btn_pending, btn_stats)
+    markup.add(btn_backup, btn_log)
+    markup.add(btn_restart, btn_stop)
+    markup.add(btn_delete)
     bot.send_message(message.chat.id, "پنل ادمین:", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: True)
@@ -175,6 +188,25 @@ def admin_callback(call):
         show_pending_payments(call.message.chat.id)
     elif call.data == 'stats':
         show_stats(call.message.chat.id)
+    elif call.data == 'backup':
+        send_backup(call.message.chat.id)
+    elif call.data == 'get_log':
+        send_log(call.message.chat.id)
+    elif call.data == 'restart_bot':
+        bot.answer_callback_query(call.id, "در حال ریستارت ربات...")
+        bot.send_message(call.message.chat.id, "ربات در حال ریستارت است...")
+        logging.info("ادمین درخواست ریستارت داد.")
+        restart_bot()
+    elif call.data == 'stop_bot':
+        bot.answer_callback_query(call.id, "در حال توقف ربات...")
+        bot.send_message(call.message.chat.id, "ربات متوقف شد.")
+        logging.info("ادمین درخواست توقف داد.")
+        stop_bot()
+    elif call.data == 'delete_bot':
+        bot.answer_callback_query(call.id, "در حال حذف کامل ربات...")
+        bot.send_message(call.message.chat.id, "در حال حذف کامل ربات و فایل‌ها...")
+        logging.info("ادمین درخواست حذف کامل داد.")
+        delete_bot()
     elif call.data.startswith('confirm_') or call.data.startswith('reject_'):
         handle_payment_action(call)
     logging.info(f"ادمین callback: {call.data}")
@@ -233,6 +265,49 @@ def show_stats(chat_id):
     total_revenue = sum(p['price'] for p in PAYMENTS if p['status'] == 'confirmed')
     stats_text = f"آمار:\nکاربران: {total_users}\nپرداخت‌های موفق: {successful}\nدرآمد: {total_revenue} تومان\nکانفیگ‌ها: {len(CONFIGS)}"
     bot.send_message(chat_id, stats_text)
+
+def send_backup(chat_id):
+    if not os.path.exists(BACKUP_DIR):
+        os.makedirs(BACKUP_DIR)
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    backup_files = []
+    for file in [CONFIG_FILE, PAYMENT_FILE, '.env', 'bot_log.txt']:
+        if os.path.exists(file):
+            backup_path = os.path.join(BACKUP_DIR, f"{file}_{timestamp}")
+            shutil.copy(file, backup_path)
+            backup_files.append(backup_path)
+    if backup_files:
+        for f in backup_files:
+            with open(f, 'rb') as doc:
+                bot.send_document(chat_id, doc, caption=f"بکاپ {os.path.basename(f)}")
+        bot.send_message(chat_id, "بکاپ ارسال شد.")
+    else:
+        bot.send_message(chat_id, "فایلی برای بکاپ پیدا نشد.")
+
+def send_log(chat_id):
+    if os.path.exists('bot_log.txt'):
+        with open('bot_log.txt', 'rb') as log_file:
+            bot.send_document(chat_id, log_file, caption="لاگ ربات")
+    else:
+        bot.send_message(chat_id, "فایل لاگ پیدا نشد.")
+
+def restart_bot():
+    python = sys.executable
+    os.execl(python, python, *sys.argv)
+
+def stop_bot():
+    os._exit(0)
+
+def delete_bot():
+    files_to_delete = [CONFIG_FILE, PAYMENT_FILE, '.env', 'bot_log.txt']
+    for file in files_to_delete:
+        if os.path.exists(file):
+            os.remove(file)
+    if os.path.exists(BACKUP_DIR):
+        shutil.rmtree(BACKUP_DIR)
+    bot.stop_polling()
+    time.sleep(1)
+    os._exit(0)
 
 if __name__ == '__main__':
     logging.info("بات شروع شد.")
