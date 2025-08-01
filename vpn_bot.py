@@ -8,6 +8,24 @@ import logging
 import json
 import random
 
+# ---------- Setup Section: Create .env if not exists ----------
+def setup_env():
+    if not os.path.exists('.env'):
+        print("فایل .env پیدا نشد. اطلاعات زیر را وارد کنید:")
+        bot_token = input("توکن ربات تلگرام: ").strip()
+        admin_id = input("آیدی عددی ادمین (مثلاً 123456789): ").strip()
+        card_number = input("شماره کارت (مثلاً 6037-XXXX-XXXX-XXXX): ").strip()
+        plans = input("پلن‌ها و قیمت‌ها (مثلاً 1GB:10000,10GB:50000,Unlimited:100000): ").strip()
+        with open('.env', 'w') as f:
+            f.write(f"BOT_TOKEN={bot_token}\n")
+            f.write(f"ADMIN_ID={admin_id}\n")
+            f.write(f"CARD_NUMBER={card_number}\n")
+            f.write(f"PLANS={plans}\n")
+        print("فایل .env ساخته شد!\n")
+
+setup_env()
+# -------------------------------------------------------------
+
 logging.basicConfig(filename='bot_log.txt', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 load_dotenv()
