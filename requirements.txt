@@ -1,5 +1,2 @@
-# requirements.txt
 pyTelegramBotAPI
 python-dotenv
-Flask
-gunicorn
