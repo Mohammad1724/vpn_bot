@@ -3,7 +3,7 @@
 echo "چه کاری می‌خواهید انجام دهید؟"
 echo "1) نصب ربات"
 echo "2) حذف کامل ربات و فایل‌ها"
-read -p "شماره گزینه را وارد کنید (1 یا 2): " action
+read -p "شماره گزینه را وارد کنید (1 یا 2): " action < /dev/tty
 
 if [ "$action" == "2" ]; then
     echo "در حال حذف فایل‌های ربات..."
@@ -19,9 +19,9 @@ else
 fi
 
 # گرفتن اطلاعات برای ساخت .env
-read -p "توکن ربات تلگرام را وارد کنید: " BOT_TOKEN
-read -p "آیدی عددی ادمین (مثلاً 123456789): " ADMIN_ID
-read -p "شماره کارت (مثلاً 6037-XXXX-XXXX-XXXX): " CARD_NUMBER
+read -p "توکن ربات تلگرام را وارد کنید: " BOT_TOKEN < /dev/tty
+read -p "آیدی عددی ادمین (مثلاً 123456789): " ADMIN_ID < /dev/tty
+read -p "شماره کارت (مثلاً 6037-XXXX-XXXX-XXXX): " CARD_NUMBER < /dev/tty
 
 # ساخت فایل .env
 cat > .env <<EOF
