@@ -60,4 +60,4 @@ pip install -r requirements.txt
 
 echo "نصب پیش‌نیازها تمام شد."
 echo "ربات در حال اجراست..."
-python vpn_bot.py
+python vpn_bot/vpn_bot.py
