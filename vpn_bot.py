@@ -18,12 +18,10 @@ def setup_env():
         bot_token = input("توکن ربات تلگرام: ").strip()
         admin_id = input("آیدی عددی ادمین (مثلاً 123456789): ").strip()
         card_number = input("شماره کارت (مثلاً 6037-XXXX-XXXX-XXXX): ").strip()
-        plans = input("پلن‌ها و قیمت‌ها (مثلاً 1GB:10000,10GB:50000,Unlimited:100000): ").strip()
         with open('.env', 'w') as f:
             f.write(f"BOT_TOKEN={bot_token}\n")
             f.write(f"ADMIN_ID={admin_id}\n")
             f.write(f"CARD_NUMBER={card_number}\n")
-            f.write(f"PLANS={plans}\n")
         print("فایل .env ساخته شد!\n")
 
 setup_env()
@@ -36,8 +34,6 @@ load_dotenv()
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_ID = int(os.getenv('ADMIN_ID')) if os.getenv('ADMIN_ID') else None
 CARD_NUMBER = os.getenv('CARD_NUMBER', '6037-XXXX-XXXX-XXXX')
-PLANS_STR = os.getenv('PLANS', '1GB:10000,10GB:50000,Unlimited:100000')
-PLANS = {p.split(':')[0]: int(p.split(':')[1]) for p in PLANS_STR.split(',')} if PLANS_STR else {}
 
 if not BOT_TOKEN or not ADMIN_ID:
     logging.error("BOT_TOKEN یا ADMIN_ID تنظیم نشده!")
@@ -48,6 +44,7 @@ bot = telebot.TeleBot(BOT_TOKEN)
 
 CONFIG_FILE = 'configs.json'
 PAYMENT_FILE = 'payments.json'
+PLANS_FILE = 'plans.json'
 BACKUP_DIR = 'backups'
 
 def load_configs():
@@ -70,8 +67,24 @@ def save_payments(payments):
     with open(PAYMENT_FILE, 'w') as f:
         json.dump(payments, f, indent=4)
 
+def load_plans():
+    if os.path.exists(PLANS_FILE):
+        with open(PLANS_FILE, 'r') as f:
+            return json.load(f)
+    # مقدار پیش‌فرض اگر فایل نبود
+    return {
+        "1GB": 10000,
+        "10GB": 50000,
+        "Unlimited": 100000
+    }
+
+def save_plans(plans):
+    with open(PLANS_FILE, 'w') as f:
+        json.dump(plans, f, indent=4)
+
 CONFIGS = load_configs()
 PAYMENTS = load_payments()
+PLANS = load_plans()
 
 @bot.message_handler(commands=['start'])
 def start(message):
@@ -161,6 +174,7 @@ def admin_panel(message):
     btn_del = types.InlineKeyboardButton('حذف کانفیگ', callback_data='delete_config')
     btn_pending = types.InlineKeyboardButton('رسیدهای در انتظار', callback_data='pending_payments')
     btn_stats = types.InlineKeyboardButton('آمار', callback_data='stats')
+    btn_plans = types.InlineKeyboardButton('مدیریت پلن و قیمت', callback_data='manage_plans')
     btn_backup = types.InlineKeyboardButton('دریافت بکاپ', callback_data='backup')
     btn_log = types.InlineKeyboardButton('دریافت لاگ', callback_data='get_log')
     btn_restart = types.InlineKeyboardButton('ریستارت ربات', callback_data='restart_bot')
@@ -168,6 +182,7 @@ def admin_panel(message):
     btn_delete = types.InlineKeyboardButton('حذف کامل ربات', callback_data='delete_bot')
     markup.add(btn_add, btn_del)
     markup.add(btn_pending, btn_stats)
+    markup.add(btn_plans)
     markup.add(btn_backup, btn_log)
     markup.add(btn_restart, btn_stop)
     markup.add(btn_delete)
@@ -188,6 +203,30 @@ def admin_callback(call):
         show_pending_payments(call.message.chat.id)
     elif call.data == 'stats':
         show_stats(call.message.chat.id)
+    elif call.data == 'manage_plans':
+        show_plans_menu(call.message.chat.id)
+    elif call.data == 'add_plan':
+        bot.send_message(call.message.chat.id, "فرمت: نام پلن:قیمت (مثال: 20GB:120000)")
+        bot.register_next_step_handler(call.message, add_plan_handler)
+    elif call.data == 'edit_plan':
+        show_edit_plan_menu(call.message.chat.id)
+    elif call.data.startswith('editprice_'):
+        plan_name = call.data.split('_', 1)[1]
+        bot.send_message(call.message.chat.id, f"قیمت جدید برای پلن {plan_name} را وارد کن:")
+        bot.register_next_step_handler(call.message, lambda m: edit_plan_price_handler(m, plan_name))
+    elif call.data == 'delete_plan':
+        show_delete_plan_menu(call.message.chat.id)
+    elif call.data.startswith('delplan_'):
+        plan_name = call.data.split('_', 1)[1]
+        if plan_name in PLANS:
+            del PLANS[plan_name]
+            save_plans(PLANS)
+            bot.send_message(call.message.chat.id, f"پلن {plan_name} حذف شد.")
+        else:
+            bot.send_message(call.message.chat.id, "پلن پیدا نشد.")
+        show_plans_menu(call.message.chat.id)
+    elif call.data == 'back_admin':
+        admin_panel(call.message)
     elif call.data == 'backup':
         send_backup(call.message.chat.id)
     elif call.data == 'get_log':
@@ -266,12 +305,64 @@ def show_stats(chat_id):
     stats_text = f"آمار:\nکاربران: {total_users}\nپرداخت‌های موفق: {successful}\nدرآمد: {total_revenue} تومان\nکانفیگ‌ها: {len(CONFIGS)}"
     bot.send_message(chat_id, stats_text)
 
+# ------------------- مدیریت پلن و قیمت -------------------
+def show_plans_menu(chat_id):
+    text = "پلن‌های فعلی:\n"
+    for name, price in PLANS.items():
+        text += f"- {name}: {price} تومان\n"
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton('افزودن پلن', callback_data='add_plan'))
+    markup.add(types.InlineKeyboardButton('ویرایش قیمت', callback_data='edit_plan'))
+    markup.add(types.InlineKeyboardButton('حذف پلن', callback_data='delete_plan'))
+    markup.add(types.InlineKeyboardButton('بازگشت', callback_data='back_admin'))
+    bot.send_message(chat_id, text, reply_markup=markup)
+
+def add_plan_handler(message):
+    try:
+        name, price = message.text.split(':')
+        name = name.strip()
+        price = int(price.strip())
+        if name in PLANS:
+            bot.reply_to(message, "این پلن قبلاً وجود دارد.")
+            return
+        PLANS[name] = price
+        save_plans(PLANS)
+        bot.reply_to(message, f"پلن {name} با قیمت {price} تومان اضافه شد.")
+    except:
+        bot.reply_to(message, "فرمت اشتباه! مثال: 20GB:120000")
+    show_plans_menu(message.chat.id)
+
+def show_edit_plan_menu(chat_id):
+    markup = types.InlineKeyboardMarkup()
+    for name in PLANS:
+        markup.add(types.InlineKeyboardButton(f"{name}", callback_data=f"editprice_{name}"))
+    markup.add(types.InlineKeyboardButton('بازگشت', callback_data='manage_plans'))
+    bot.send_message(chat_id, "کدام پلن را ویرایش می‌کنی؟", reply_markup=markup)
+
+def edit_plan_price_handler(message, plan_name):
+    try:
+        price = int(message.text.strip())
+        PLANS[plan_name] = price
+        save_plans(PLANS)
+        bot.reply_to(message, f"قیمت پلن {plan_name} به {price} تومان تغییر کرد.")
+    except:
+        bot.reply_to(message, "قیمت معتبر وارد کن (عدد).")
+    show_plans_menu(message.chat.id)
+
+def show_delete_plan_menu(chat_id):
+    markup = types.InlineKeyboardMarkup()
+    for name in PLANS:
+        markup.add(types.InlineKeyboardButton(f"{name}", callback_data=f"delplan_{name}"))
+    markup.add(types.InlineKeyboardButton('بازگشت', callback_data='manage_plans'))
+    bot.send_message(chat_id, "کدام پلن را حذف می‌کنی؟", reply_markup=markup)
+# --------------------------------------------------------
+
 def send_backup(chat_id):
     if not os.path.exists(BACKUP_DIR):
         os.makedirs(BACKUP_DIR)
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     backup_files = []
-    for file in [CONFIG_FILE, PAYMENT_FILE, '.env', 'bot_log.txt']:
+    for file in [CONFIG_FILE, PAYMENT_FILE, PLANS_FILE, '.env', 'bot_log.txt']:
         if os.path.exists(file):
             backup_path = os.path.join(BACKUP_DIR, f"{file}_{timestamp}")
             shutil.copy(file, backup_path)
@@ -299,7 +390,7 @@ def stop_bot():
     os._exit(0)
 
 def delete_bot():
-    files_to_delete = [CONFIG_FILE, PAYMENT_FILE, '.env', 'bot_log.txt']
+    files_to_delete = [CONFIG_FILE, PAYMENT_FILE, PLANS_FILE, '.env', 'bot_log.txt']
     for file in files_to_delete:
         if os.path.exists(file):
             os.remove(file)
