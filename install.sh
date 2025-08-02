@@ -58,6 +58,9 @@ fi
 
 pip install -r requirements.txt
 
+echo "نصب پیش‌نیازها تمام شد."
+echo "ربات در حال اجراست..."
+
 if [ -f "vpn_bot.py" ]; then
     python3 vpn_bot.py
 elif [ -f "vpn_bot/vpn_bot.py" ]; then
@@ -65,7 +68,3 @@ elif [ -f "vpn_bot/vpn_bot.py" ]; then
 else
     echo "فایل vpn_bot.py پیدا نشد!"
 fi
-
-echo "نصب پیش‌نیازها تمام شد."
-echo "ربات در حال اجراست..."
-python3 vpn_bot/vpn_bot.py
