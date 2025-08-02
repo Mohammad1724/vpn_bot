@@ -1,26 +1,10 @@
-# Python
+# .gitignore
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-env/
+*.pyc
 venv/
-ENV/
-
-# Bot data
-bot_data.json
 .env
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
+*.db
+payments.db
+used_configs.txt
 *.log
+*.zip
