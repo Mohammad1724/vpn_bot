@@ -1,409 +1,330 @@
-import telebot
-from telebot import types
+# main.py
+
 import os
-from dotenv import load_dotenv
-import qrcode
-import io
+import sqlite3
 import logging
-import json
-import random
-import sys
+import datetime
 import shutil
-import time
+import zipfile
+import telebot
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from flask import Flask, request, abort
+from zarinpal_requests import ZarinPal
+from dotenv import load_dotenv
 
-# ---------- Setup Section: Create .env if not exists ----------
-def setup_env():
-    if not os.path.exists('.env'):
-        print("فایل .env پیدا نشد. اطلاعات زیر را وارد کنید:")
-        bot_token = input("توکن ربات تلگرام: ").strip()
-        admin_id = input("آیدی عددی ادمین (مثلاً 123456789): ").strip()
-        card_number = input("شماره کارت (مثلاً 6037-XXXX-XXXX-XXXX): ").strip()
-        with open('.env', 'w') as f:
-            f.write(f"BOT_TOKEN={bot_token}\n")
-            f.write(f"ADMIN_ID={admin_id}\n")
-            f.write(f"CARD_NUMBER={card_number}\n")
-        print("فایل .env ساخته شد!\n")
+# --- تنظیمات لاگ‌گیری برای دیباگ بهتر ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-setup_env()
-# -------------------------------------------------------------
-
-logging.basicConfig(filename='bot_log.txt', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
+# --- بارگذاری متغیرها از فایل .env ---
 load_dotenv()
+try:
+    TOKEN = os.getenv("TOKEN")
+    ADMIN_ID = int(os.getenv("ADMIN_ID"))
+    MERCHANT_ID = os.getenv("MERCHANT_ID")
+    SERVER_URL = os.getenv("SERVER_URL")
+    CONFIG_PRICE = int(os.getenv("CONFIG_PRICE"))
+    if not all([TOKEN, ADMIN_ID, MERCHANT_ID, SERVER_URL, CONFIG_PRICE]):
+        raise ValueError("یکی از متغیرهای محیطی مقداردهی نشده است.")
+except (TypeError, ValueError) as e:
+    logger.error(f"خطا در خواندن متغیرهای محیطی از فایل .env: {e}")
+    exit("خطا: لطفاً فایل .env را با مقادیر صحیح پر کنید.")
 
-BOT_TOKEN = os.getenv('BOT_TOKEN')
-ADMIN_ID = int(os.getenv('ADMIN_ID')) if os.getenv('ADMIN_ID') else None
-CARD_NUMBER = os.getenv('CARD_NUMBER', '6037-XXXX-XXXX-XXXX')
+# --- تنظیمات و ثابت‌ها ---
+CONFIGS_FILE = "configs.txt"
+USED_CONFIGS_FILE = "used_configs.txt"
+DB_FILE = "payments.db"
+WEBHOOK_PATH = f'/webhook/{TOKEN}'
+WEBHOOK_URL = f'{SERVER_URL.strip("/")}{WEBHOOK_PATH}'
+CALLBACK_URL = f'{SERVER_URL.strip("/")}/verify_payment'
 
-if not BOT_TOKEN or not ADMIN_ID:
-    logging.error("BOT_TOKEN یا ADMIN_ID تنظیم نشده!")
-    print("خطا: BOT_TOKEN یا ADMIN_ID تنظیم نشده.")
-    exit(1)
+# --- ساخت نمونه‌ها (Instances) ---
+bot = telebot.TeleBot(TOKEN)
+app = Flask(__name__)
+zarinpal = ZarinPal(MERCHANT_ID, is_sandbox=False) # برای درگاه واقعی is_sandbox=False باشد
 
-bot = telebot.TeleBot(BOT_TOKEN)
+# --- مدیریت پایگاه داده و فایل‌ها ---
+def init_db():
+    """پایگاه داده و فایل‌های کانفیگ را در صورت عدم وجود، ایجاد می‌کند."""
+    for file in [CONFIGS_FILE, USED_CONFIGS_FILE]:
+        if not os.path.exists(file):
+            open(file, 'w').close()
+            logger.info(f"فایل '{file}' ایجاد شد.")
 
-CONFIG_FILE = 'configs.json'
-PAYMENT_FILE = 'payments.json'
-PLANS_FILE = 'plans.json'
-BACKUP_DIR = 'backups'
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            authority TEXT NOT NULL UNIQUE,
+            amount INTEGER NOT NULL,
+            status TEXT DEFAULT 'pending',
+            ref_id TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    conn.close()
+    logger.info("پایگاه داده با موفقیت مقداردهی اولیه شد.")
 
-def load_configs():
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, 'r') as f:
-            return json.load(f)
-    return []
+# --- کیبوردهای تلگرام ---
+def get_admin_keyboard():
+    markup = ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.row(KeyboardButton("➕ افزودن کانفیگ"), KeyboardButton("📊 آمار"))
+    markup.row(KeyboardButton("📥 بکاپ گرفتن"), KeyboardButton("📤 ریستور کردن"))
+    markup.row(KeyboardButton("⚠️ ریست کامل ربات ⚠️"))
+    return markup
 
-def save_configs(configs):
-    with open(CONFIG_FILE, 'w') as f:
-        json.dump(configs, f, indent=4)
+def get_user_keyboard():
+    markup = ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add(KeyboardButton(f"💳 خرید کانفیگ ({CONFIG_PRICE:,} تومان)"))
+    return markup
 
-def load_payments():
-    if os.path.exists(PAYMENT_FILE):
-        with open(PAYMENT_FILE, 'r') as f:
-            return json.load(f)
-    return []
+# --- توابع کمکی ---
+def is_admin(message):
+    return message.from_user.id == ADMIN_ID
 
-def save_payments(payments):
-    with open(PAYMENT_FILE, 'w') as f:
-        json.dump(payments, f, indent=4)
+def get_a_config():
+    """یک کانفیگ از فایل خوانده، آن را به فایل استفاده شده‌ها منتقل و سپس برمی‌گرداند."""
+    try:
+        with open(CONFIGS_FILE, 'r') as f:
+            configs = [line.strip() for line in f if line.strip()]
+        
+        if not configs:
+            logger.warning("درخواست کانفیگ داده شد، اما هیچ کانفیگی در configs.txt موجود نیست.")
+            return None
+        
+        user_config = configs.pop(0)
+        
+        with open(USED_CONFIGS_FILE, 'a') as f:
+            f.write(user_config + '\n')
+        
+        with open(CONFIGS_FILE, 'w') as f:
+            f.writelines([c + '\n' for c in configs])
+            
+        logger.info(f"یک کانفیگ با موفقیت تخصیص داده شد.")
+        return user_config
+    except FileNotFoundError:
+        logger.error(f"فایل {CONFIGS_FILE} پیدا نشد، هرچند باید خودکار ساخته می‌شد.")
+        return None
 
-def load_plans():
-    if os.path.exists(PLANS_FILE):
-        with open(PLANS_FILE, 'r') as f:
-            return json.load(f)
-    # مقدار پیش‌فرض اگر فایل نبود
-    return {
-        "1GB": 10000,
-        "10GB": 50000,
-        "Unlimited": 100000
-    }
+# --- روت‌های Flask برای Webhook و درگاه پرداخت ---
+@app.route(WEBHOOK_PATH, methods=['POST'])
+def webhook():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return '', 200
+    else:
+        abort(403)
 
-def save_plans(plans):
-    with open(PLANS_FILE, 'w') as f:
-        json.dump(plans, f, indent=4)
+@app.route('/verify_payment')
+def verify_payment():
+    authority = request.args.get('Authority')
+    status = request.args.get('Status')
 
-CONFIGS = load_configs()
-PAYMENTS = load_payments()
-PLANS = load_plans()
+    if not authority or not status:
+        return "<h1>اطلاعات پرداخت ناقص است.</h1>", 400
 
-@bot.message_handler(commands=['start'])
-def start(message):
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    btn_buy = types.KeyboardButton('خرید VPN')
-    btn_support = types.KeyboardButton('پشتیبانی')
-    btn_help = types.KeyboardButton('راهنما')
-    btn_admin = types.KeyboardButton('پنل ادمین') if message.from_user.id == ADMIN_ID else None
-    markup.add(btn_buy, btn_support, btn_help)
-    if btn_admin:
-        markup.add(btn_admin)
-    bot.send_message(message.chat.id, "سلام! به ربات فروش VPN دستی خوش آمدید.", reply_markup=markup)
-    logging.info(f"کاربر {message.from_user.id} شروع کرد.")
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id, amount, status FROM payments WHERE authority = ?", (authority,))
+    payment_record = cursor.fetchone()
+    
+    if not payment_record:
+        conn.close()
+        return "<h1>تراکنش نامعتبر است.</h1>", 404
+        
+    user_id, amount, db_status = payment_record
+    
+    if db_status == 'completed':
+        conn.close()
+        bot.send_message(user_id, "شما قبلاً برای این تراکنش کانفیگ خود را دریافت کرده‌اید.")
+        return "<h1>این تراکنش قبلاً با موفقیت تایید شده است.</h1>"
 
-@bot.message_handler(commands=['help'])
-def help_command(message):
-    help_text = """
-    راهنما:
-    - خرید VPN: پلن انتخاب کن، رسید کارت به کارت بفرست، منتظر تایید باش.
-    - /get_config: اگر پرداخت تایید شده باشه، کانفیگ بگیر.
-    - ادمین: پنل ادمین برای اضافه/حذف کانفیگ، تایید رسیدها، آمار.
-    """
-    bot.send_message(message.chat.id, help_text)
-
-@bot.message_handler(func=lambda message: message.text == 'خرید VPN')
-def buy_vpn(message):
-    markup = types.InlineKeyboardMarkup()
-    for plan, price in PLANS.items():
-        markup.add(types.InlineKeyboardButton(f"{plan} - {price} تومان", callback_data=f"plan_{plan}"))
-    bot.send_message(message.chat.id, "پلن انتخاب کن:", reply_markup=markup)
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('plan_'))
-def select_plan(call):
-    plan = call.data.split('_')[1]
-    price = PLANS[plan]
-    bot.answer_callback_query(call.id, f"پلن {plan} انتخاب شد.")
-    bot.send_message(call.message.chat.id, f"پلن: {plan}\nقیمت: {price} تومان\nکارت: {CARD_NUMBER}\nرسید (عکس/متن) بفرست.")
-    bot.register_next_step_handler(call.message, lambda m: handle_receipt(m, call.from_user.id, plan, price))
-
-def handle_receipt(message, user_id, plan, price):
-    receipt = message.text if message.text else (message.photo[0].file_id if message.photo else None)
-    if not receipt:
-        bot.reply_to(message, "رسید معتبر بفرست.")
-        return
-    if any(p['receipt'] == receipt and p['user_id'] == user_id for p in PAYMENTS):
-        bot.reply_to(message, "این رسید قبلاً ارسال شده!")
-        return
-    PAYMENTS.append({'user_id': user_id, 'plan': plan, 'price': price, 'receipt': receipt, 'status': 'pending'})
-    save_payments(PAYMENTS)
-    bot.reply_to(message, "رسید دریافت شد. منتظر تایید باش.")
-    logging.info(f"رسید جدید از {user_id}")
-
-@bot.message_handler(commands=['get_config'])
-def get_config(message):
-    user_payments = [p for p in PAYMENTS if p['user_id'] == message.from_user.id and p['status'] == 'confirmed']
-    if not user_payments:
-        bot.reply_to(message, "پرداخت تاییدشده‌ای نداری.")
-        return
-    if not CONFIGS:
-        bot.reply_to(message, "کانفیگی موجود نیست!")
-        return
-    config = random.choice(CONFIGS)
-    bot.reply_to(message, f"کانفیگ: {config['link']}\nحجم: {config['volume']}, انقضا: {config['expiry']}")
-    qr_img = generate_qr(config['link'])
-    bot.send_photo(message.chat.id, qr_img, caption="QR کد")
-
-def generate_qr(link):
-    qr = qrcode.QRCode(version=1, box_size=10, border=5)
-    qr.add_data(link)
-    qr.make(fit=True)
-    img = qr.make_image(fill='black', back_color='white')
-    bio = io.BytesIO()
-    img.save(bio, 'PNG')
-    bio.seek(0)
-    return bio
-
-@bot.message_handler(func=lambda message: message.text == 'پشتیبانی')
-def support(message):
-    bot.send_message(message.chat.id, "پیامت رو بفرست یا با ادمین تماس بگیر.")
-
-@bot.message_handler(func=lambda message: message.text == 'پنل ادمین')
-def admin_panel(message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    markup = types.InlineKeyboardMarkup()
-    btn_add = types.InlineKeyboardButton('اضافه کانفیگ', callback_data='add_config')
-    btn_del = types.InlineKeyboardButton('حذف کانفیگ', callback_data='delete_config')
-    btn_pending = types.InlineKeyboardButton('رسیدهای در انتظار', callback_data='pending_payments')
-    btn_stats = types.InlineKeyboardButton('آمار', callback_data='stats')
-    btn_plans = types.InlineKeyboardButton('مدیریت پلن و قیمت', callback_data='manage_plans')
-    btn_backup = types.InlineKeyboardButton('دریافت بکاپ', callback_data='backup')
-    btn_log = types.InlineKeyboardButton('دریافت لاگ', callback_data='get_log')
-    btn_restart = types.InlineKeyboardButton('ریستارت ربات', callback_data='restart_bot')
-    btn_stop = types.InlineKeyboardButton('توقف ربات', callback_data='stop_bot')
-    btn_delete = types.InlineKeyboardButton('حذف کامل ربات', callback_data='delete_bot')
-    markup.add(btn_add, btn_del)
-    markup.add(btn_pending, btn_stats)
-    markup.add(btn_plans)
-    markup.add(btn_backup, btn_log)
-    markup.add(btn_restart, btn_stop)
-    markup.add(btn_delete)
-    bot.send_message(message.chat.id, "پنل ادمین:", reply_markup=markup)
-
-@bot.callback_query_handler(func=lambda call: True)
-def admin_callback(call):
-    if call.from_user.id != ADMIN_ID:
-        return
-    if call.data == 'add_config':
-        bot.answer_callback_query(call.id, "کانفیگ جدید وارد کن.")
-        bot.send_message(call.message.chat.id, "فرمت: نام:لینک:حجم:زمان (مثل Test:vless://...:1GB:30روز)")
-        bot.register_next_step_handler(call.message, add_config_handler)
-    elif call.data == 'delete_config':
-        bot.answer_callback_query(call.id, "نام کانفیگ برای حذف.")
-        bot.register_next_step_handler(call.message, delete_config_handler)
-    elif call.data == 'pending_payments':
-        show_pending_payments(call.message.chat.id)
-    elif call.data == 'stats':
-        show_stats(call.message.chat.id)
-    elif call.data == 'manage_plans':
-        show_plans_menu(call.message.chat.id)
-    elif call.data == 'add_plan':
-        bot.send_message(call.message.chat.id, "فرمت: نام پلن:قیمت (مثال: 20GB:120000)")
-        bot.register_next_step_handler(call.message, add_plan_handler)
-    elif call.data == 'edit_plan':
-        show_edit_plan_menu(call.message.chat.id)
-    elif call.data.startswith('editprice_'):
-        plan_name = call.data.split('_', 1)[1]
-        bot.send_message(call.message.chat.id, f"قیمت جدید برای پلن {plan_name} را وارد کن:")
-        bot.register_next_step_handler(call.message, lambda m: edit_plan_price_handler(m, plan_name))
-    elif call.data == 'delete_plan':
-        show_delete_plan_menu(call.message.chat.id)
-    elif call.data.startswith('delplan_'):
-        plan_name = call.data.split('_', 1)[1]
-        if plan_name in PLANS:
-            del PLANS[plan_name]
-            save_plans(PLANS)
-            bot.send_message(call.message.chat.id, f"پلن {plan_name} حذف شد.")
+    if status == 'OK':
+        is_ok, ref_id = zarinpal.verify(amount, authority)
+        if is_ok:
+            config = get_a_config()
+            if config:
+                cursor.execute("UPDATE payments SET status = 'completed', ref_id = ? WHERE authority = ?", (str(ref_id), authority))
+                conn.commit()
+                bot.send_message(user_id, f"✅ پرداخت شما با موفقیت تایید شد.\nکد رهگیری: `{ref_id}`")
+                bot.send_message(user_id, "کانفیگ شما آماده است. برای کپی روی آن کلیک کنید:")
+                bot.send_message(user_id, f"`{config}`", parse_mode="Markdown")
+                logger.info(f"پرداخت موفق برای کاربر {user_id} با کد رهگیری {ref_id}.")
+                return "<h1>پرداخت با موفقیت انجام شد. لطفاً به ربات تلگرام بازگردید.</h1>"
+            else:
+                bot.send_message(user_id, "پرداخت شما موفق بود اما متاسفانه در حال حاضر کانفیگی موجود نیست. لطفاً این موضوع را فوراً به ادمین اطلاع دهید تا کانفیگ شما را دستی تحویل دهد.")
+                logger.critical(f"پرداخت موفق برای کاربر {user_id} اما کانفیگی برای تحویل موجود نبود!")
+                return "<h1>پرداخت موفق بود، اما کانفیگی موجود نیست. به ادمین اطلاع دهید.</h1>"
         else:
-            bot.send_message(call.message.chat.id, "پلن پیدا نشد.")
-        show_plans_menu(call.message.chat.id)
-    elif call.data == 'back_admin':
-        admin_panel(call.message)
-    elif call.data == 'backup':
-        send_backup(call.message.chat.id)
-    elif call.data == 'get_log':
-        send_log(call.message.chat.id)
-    elif call.data == 'restart_bot':
-        bot.answer_callback_query(call.id, "در حال ریستارت ربات...")
-        bot.send_message(call.message.chat.id, "ربات در حال ریستارت است...")
-        logging.info("ادمین درخواست ریستارت داد.")
-        restart_bot()
-    elif call.data == 'stop_bot':
-        bot.answer_callback_query(call.id, "در حال توقف ربات...")
-        bot.send_message(call.message.chat.id, "ربات متوقف شد.")
-        logging.info("ادمین درخواست توقف داد.")
-        stop_bot()
-    elif call.data == 'delete_bot':
-        bot.answer_callback_query(call.id, "در حال حذف کامل ربات...")
-        bot.send_message(call.message.chat.id, "در حال حذف کامل ربات و فایل‌ها...")
-        logging.info("ادمین درخواست حذف کامل داد.")
-        delete_bot()
-    elif call.data.startswith('confirm_') or call.data.startswith('reject_'):
-        handle_payment_action(call)
-    logging.info(f"ادمین callback: {call.data}")
+            cursor.execute("UPDATE payments SET status = 'failed' WHERE authority = ?", (authority,))
+            conn.commit()
+            bot.send_message(user_id, "❌ خطایی در تایید پرداخت شما رخ داد. اگر پولی از حساب شما کسر شده، طی ۷۲ ساعت آینده باز خواهد گشت.")
+            return "<h1>تایید پرداخت ناموفق بود.</h1>"
+    else:
+        cursor.execute("UPDATE payments SET status = 'cancelled' WHERE authority = ?", (authority,))
+        conn.commit()
+        bot.send_message(user_id, "❌ شما پرداخت را لغو کردید.")
+        return "<h1>پرداخت توسط شما لغو شد.</h1>"
+    
+    conn.close()
 
-def add_config_handler(message):
-    parts = message.text.split(':')
-    if len(parts) != 4:
-        bot.reply_to(message, "فرمت اشتباه!")
+# --- دستورات و پیام‌های تلگرام ---
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+    if is_admin(message):
+        bot.send_message(message.chat.id, "سلام ادمین عزیز! به پنل مدیریت خوش آمدید.", reply_markup=get_admin_keyboard())
+    else:
+        bot.send_message(message.chat.id, "سلام! برای خرید کانفیگ VPN از دکمه زیر استفاده کنید.", reply_markup=get_user_keyboard())
+
+# --- مدیریت پیام‌های ادمین ---
+@bot.message_handler(func=is_admin)
+def handle_admin_messages(message):
+    if message.text == "➕ افزودن کانفیگ":
+        msg = bot.reply_to(message, "لطفاً کانفیگ یا کانفیگ‌های جدید را ارسال کنید (هر کدام در یک خط جداگانه).")
+        bot.register_next_step_handler(msg, save_new_configs)
+    
+    elif message.text == "📊 آمار":
+        try:
+            with open(CONFIGS_FILE, 'r') as f: available_count = len([line for line in f if line.strip()])
+        except FileNotFoundError: available_count = 0
+        try:
+            with open(USED_CONFIGS_FILE, 'r') as f: used_count = len([line for line in f if line.strip()])
+        except FileNotFoundError: used_count = 0
+        bot.send_message(message.chat.id, f"📊 **آمار کانفیگ‌ها** 📊\n\n🟢 کانفیگ‌های موجود: {available_count}\n🔴 کانفیگ‌های فروخته شده: {used_count}", parse_mode="Markdown")
+    
+    elif message.text == "📥 بکاپ گرفتن":
+        backup_data(message.chat.id)
+
+    elif message.text == "📤 ریستور کردن":
+        msg = bot.send_message(message.chat.id, "لطفاً فایل بکاپ (.zip) خود را برای بازیابی ارسال کنید.")
+        bot.register_next_step_handler(msg, restore_data_step1)
+        
+    elif message.text == "⚠️ ریست کامل ربات ⚠️":
+        ask_for_reset_confirmation(message)
+
+def save_new_configs(message):
+    new_configs = [line.strip() for line in message.text.split('\n') if line.strip()]
+    if not new_configs:
+        bot.send_message(message.chat.id, "هیچ کانفیگ معتبری ارسال نشد.")
         return
-    name, link, volume, expiry = parts
-    CONFIGS.append({'name': name.strip(), 'link': link.strip(), 'volume': volume.strip(), 'expiry': expiry.strip()})
-    save_configs(CONFIGS)
-    bot.reply_to(message, f"کانفیگ {name} اضافه شد.")
-    logging.info(f"کانفیگ جدید: {name}")
+    with open(CONFIGS_FILE, 'a') as f:
+        for config in new_configs: f.write(config + '\n')
+    bot.send_message(message.chat.id, f"✅ تعداد {len(new_configs)} کانفیگ جدید با موفقیت اضافه شد.")
+    logger.info(f"ادمین {len(new_configs)} کانفیگ جدید اضافه کرد.")
 
-def delete_config_handler(message):
-    name = message.text.strip()
-    global CONFIGS
-    CONFIGS = [c for c in CONFIGS if c['name'] != name]
-    save_configs(CONFIGS)
-    bot.reply_to(message, f"کانفیگ {name} حذف شد.")
-    logging.info(f"حذف کانفیگ: {name}")
-
-def show_pending_payments(chat_id):
-    pending = [p for p in PAYMENTS if p['status'] == 'pending']
-    if not pending:
-        bot.send_message(chat_id, "هیچ رسیدی در انتظار نیست.")
-        return
-    for idx, p in enumerate(pending):
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton('تایید', callback_data=f"confirm_{idx}"), types.InlineKeyboardButton('رد', callback_data=f"reject_{idx}"))
-        bot.send_message(chat_id, f"رسید {idx+1}: کاربر {p['user_id']}, پلن {p['plan']}, رسید: {p['receipt']}", reply_markup=markup)
-
-def handle_payment_action(call):
-    action, idx = call.data.split('_')
-    idx = int(idx)
-    if action == 'confirm':
-        PAYMENTS[idx]['status'] = 'confirmed'
-        user_id = PAYMENTS[idx]['user_id']
-        if CONFIGS:
-            config = random.choice(CONFIGS)
-            bot.send_message(user_id, f"پرداخت تایید شد! کانفیگ: {config['link']}\nحجم: {config['volume']}, انقضا: {config['expiry']}")
-            qr_img = generate_qr(config['link'])
-            bot.send_photo(user_id, qr_img, caption="QR کد")
-        bot.answer_callback_query(call.id, "تایید شد.")
-    else:
-        PAYMENTS[idx]['status'] = 'rejected'
-        bot.send_message(PAYMENTS[idx]['user_id'], "پرداخت رد شد.")
-        bot.answer_callback_query(call.id, "رد شد.")
-    save_payments(PAYMENTS)
-    logging.info(f"پرداخت {idx} {action} شد.")
-
-def show_stats(chat_id):
-    total_users = len(set(p['user_id'] for p in PAYMENTS))
-    successful = len([p for p in PAYMENTS if p['status'] == 'confirmed'])
-    total_revenue = sum(p['price'] for p in PAYMENTS if p['status'] == 'confirmed')
-    stats_text = f"آمار:\nکاربران: {total_users}\nپرداخت‌های موفق: {successful}\nدرآمد: {total_revenue} تومان\nکانفیگ‌ها: {len(CONFIGS)}"
-    bot.send_message(chat_id, stats_text)
-
-# ------------------- مدیریت پلن و قیمت -------------------
-def show_plans_menu(chat_id):
-    text = "پلن‌های فعلی:\n"
-    for name, price in PLANS.items():
-        text += f"- {name}: {price} تومان\n"
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton('افزودن پلن', callback_data='add_plan'))
-    markup.add(types.InlineKeyboardButton('ویرایش قیمت', callback_data='edit_plan'))
-    markup.add(types.InlineKeyboardButton('حذف پلن', callback_data='delete_plan'))
-    markup.add(types.InlineKeyboardButton('بازگشت', callback_data='back_admin'))
-    bot.send_message(chat_id, text, reply_markup=markup)
-
-def add_plan_handler(message):
+# --- توابع مدیریتی پیشرفته ---
+def backup_data(chat_id):
+    bot.send_message(chat_id, "در حال ایجاد فایل بکاپ... لطفاً کمی صبر کنید.")
     try:
-        name, price = message.text.split(':')
-        name = name.strip()
-        price = int(price.strip())
-        if name in PLANS:
-            bot.reply_to(message, "این پلن قبلاً وجود دارد.")
-            return
-        PLANS[name] = price
-        save_plans(PLANS)
-        bot.reply_to(message, f"پلن {name} با قیمت {price} تومان اضافه شد.")
-    except:
-        bot.reply_to(message, "فرمت اشتباه! مثال: 20GB:120000")
-    show_plans_menu(message.chat.id)
-
-def show_edit_plan_menu(chat_id):
-    markup = types.InlineKeyboardMarkup()
-    for name in PLANS:
-        markup.add(types.InlineKeyboardButton(f"{name}", callback_data=f"editprice_{name}"))
-    markup.add(types.InlineKeyboardButton('بازگشت', callback_data='manage_plans'))
-    bot.send_message(chat_id, "کدام پلن را ویرایش می‌کنی؟", reply_markup=markup)
-
-def edit_plan_price_handler(message, plan_name):
-    try:
-        price = int(message.text.strip())
-        PLANS[plan_name] = price
-        save_plans(PLANS)
-        bot.reply_to(message, f"قیمت پلن {plan_name} به {price} تومان تغییر کرد.")
-    except:
-        bot.reply_to(message, "قیمت معتبر وارد کن (عدد).")
-    show_plans_menu(message.chat.id)
-
-def show_delete_plan_menu(chat_id):
-    markup = types.InlineKeyboardMarkup()
-    for name in PLANS:
-        markup.add(types.InlineKeyboardButton(f"{name}", callback_data=f"delplan_{name}"))
-    markup.add(types.InlineKeyboardButton('بازگشت', callback_data='manage_plans'))
-    bot.send_message(chat_id, "کدام پلن را حذف می‌کنی؟", reply_markup=markup)
-# --------------------------------------------------------
-
-def send_backup(chat_id):
-    if not os.path.exists(BACKUP_DIR):
-        os.makedirs(BACKUP_DIR)
-    timestamp = time.strftime("%Y%m%d-%H%M%S")
-    backup_files = []
-    for file in [CONFIG_FILE, PAYMENT_FILE, PLANS_FILE, '.env', 'bot_log.txt']:
-        if os.path.exists(file):
-            backup_path = os.path.join(BACKUP_DIR, f"{file}_{timestamp}")
-            shutil.copy(file, backup_path)
-            backup_files.append(backup_path)
-    if backup_files:
-        for f in backup_files:
-            with open(f, 'rb') as doc:
-                bot.send_document(chat_id, doc, caption=f"بکاپ {os.path.basename(f)}")
-        bot.send_message(chat_id, "بکاپ ارسال شد.")
-    else:
-        bot.send_message(chat_id, "فایلی برای بکاپ پیدا نشد.")
-
-def send_log(chat_id):
-    if os.path.exists('bot_log.txt'):
-        with open('bot_log.txt', 'rb') as log_file:
-            bot.send_document(chat_id, log_file, caption="لاگ ربات")
-    else:
-        bot.send_message(chat_id, "فایل لاگ پیدا نشد.")
-
-def restart_bot():
-    python = sys.executable
-    os.execl(python, python, *sys.argv)
-
-def stop_bot():
-    os._exit(0)
-
-def delete_bot():
-    files_to_delete = [CONFIG_FILE, PAYMENT_FILE, PLANS_FILE, '.env', 'bot_log.txt']
-    for file in files_to_delete:
-        if os.path.exists(file):
-            os.remove(file)
-    if os.path.exists(BACKUP_DIR):
-        shutil.rmtree(BACKUP_DIR)
-    bot.stop_polling()
-    time.sleep(1)
-    os._exit(0)
-
-if __name__ == '__main__':
-    logging.info("بات شروع شد.")
-    try:
-        bot.polling(none_stop=True)
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        backup_filename_base = f'backup_{timestamp}'
+        backup_zip_path = f'{backup_filename_base}.zip'
+        
+        with zipfile.ZipFile(backup_zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for file in [DB_FILE, CONFIGS_FILE, USED_CONFIGS_FILE]:
+                if os.path.exists(file):
+                    zipf.write(file, arcname=os.path.basename(file))
+        
+        if os.path.exists(backup_zip_path):
+            with open(backup_zip_path, 'rb') as backup_file:
+                bot.send_document(chat_id, backup_file, caption=f"✅ بکاپ با موفقیت ایجاد شد.")
+            logger.info(f"بکاپ با نام {backup_zip_path} ایجاد و برای ادمین ارسال شد.")
+        else:
+            raise FileNotFoundError("فایل بکاپ ایجاد نشد.")
+            
     except Exception as e:
-        logging.error(f"خطا: {e}")
-        print(f"خطا: {e}")
+        logger.error(f"خطا در ایجاد بکاپ: {e}")
+        bot.send_message(chat_id, f"❌ خطایی در هنگام ایجاد بکاپ رخ داد: {e}")
+    finally:
+        if 'backup_zip_path' in locals() and os.path.exists(backup_zip_path):
+            os.remove(backup_zip_path)
+
+def restore_data_step1(message):
+    try:
+        if not message.document or message.document.mime_type not in ['application/zip', 'application/x-zip-compressed']:
+            bot.reply_to(message, "❌ فایل ارسالی معتبر نیست. لطفاً یک فایل بکاپ با فرمت .zip ارسال کنید.", reply_markup=get_admin_keyboard())
+            return
+            
+        file_info = bot.get_file(message.document.file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        
+        backup_zip_path = 'received_backup.zip'
+        with open(backup_zip_path, 'wb') as new_file:
+            new_file.write(downloaded_file)
+            
+        with zipfile.ZipFile(backup_zip_path, 'r') as zip_ref:
+            zip_ref.extractall('.')
+            
+        bot.send_message(message.chat.id, "✅ داده‌ها با موفقیت بازیابی شدند.\nبرای اعمال کامل تغییرات، لطفاً ربات را روی سرور ری‌استارت کنید.", reply_markup=get_admin_keyboard())
+        logger.warning(f"ربات از فایل بکاپ ارسالی توسط ادمین ریستور شد.")
+        
+    except Exception as e:
+        logger.error(f"خطا در بازیابی داده‌ها: {e}")
+        bot.send_message(message.chat.id, f"❌ خطایی در هنگام بازیابی داده‌ها رخ داد: {e}", reply_markup=get_admin_keyboard())
+    finally:
+        if os.path.exists('received_backup.zip'):
+            os.remove('received_backup.zip')
+
+def ask_for_reset_confirmation(message):
+    markup = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    markup.add(KeyboardButton("✅ بله، مطمئنم! همه چیز را پاک کن"), KeyboardButton("❌ خیر، منصرف شدم"))
+    bot.send_message(message.chat.id, 
+                     "🚨 **اخطار بسیار مهم** 🚨\n\nآیا مطمئن هستید که می‌خواهید تمام داده‌های ربات را پاک کنید؟ این عمل **غیرقابل بازگشت** است و تمام سوابق پرداخت و کانفیگ‌ها را حذف می‌کند.",
+                     reply_markup=markup, parse_mode="Markdown")
+    bot.register_next_step_handler(message, confirm_full_reset)
+
+def confirm_full_reset(message):
+    if message.text.startswith("✅"):
+        try:
+            for f in [DB_FILE, CONFIGS_FILE, USED_CONFIGS_FILE]:
+                if os.path.exists(f): os.remove(f)
+            init_db()
+            bot.send_message(message.chat.id, "✅ تمام داده‌های ربات با موفقیت پاک شد. ربات به تنظیمات اولیه بازگشت.", reply_markup=get_admin_keyboard())
+            logger.critical("ادمین ربات را به طور کامل ریست کرد.")
+        except Exception as e:
+            logger.error(f"خطا در هنگام ریست کامل: {e}")
+            bot.send_message(message.chat.id, f"❌ خطایی در هنگام پاک‌سازی داده‌ها رخ داد: {e}", reply_markup=get_admin_keyboard())
+    else:
+        bot.send_message(message.chat.id, "عملیات ریست لغو شد.", reply_markup=get_admin_keyboard())
+
+# --- مدیریت پیام‌های کاربر ---
+@bot.message_handler(func=lambda message: not is_admin(message))
+def handle_user_messages(message):
+    if message.text.startswith("💳 خرید کانفیگ"):
+        is_ok, authority, link = zarinpal.payment_request(
+            amount=CONFIG_PRICE,
+            callback_url=CALLBACK_URL,
+            description=f"خرید سرویس VPN برای کاربر {message.from_user.id}"
+        )
+        if is_ok and link:
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO payments (user_id, authority, amount) VALUES (?, ?, ?)",
+                           (message.from_user.id, authority, CONFIG_PRICE))
+            conn.commit()
+            conn.close()
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton("🚀 پرداخت و دریافت کانفیگ 🚀", url=link))
+            bot.send_message(message.chat.id, "برای تکمیل خرید و دریافت فوری کانفیگ، روی دکمه زیر کلیک کنید:", reply_markup=markup)
+            logger.info(f"لینک پرداخت برای کاربر {message.from_user.id} ایجاد شد.")
+        else:
+            bot.send_message(message.chat.id, "خطایی در اتصال به درگاه پرداخت رخ داد. لطفاً چند لحظه بعد دوباره تلاش کنید.")
+            logger.error("خطا در ایجاد لینک پرداخت از سمت زرین‌پال.")
+
+# --- اجرای برنامه ---
+if __name__ == "__main__":
+    logger.info("Initializing Database and config files...")
+    init_db()
+    logger.info("Setting webhook...")
+    bot.remove_webhook()
+    # در صورتی که وبهوک قبلاً با پارامترهای دیگری ست شده باشد، این خط آن را پاک می‌کند
+    bot.set_webhook(url=WEBHOOK_URL)
+    logger.info(f"Webhook is set to: {WEBHOOK_URL}")
+    logger.info("Starting Flask server... Use Gunicorn in production.")
+    # دستور پیشنهادی برای اجرا در سرور:
+    # gunicorn --workers 4 --bind 0.0.0.0:8080 main:app --log-level info
