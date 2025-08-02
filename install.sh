@@ -1,83 +1,110 @@
 #!/bin/bash
 
-# اسکریپت نصب خودکار ربات فروش VPN
-# این اسکریپت ربات را در مسیر /root/vpn_bot نصب می‌کند.
+# اسکریپت نصب تعاملی و خودکار ربات فروش VPN
 
 # --- متغیرها و رنگ‌ها ---
 INSTALL_DIR="/root/vpn_bot"
-REPO_URL="https://github.com/Mohammad1724/vpn_bot.git"
+SERVICE_NAME="vpn_bot.service"
+REPO_URL="https://github.com/Mohammad1724/vpn_bot.git" # آدرس ریپازیتوری شما
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# --- بررسی اجرای اسکریپت با دسترسی root ---
+# --- بررسی دسترسی root ---
 if [ "$EUID" -ne 0 ]; then
   echo -e "${RED}خطا: این اسکریپت باید با دسترسی root اجرا شود.${NC}"
-  echo "لطفاً آن را با دستور 'sudo ./install.sh' اجرا کنید."
   exit 1
 fi
 
-echo -e "${GREEN}--- شروع فرآیند نصب ربات فروش VPN ---${NC}"
+# --- تابع برای پرسیدن سوالات ---
+ask_question() {
+    local question=$1
+    local variable_name=$2
+    echo -e -n "${YELLOW}$question ${NC}"
+    read -r "$variable_name"
+}
 
-# --- نصب پیش‌نیازهای سیستمی ---
-echo -e "\n${YELLOW}مرحله ۱: نصب پیش‌نیازهای سیستمی (git, python3-pip, python3-venv)...${NC}"
+echo -e "${GREEN}--- شروع فرآیند نصب تعاملی ربات ---${NC}"
+
+# --- مرحله ۱: نصب پیش‌نیازهای سیستمی ---
+echo -e "\n${YELLOW}مرحله ۱: نصب پیش‌نیازهای سیستمی (git, python3-pip)...${NC}"
 apt update > /dev/null 2>&1
-apt install -y git python3-pip python3-venv > /dev/null 2>&1
+apt install -y git python3-pip > /dev/null 2>&1
 echo -e "${GREEN}پیش‌نیازها با موفقیت نصب شدند.${NC}"
 
-# --- کلون کردن پروژه از گیت‌هاب ---
+# --- مرحله ۲: دانلود فایل‌های ربات ---
 echo -e "\n${YELLOW}مرحله ۲: دانلود فایل‌های ربات از گیت‌هاب...${NC}"
 if [ -d "$INSTALL_DIR" ]; then
-    echo -e "${YELLOW}پوشه نصب ($INSTALL_DIR) از قبل وجود دارد. آیا می‌خواهید آن را حذف کرده و از نو نصب کنید؟ (y/n)${NC}"
-    read -r response
-    if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
-        rm -rf "$INSTALL_DIR"
-        echo -e "${GREEN}پوشه قبلی حذف شد.${NC}"
-    else
-        echo -e "${RED}نصب متوقف شد.${NC}"
-        exit 1
-    fi
+    echo -e "${YELLOW}پوشه نصب ($INSTALL_DIR) از قبل وجود دارد. در حال حذف نسخه قبلی...${NC}"
+    # ابتدا سرویس قبلی را متوقف و غیرفعال می‌کنیم
+    systemctl stop "$SERVICE_NAME" > /dev/null 2>&1
+    systemctl disable "$SERVICE_NAME" > /dev/null 2>&1
+    rm -rf "$INSTALL_DIR"
 fi
 git clone "$REPO_URL" "$INSTALL_DIR"
-if [ $? -ne 0 ]; then
-    echo -e "${RED}خطا در دانلود فایل‌ها از گیت‌هاب. لطفاً اتصال اینترنت و آدرس ریپازیتوری را بررسی کنید.${NC}"
-    exit 1
-fi
-echo -e "${GREEN}فایل‌های ربات با موفقیت در مسیر $INSTALL_DIR دانلود شدند.${NC}"
-
 cd "$INSTALL_DIR" || exit
+echo -e "${GREEN}فایل‌های ربات با موفقیت دانلود شدند.${NC}"
 
-# --- ساخت و فعال‌سازی محیط مجازی پایتون ---
-echo -e "\n${YELLOW}مرحله ۳: ساخت محیط مجازی پایتون (venv)...${NC}"
-python3 -m venv venv
-source venv/bin/activate
-echo -e "${GREEN}محیط مجازی ساخته و فعال شد.${NC}"
-
-# --- نصب پکیج‌های پایتون ---
-echo -e "\n${YELLOW}مرحله ۴: نصب پکیج‌های مورد نیاز پایتون...${NC}"
+# --- مرحله ۳: نصب پکیج‌های پایتون ---
+echo -e "\n${YELLOW}مرحله ۳: نصب پکیج‌های مورد نیاز پایتون...${NC}"
 pip install -r requirements.txt
-if [ $? -ne 0 ]; then
-    echo -e "${RED}خطا در نصب پکیج‌های پایتون. لطفاً فایل requirements.txt را بررسی کنید.${NC}"
-    deactivate
-    exit 1
-fi
 echo -e "${GREEN}تمام پکیج‌ها با موفقیت نصب شدند.${NC}"
 
-# --- آماده‌سازی فایل‌های تنظیمات ---
-echo -e "\n${YELLOW}مرحله ۵: آماده‌سازی فایل‌های تنظیمات...${NC}"
-cp .env.example .env
-touch configs.txt
-echo -e "${GREEN}فایل .env برای تنظیمات و configs.txt برای کانفیگ‌ها ایجاد شد.${NC}"
+# --- مرحله ۴: دریافت اطلاعات از کاربر و ساخت فایل .env ---
+echo -e "\n${YELLOW}مرحله ۴: لطفاً اطلاعات زیر را برای ساخت فایل .env وارد کنید:${NC}"
+ask_question "توکن ربات تلگرام خود را وارد کنید (از @BotFather):" TOKEN
+ask_question "آیدی عددی ادمین را وارد کنید (از @userinfobot):" ADMIN_ID
+ask_question "قیمت پیش‌فرض کانفیگ را وارد کنید (مثلا 50,000):" CONFIG_PRICE
+ask_question "شماره کارت خود را وارد کنید (مثلا 6037-xxxx-xxxx-xxxx):" CARD_NUMBER
+ask_question "نام کامل صاحب حساب را وارد کنید:" CARD_HOLDER
 
-echo -e "\n\n${GREEN}--- نصب با موفقیت به پایان رسید! ---${NC}"
-echo -e "\n${YELLOW}اقدامات بعدی:${NC}"
-echo -e "1. وارد پوشه ربات شوید: ${GREEN}cd $INSTALL_DIR${NC}"
-echo -e "2. فایل .env را با اطلاعات خود ویرایش کنید: ${GREEN}nano .env${NC}"
-echo -e "3. کانفیگ‌های خود را در فایل configs.txt قرار دهید (هر کدام در یک خط): ${GREEN}nano configs.txt${NC}"
-echo -e "4. ربات را با دستور زیر اجرا کنید (ابتدا محیط مجازی را فعال کنید):"
-echo -e "   ${GREEN}source venv/bin/activate${NC}"
-echo -e "   ${GREEN}gunicorn --workers 4 --bind 0.0.0.0:8080 main:app --log-level info${NC}"
-echo -e "\nفراموش نکنید که وب‌سرور (مانند Nginx) را برای دامنه خود تنظیم کنید."
+# ساخت فایل .env
+cat > .env << EOF
+TOKEN="$TOKEN"
+ADMIN_ID="$ADMIN_ID"
+CONFIG_PRICE="$CONFIG_PRICE"
+CARD_NUMBER="$CARD_NUMBER"
+CARD_HOLDER="$CARD_HOLDER"
+EOF
+echo -e "${GREEN}فایل .env با موفقیت ساخته شد.${NC}"
+touch configs.txt # ایجاد فایل خالی کانفیگ‌ها
 
-deactivate
+# --- مرحله ۵: ساخت و راه‌اندازی سرویس systemd ---
+echo -e "\n${YELLOW}مرحله ۵: ساخت و راه‌اندازی سرویس systemd برای اجرای دائمی ربات...${NC}"
+SERVICE_FILE_PATH="/etc/systemd/system/$SERVICE_NAME"
+cat > "$SERVICE_FILE_PATH" << EOF
+[Unit]
+Description=VPN Bot Service (Card-to-Card Version)
+After=network.target
+
+[Service]
+User=root
+Group=root
+WorkingDirectory=$INSTALL_DIR
+ExecStart=/usr/bin/python3 $INSTALL_DIR/main.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable "$SERVICE_NAME"
+systemctl start "$SERVICE_NAME"
+echo -e "${GREEN}سرویس ربات با موفقیت ساخته و اجرا شد.${NC}"
+
+# --- مرحله ۶: نمایش وضعیت نهایی ---
+echo -e "\n${YELLOW}مرحله ۶: بررسی وضعیت نهایی سرویس...${NC}"
+# چند ثانیه صبر می‌کنیم تا سرویس زمان کافی برای اجرا داشته باشد
+sleep 5
+systemctl status "$SERVICE_NAME"
+
+echo -e "\n\n${GREEN}--- نصب و راه‌اندازی با موفقیت به پایان رسید! ---${NC}"
+echo -e "ربات شما اکنون در پس‌زمینه در حال اجراست."
+echo -e "برای مدیریت ربات (مثلاً مشاهده لاگ‌ها) از دستورات زیر استفاده کنید:"
+echo -e " - توقف ربات: ${YELLOW}systemctl stop $SERVICE_NAME${NC}"
+echo -e " - شروع ربات: ${YELLOW}systemctl start $SERVICE_NAME${NC}"
+echo -e " - ری‌استارت ربات: ${YELLOW}systemctl restart $SERVICE_NAME${NC}"
+echo -e " - مشاهده لاگ‌ها: ${YELLOW}journalctl -u $SERVICE_NAME -f${NC}"
