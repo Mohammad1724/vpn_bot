@@ -1,28 +1,27 @@
 #!/bin/bash
 
-echo "What do you want to do?"
-echo "1) Install bot "
-echo "2) Complete removal of the bot and files"
-read -p "Enter the option number. (1 Or 2): " action
+echo "چه کاری می‌خواهید انجام دهید؟"
+echo "1) نصب ربات"
+echo "2) حذف کامل ربات و فایل‌ها"
+read -p "شماره گزینه را وارد کنید (1 یا 2): " action
 
 if [ "$action" == "2" ]; then
-    echo "Deleting..."
+    echo "در حال حذف فایل‌های ربات..."
     rm -f configs.json payments.json plans.json .env bot_log.txt
     rm -rf backups venv
     echo "همه فایل‌ها حذف شد."
     exit 0
-fi
-
-if [ "$action" != "1" ]; then
+elif [ "$action" == "1" ]; then
+    echo "در حال نصب ربات..."
+else
     echo "گزینه نامعتبر!"
     exit 1
 fi
 
 # گرفتن اطلاعات برای ساخت .env
-echo "در حال نصب ربات..."
-read -p "Enter the Telegram bot token.: " BOT_TOKEN
-read -p "Admin numeric ID (e.g. 123456789): " ADMIN_ID
-read -p "Card number  (For example 6037-XXXX-XXXX-XXXX): " CARD_NUMBER
+read -p "توکن ربات تلگرام را وارد کنید: " BOT_TOKEN
+read -p "آیدی عددی ادمین (مثلاً 123456789): " ADMIN_ID
+read -p "شماره کارت (مثلاً 6037-XXXX-XXXX-XXXX): " CARD_NUMBER
 
 # ساخت فایل .env
 cat > .env <<EOF
