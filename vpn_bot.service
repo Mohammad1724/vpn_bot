@@ -1,0 +1,43 @@
+# /etc/systemd/system/vpn_bot.service
+#
+# این یک فایل نمونه برای ساخت سرویس systemd است.
+# برای استفاده، این فایل را در مسیر /etc/systemd/system/ کپی کرده
+# و سپس دستورات لازم را اجرا کنید.
+#
+# 1. sudo cp vpn_bot.service /etc/systemd/system/vpn_bot.service
+# 2. sudo systemctl daemon-reload
+# 3. sudo systemctl enable vpn_bot.service
+# 4. sudo systemctl start vpn_bot.service
+
+[Unit]
+Description=VPN Bot Service - A Telegram bot for selling configs
+# سرویس بعد از بالا آمدن شبکه اجرا شود
+After=network.target
+
+[Service]
+# کاربر و گروهی که سرویس با آن اجرا می‌شود.
+# اخطار: اجرای سرویس با کاربر root ریسک امنیتی دارد.
+# توصیه می‌شود یک کاربر جداگانه (مثلا vpnuser) ساخته و جایگزین کنید.
+User=root
+Group=root
+
+# پوشه‌ای که برنامه از آنجا اجرا می‌شود
+WorkingDirectory=/root/vpn_bot
+
+# دستور اصلی برای اجرای ربات
+# مسیر کامل به gunicorn از داخل محیط مجازی (venv) داده شده است.
+# اگر ربات را در مسیر دیگری نصب کرده‌اید، این مسیرها را تغییر دهید.
+ExecStart=/root/vpn_bot/venv/bin/gunicorn --workers 4 --bind 0.0.0.0:8080 main:app --log-level info
+
+# راه‌اندازی مجدد خودکار در صورت بروز خطا یا کرش کردن برنامه
+Restart=always
+# تاخیر ۱۰ ثانیه‌ای قبل از راه‌اندازی مجدد
+RestartSec=10
+
+# مطمئن شوید که فرآیند به درستی متوقف می‌شود
+KillSignal=SIGTERM
+TimeoutStopSec=90
+
+[Install]
+# این سرویس باید در runlevel چندکاربره اجرا شود
+WantedBy=multi-user.target
