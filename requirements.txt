@@ -2,5 +2,4 @@
 pyTelegramBotAPI
 python-dotenv
 Flask
-zarinpal-python
 gunicorn
