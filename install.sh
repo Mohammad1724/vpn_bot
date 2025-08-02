@@ -1,58 +1,64 @@
 #!/bin/bash
 
-echo "🚀 نصب اصلاح‌شده ربات فروش VPN..."
+echo "What do you want to do?"
+echo "1) Install bot "
+echo "2) Complete removal of the bot and files"
+read -p "Enter the option number. (1 Or 2): " action
 
-# چک اگر stdin باز باشه (برای read)
-if [ ! -t 0 ]; then
-  echo "⚠️ هشدار: stdin بسته است (مثل pipe | bash). سوالات پرسیده نمی‌شن. .env رو دستی ویرایش کن: nano /root/vpn_bot/.env"
+if [ "$action" == "2" ]; then
+    echo "Deleting..."
+    rm -f configs.json payments.json plans.json .env bot_log.txt
+    rm -rf backups venv
+    echo "همه فایل‌ها حذف شد."
+    exit 0
 fi
 
-# آپدیت و نصب پکیج‌ها
-apt update
-apt install python3 python3-pip python3-venv git -y
+if [ "$action" != "1" ]; then
+    echo "گزینه نامعتبر!"
+    exit 1
+fi
 
-# پاک کردن دایرکتوری قبلی
-[ -d "/root/vpn_bot" ] && rm -rf /root/vpn_bot
+# گرفتن اطلاعات برای ساخت .env
+echo "در حال نصب ربات..."
+read -p "Enter the Telegram bot token.: " BOT_TOKEN
+read -p "Admin numeric ID (e.g. 123456789): " ADMIN_ID
+read -p "Card number  (For example 6037-XXXX-XXXX-XXXX): " CARD_NUMBER
 
-# کلون ریپو
-git clone https://github.com/Mohammad1724/vpn_bot.git /root/vpn_bot
+# ساخت فایل .env
+cat > .env <<EOF
+BOT_TOKEN=$BOT_TOKEN
+ADMIN_ID=$ADMIN_ID
+CARD_NUMBER=$CARD_NUMBER
+EOF
 
-# رفتن به دایرکتوری
-cd /root/vpn_bot
+echo ".env ساخته شد."
 
-# ساخت venv و نصب وابستگی‌ها
-python3 -m venv myenv
-source myenv/bin/activate
-pip install --upgrade -r requirements.txt
-pip install qrcode[pil]
-deactivate
+# نصب pip اگر نصب نیست
+if ! command -v pip &> /dev/null
+then
+    echo "pip پیدا نشد. در حال نصب pip..."
+    apt update && apt install -y python3-pip
+fi
 
-# ساخت .env
-[ -f ".env.example" ] && cp .env.example .env || echo "# فایل .env خالی" > .env
+# ساخت محیط مجازی
+if [ ! -d "venv" ]; then
+    echo "در حال ساخت محیط مجازی پایتون..."
+    python3 -m venv venv
+fi
 
-# پرسیدن تنظیمات (اگر stdin باز باشه)
-echo "حالا تنظیمات .env رو وارد کنید (Enter برای skip):"
-read -p "BOT_TOKEN: " BOT_TOKEN
-[ -n "$BOT_TOKEN" ] && echo "BOT_TOKEN=$BOT_TOKEN" >> .env
+# فعال‌سازی محیط مجازی و نصب پکیج‌ها
+source venv/bin/activate
+pip install --upgrade pip
 
-read -p "ADMIN_ID: " ADMIN_ID
-[ -n "$ADMIN_ID" ] && echo "ADMIN_ID=$ADMIN_ID" >> .env
+# ساخت فایل requirements.txt اگر وجود ندارد
+if [ ! -f "requirements.txt" ]; then
+    echo "pyTelegramBotAPI
+python-dotenv
+qrcode" > requirements.txt
+fi
 
-read -p "CARD_NUMBER: " CARD_NUMBER
-[ -n "$CARD_NUMBER" ] && echo "CARD_NUMBER=$CARD_NUMBER" >> .env
+pip install -r requirements.txt
 
-read -p "PLANS (مثل 1GB:10000,10GB:50000): " PLANS
-[ -n "$PLANS" ] && echo "PLANS=$PLANS" >> .env
-
-echo "✅ تنظیمات ذخیره شد."
-
-# رفع باگ callback
-sed -i 's/@bot.callback/@bot.callback_query_handler(func=lambda call: True)/g' vpn_bot.py
-
-# نصب screen
-apt install screen -y
-
-echo "✅ نصب کامل شد! اجرا: cd /root/vpn_bot ; source myenv/bin/activate ; python3 vpn_bot.py"
-
-read -p "اجرا کنم؟ (y/n): " RUN_NOW
-[ "$RUN_NOW" = "y" -o "$RUN_NOW" = "Y" ] && screen -S vpn_bot -dm bash -c 'cd /root/vpn_bot ; source myenv/bin/activate ; python3 vpn_bot.py' && echo "✅ اجرا شد!"
+echo "نصب پیش‌نیازها تمام شد."
+echo "ربات در حال اجراست..."
+python vpn_bot.py
