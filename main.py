@@ -1,4 +1,4 @@
-# main.py (نسخه نهایی، قطعی و پایدار با معماری اصلاح‌شده)
+# main.py (نسخه نهایی، قطعی و پایدار با معماری ساده‌شده)
 
 import os
 import sqlite3
@@ -34,12 +34,6 @@ DB_FILE = "bot_database.db"
 PLANS_CONFIG_DIR = "plan_configs"
 SERVICE_NAME = "vpn_bot.service"
 bot = telebot.TeleBot(TOKEN)
-user_states = {}
-
-PROMPTS = {
-    "editing_name": "نام جدید را وارد کنید:", "editing_price": "قیمت جدید را وارد کنید (فقط عدد):",
-    "editing_duration": "زمان جدید را به روز وارد کنید (فقط عدد):", "editing_add_configs": "کانفیگ‌های جدید برای افزودن را وارد کنید (هر کدام در یک خط):"
-}
 
 # --- توابع دیتابیس و کمکی ---
 def db_connect():
@@ -100,9 +94,8 @@ def create_service(user_id, plan_id, config):
 # --- کیبوردها ---
 def get_admin_keyboard():
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row(KeyboardButton("➕ افزودن پلن"), KeyboardButton("📋 مدیریت پلن‌ها"))
+    markup.row(KeyboardButton("➕ افزودن پلن"), KeyboardButton("📋 لیست/مدیریت پلن‌ها"))
     markup.row(KeyboardButton("📊 آمار"), KeyboardButton("🔄 ریستارت ربات"))
-    markup.row(KeyboardButton("📥 بکاپ"), KeyboardButton("📤 ریستور"))
     return markup
 
 def get_user_keyboard():
@@ -116,9 +109,8 @@ def get_user_keyboard():
 def send_welcome(message):
     user = message.from_user
     add_or_update_user(user.id, user.first_name, user.username)
-    user_states.pop(user.id, None)
     if user.id == ADMIN_ID:
-        bot.send_message(user.id, "به منوی اصلی بازگشتید.", reply_markup=get_admin_keyboard())
+        bot.send_message(user.id, "سلام ادمین عزیز! به پنل مدیریت خوش آمدید.", reply_markup=get_admin_keyboard())
     else:
         balance = get_user_balance(user.id)
         bot.send_message(user.id, f"سلام {user.first_name} عزیز!\n💰 موجودی: **{balance:,} تومان**", parse_mode="Markdown", reply_markup=get_user_keyboard())
@@ -126,54 +118,67 @@ def send_welcome(message):
 # --- مدیریت کاربران عادی ---
 @bot.message_handler(func=lambda m: m.from_user.id != ADMIN_ID)
 def handle_user_messages(message):
-    # (این بخش بدون تغییر باقی می‌ماند)
-    pass
+    if message.content_type == 'text':
+        if message.text == "🛍 خرید سرویس": show_plans_to_user(message.from_user.id)
+        elif message.text == "💰 کیف پول": handle_wallet_request(message)
+        elif message.text == "🔄 سرویس‌های من": show_my_services(message.from_user.id)
+    elif message.content_type in ['photo', 'document']: handle_receipt(message)
 
-# --- مدیریت پنل ادمین (معماری جدید و پایدار) ---
+def handle_wallet_request(message):
+    balance = get_user_balance(message.from_user.id)
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("افزایش موجودی", callback_data="charge_wallet"))
+    bot.send_message(message.from_user.id, f"موجودی فعلی شما: **{balance:,} تومان**", reply_markup=markup, parse_mode="Markdown")
+
+def handle_receipt(message):
+    user = message.from_user
+    add_or_update_user(user.id, user.first_name, user.username)
+    msg_to_admin = (f" رسید شارژ کیف پول از:\n👤 کاربر: {message.from_user.first_name}\n🆔 آیدی: `{user.id}`\n\n"
+                    "لطفا مبلغ را از رسید خوانده و برای تایید، روی این پیام ریپلای کرده و **مبلغ را به عدد** ارسال کنید.")
+    bot.forward_message(ADMIN_ID, user.id, message.message_id)
+    bot.send_message(ADMIN_ID, msg_to_admin, parse_mode="Markdown")
+    bot.reply_to(message, "✅ رسید شما برای ادمین ارسال شد. پس از تایید، کیف پول شما شارژ خواهد شد.")
+
+# --- مدیریت پنل ادمین ---
 @bot.message_handler(func=lambda m: m.from_user.id == ADMIN_ID)
 def handle_admin_panel(message):
-    if message.reply_to_message and "رسید شارژ کیف پول" in message.reply_to_message.text:
-        process_admin_charge_confirmation(message)
+    if message.reply_to_message:
+        if "رسید شارژ کیف پول" in message.reply_to_message.text:
+            process_admin_charge_confirmation(message)
+        elif "برای افزودن کانفیگ به این پلن" in message.reply_to_message.text:
+            process_add_configs_to_plan(message)
         return
         
     if message.text == "➕ افزودن پلن":
         prompt = (
-            "برای افزودن پلن جدید، یک پیام با فرمت زیر ارسال کنید:\n\n"
+            "برای افزودن پلن جدید، یک پیام با فرمت زیر ارسال کنید:\n"
+            "دستور را با `/addplan` شروع کنید.\n\n"
+            "**/addplan**\n"
             "نام پلن\n"
             "قیمت (فقط عدد)\n"
             "مدت زمان (روز)\n"
             "---\n"
             "کانفیگ ۱\n"
-            "کانفیگ ۲\n\n"
-            "**مثال:**\n"
-            "پلن یک ماهه\n"
-            "50000\n"
-            "30\n"
-            "---\n"
-            "vless://..."
+            "کانفیگ ۲\n"
         )
-        msg = bot.send_message(ADMIN_ID, prompt, parse_mode="Markdown")
-        bot.register_next_step_handler(msg, process_new_plan_message)
-    elif message.text == "📋 مدیریت پلن‌ها":
+        bot.send_message(ADMIN_ID, prompt, parse_mode="Markdown")
+    elif message.text == "📋 لیست/مدیریت پلن‌ها":
         show_plan_management_panel(ADMIN_ID)
     elif message.text == "🔄 ریستارت ربات":
         bot.send_message(ADMIN_ID, "در حال ری‌استارت...")
         os.system(f"systemctl restart {SERVICE_NAME}")
     elif message.text == "📊 آمار":
         show_statistics(ADMIN_ID)
-    elif message.text == "📥 بکاپ":
-        backup_data(ADMIN_ID)
-    elif message.text == "📤 ریستور":
-        msg = bot.send_message(ADMIN_ID, "فایل بکاپ (.zip) را ارسال کنید.")
-        bot.register_next_step_handler(msg, restore_data)
-    elif user_states.get(ADMIN_ID):
-        handle_admin_state_messages(message)
+    elif message.text.startswith("/addplan"):
+        process_new_plan_message(message)
     else:
         bot.send_message(ADMIN_ID, "دستور نامشخص است.", reply_markup=get_admin_keyboard())
 
 def process_new_plan_message(message):
     try:
-        parts = message.text.split('---')
+        # حذف /addplan از ابتدای پیام
+        content = message.text.replace("/addplan", "").strip()
+        parts = content.split('---')
         if len(parts) != 2: raise ValueError("فرمت پیام صحیح نیست (باید از '---' استفاده شود).")
         header, configs_str = parts[0].strip(), parts[1].strip()
         header_lines = header.split('\n')
@@ -196,7 +201,7 @@ def process_new_plan_message(message):
         bot.send_message(ADMIN_ID, f"✅ پلن جدید '{name}' با موفقیت ساخته شد.", reply_markup=get_admin_keyboard())
     except Exception as e:
         logger.error(f"خطا در افزودن پلن: {e}")
-        bot.send_message(ADMIN_ID, f"❌ خطایی در پردازش پیام رخ داد:\n`{e}`\n\nلطفاً فرمت را بررسی و دوباره تلاش کنید.", parse_mode="Markdown", reply_markup=get_admin_keyboard())
+        bot.send_message(ADMIN_ID, f"❌ خطایی در پردازش پیام رخ داد:\n`{e}`", parse_mode="Markdown", reply_markup=get_admin_keyboard())
 
 def show_plan_management_panel(chat_id):
     conn, c = db_connect()
@@ -207,9 +212,36 @@ def show_plan_management_panel(chat_id):
         bot.send_message(chat_id, "هیچ پلنی تعریف نشده است.")
         return
         
-    markup = InlineKeyboardMarkup(row_width=2)
-    for plan in plans: markup.add(InlineKeyboardButton(f"✏️ {plan['name']}", callback_data=f"edit_plan_{plan['plan_id']}"), InlineKeyboardButton(f"🗑 حذف", callback_data=f"delete_plan_{plan['plan_id']}"))
-    bot.send_message(chat_id, "📋 **لیست پلن‌های فعلی:**\nبرای ویرایش یا حذف، روی دکمه مربوطه کلیک کنید.", parse_mode="Markdown", reply_markup=markup)
+    for plan in plans:
+        config_path = os.path.join(PLANS_CONFIG_DIR, f"{plan['plan_id']}.txt")
+        try:
+            with open(config_path, 'r') as f: available = len(f.readlines())
+        except: available = 0
+        
+        response = (f"🔹 **{plan['name']}** - {plan['price']:,} تومان ({plan['duration_days']} روز)\n"
+                    f"   - موجودی کانفیگ: {available}\n"
+                    f"   - ID: `{plan['plan_id']}`\n\n"
+                    "برای افزودن کانفیگ به این پلن، روی این پیام ریپلای کرده و کانفیگ‌ها را ارسال کنید.")
+        
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton(f"🗑 حذف این پلن", callback_data=f"delete_plan_{plan['plan_id']}"))
+        bot.send_message(chat_id, response, parse_mode="Markdown", reply_markup=markup)
+
+def process_add_configs_to_plan(message):
+    try:
+        plan_id_line = [line for line in message.reply_to_message.text.split('\n') if 'ID:' in line]
+        plan_id = plan_id_line[0].split('`')[1]
+
+        new_configs = message.text.strip().split('\n')
+        filepath = os.path.join(PLANS_CONFIG_DIR, f"{plan_id}.txt")
+        with open(filepath, 'a', encoding='utf-8') as f:
+            for config in new_configs: f.write(config + '\n')
+        
+        bot.reply_to(message, f"✅ تعداد {len(new_configs)} کانفیگ جدید به پلن اضافه شد.")
+    except Exception as e:
+        logger.error(f"خطا در افزودن کانفیگ به پلن: {e}")
+        bot.reply_to(message, "خطا در پردازش. لطفاً روی پیام صحیح ریپلای کنید.")
+
 
 def process_admin_charge_confirmation(message):
     try:
@@ -249,78 +281,26 @@ def show_statistics(chat_id):
     )
     bot.send_message(chat_id, stats_text, parse_mode="Markdown")
 
-# (بقیه توابع کامل در بلاک بعدی)
-# (ادامه کد main.py)
-def backup_data(chat_id):
-    bot.send_message(chat_id, "در حال ایجاد بکاپ کامل...")
-    try:
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
-        backup_filename_base, temp_backup_dir = f'backup_{timestamp}', 'temp_backup_dir'
-        os.makedirs(temp_backup_dir, exist_ok=True)
-        shutil.copy(DB_FILE, temp_backup_dir)
-        if os.path.exists(PLANS_CONFIG_DIR): shutil.copytree(PLANS_CONFIG_DIR, os.path.join(temp_backup_dir, PLANS_CONFIG_DIR))
-        shutil.make_archive(backup_filename_base, 'zip', temp_backup_dir)
-        with open(f'{backup_filename_base}.zip', 'rb') as f: bot.send_document(chat_id, f, caption="✅ بکاپ کامل با موفقیت ایجاد شد.")
-    except Exception as e:
-        logger.error(f"خطا در بکاپ: {e}")
-        bot.send_message(chat_id, f"❌ خطا: {e}")
-    finally:
-        if 'backup_filename_base' in locals() and os.path.exists(f'{backup_filename_base}.zip'): os.remove(f'{backup_filename_base}.zip')
-        if 'temp_backup_dir' in locals() and os.path.exists(temp_backup_dir): shutil.rmtree(temp_backup_dir)
-
-def restore_data(message):
-    if not message.document or not message.document.file_name.endswith('.zip'):
-        bot.reply_to(message, "لطفاً یک فایل بکاپ با فرمت .zip ارسال کنید.")
-        return
-    try:
-        bot.send_message(message.chat.id, "در حال بازیابی اطلاعات... ربات برای چند لحظه متوقف و مجدداً راه‌اندازی می‌شود.")
-        file_info = bot.get_file(message.document.file_id)
-        downloaded_file = bot.download_file(file_info.file_path)
-        backup_path = os.path.join(os.getcwd(), 'backup_to_restore.zip')
-        with open(backup_path, 'wb') as new_file:
-            new_file.write(downloaded_file)
-        os.system("bash restore.sh")
-    except Exception as e:
-        logger.error(f"خطا در فرآیند ریستور: {e}")
-        bot.send_message(message.chat.id, f"❌ خطایی در هنگام بازیابی رخ داد: {e}")
-
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
     user_id = call.from_user.id
     data = call.data
+    
     if user_id == ADMIN_ID:
-        try: bot.delete_message(call.message.chat.id, call.message.message_id)
-        except: pass
-        if data.startswith("edit_plan_"):
-            plan_id = data.split('_')[2]
-            markup = InlineKeyboardMarkup(row_width=2)
-            markup.add(InlineKeyboardButton("✏️ نام", callback_data=f"edit_name_{plan_id}"), InlineKeyboardButton("💰 قیمت", callback_data=f"edit_price_{plan_id}"))
-            markup.add(InlineKeyboardButton("⏳ زمان", callback_data=f"edit_duration_{plan_id}"), InlineKeyboardButton("➕ افزودن کانفیگ", callback_data=f"edit_add_configs_{plan_id}"))
-            markup.add(InlineKeyboardButton("⬅️ بازگشت", callback_data="show_plan_panel"))
-            bot.send_message(user_id, "کدام بخش را ویرایش می‌کنید؟", reply_markup=markup)
-        elif data.startswith(("edit_name_", "edit_price_", "edit_duration_", "edit_add_configs_")):
-            parts = data.split('_')
-            action, plan_id = parts[1], parts[2]
-            user_states[user_id] = {"state": f"editing_{action}", "plan_id": plan_id}
-            msg = bot.send_message(user_id, PROMPTS.get(f"editing_{action}", "نامشخص"))
-            bot.register_next_step_handler(msg, handle_admin_state_messages)
-        elif data.startswith("delete_plan_"):
-            plan_id = data.split('_')[2]
-            markup = InlineKeyboardMarkup()
-            markup.add(InlineKeyboardButton("✅ بله، حذف کن", callback_data=f"confirm_delete_{plan_id}"), InlineKeyboardButton("❌ خیر", callback_data="show_plan_panel"))
-            bot.send_message(user_id, "آیا از حذف مطمئن هستید؟", reply_markup=markup)
-        elif data.startswith("confirm_delete_"):
-            plan_id = data.split('_')[2]
+        if data.startswith("delete_plan_"):
+            plan_id_to_delete = data.split('_')[2]
             conn, c = db_connect()
-            c.execute("DELETE FROM plans WHERE plan_id = ?", (plan_id,))
+            c.execute("DELETE FROM plans WHERE plan_id = ?", (plan_id_to_delete,))
+            c.execute("DELETE FROM services WHERE plan_id = ?", (plan_id_to_delete,))
             conn.commit()
             conn.close()
-            filepath = os.path.join(PLANS_CONFIG_DIR, f"{plan_id}.txt")
+            filepath = os.path.join(PLANS_CONFIG_DIR, f"{plan_id_to_delete}.txt")
             if os.path.exists(filepath): os.remove(filepath)
-            bot.answer_callback_query(call.id, "پلن حذف شد.")
-            show_plan_management_panel(user_id)
-        elif data == "show_plan_panel": show_plan_management_panel(user_id)
+            bot.answer_callback_query(call.id, "پلن با موفقیت حذف شد.")
+            bot.delete_message(call.message.chat.id, call.message.message_id)
         return
+
+    # Callbacks کاربر
     if data.startswith("buy_"):
         plan_id = data.split('_')[1]
         conn, c = db_connect()
@@ -351,24 +331,6 @@ def process_charge_user_amount(message):
     except ValueError: 
         msg = bot.send_message(message.chat.id, "لطفاً عدد صحیح و مثبت وارد کنید.")
         bot.register_next_step_handler(msg, process_charge_user_amount)
-
-def handle_admin_state_messages(message):
-    chat_id = message.chat.id
-    state_info = user_states.pop(chat_id, None)
-    if not state_info: return
-    state = state_info.get("state")
-    try:
-        if state == "editing_name":
-            conn, c = db_connect()
-            c.execute("UPDATE plans SET name = ? WHERE plan_id = ?", (message.text, state_info['plan_id']))
-            conn.commit()
-            conn.close()
-            bot.send_message(chat_id, "✅ نام ویرایش شد.", reply_markup=get_admin_keyboard())
-            show_plan_management_panel(chat_id)
-        # (سایر حالات ویرایش در اینجا پیاده‌سازی می‌شوند)
-    except Exception as e:
-        logger.error(f"خطا در پردازش وضعیت ادمین: {e}")
-        bot.send_message(chat_id, "یک خطای پیش‌بینی نشده رخ داد.", reply_markup=get_admin_keyboard())
 
 if __name__ == "__main__":
     init_db()
