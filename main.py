@@ -8,7 +8,7 @@ import shutil
 import zipfile
 import telebot
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
-from dotenv import load_dotenv, set_key
+from dotenv import load_dotenv
 import uuid
 
 # --- تنظیمات اولیه ---
@@ -19,11 +19,19 @@ load_dotenv(dotenv_path, encoding='utf-8')
 
 try:
     TOKEN = os.getenv("TOKEN")
-    ADMIN_ID = int(os.getenv("ADMIN_ID"))
-    # متغیرهای پرداخت بعداً لود می‌شوند
-except (TypeError, ValueError) as e:
-    logger.error(f"خطا در خواندن TOKEN یا ADMIN_ID: {e}")
-    exit("خطا: TOKEN یا ADMIN_ID در فایل .env به درستی تنظیم نشده‌اند.")
+    ADMIN_ID_STR = os.getenv("ADMIN_ID")
+    CARD_NUMBER = os.getenv("CARD_NUMBER")
+    CARD_HOLDER = os.getenv("CARD_HOLDER")
+
+    if not all([TOKEN, ADMIN_ID_STR, CARD_NUMBER, CARD_HOLDER]):
+        missing = [v for v, k in {"TOKEN": TOKEN, "ADMIN_ID": ADMIN_ID_STR, "CARD_NUMBER": CARD_NUMBER, "CARD_HOLDER": CARD_HOLDER}.items() if not k]
+        raise ValueError(f"متغیرهای زیر در فایل .env خالی هستند: {', '.join(missing)}")
+    
+    ADMIN_ID = int(ADMIN_ID_STR)
+
+except (ValueError, TypeError) as e:
+    logger.error(f"خطا در متغیرهای محیطی: {e}")
+    exit(f"خطا در متغیرهای محیطی: {e}")
 
 DB_FILE = "bot_database.db"
 PLANS_CONFIG_DIR = "plan_configs"
@@ -90,10 +98,11 @@ def create_service(user_id, plan_id, config):
     conn.close()
     
 def update_env_file(key, value):
+    # این کتابخانه باید import شود
+    from dotenv import set_key
     set_key(dotenv_path, key, value, encoding='utf-8')
     os.environ[key] = value
 
-# --- کیبوردها ---
 def get_admin_keyboard():
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row(KeyboardButton("➕ مدیریت پلن‌ها"), KeyboardButton("📊 آمار"))
@@ -106,7 +115,6 @@ def get_user_keyboard():
     markup.row(KeyboardButton("💰 کیف پول"))
     return markup
 
-# --- (بقیه کد کامل از اینجا به بعد) ---
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     user = message.from_user
@@ -199,7 +207,7 @@ def show_payment_settings_panel(chat_id):
     card_number = os.getenv("CARD_NUMBER")
     card_holder = os.getenv("CARD_HOLDER")
     text = f"**تنظیمات فعلی پرداخت:**\n\n💳 شماره کارت: `{card_number}`\n👤 نام صاحب حساب: **{card_holder}**"
-    markup = InlineKeyboardMarkup(row_width=2)
+    markup = InlineKeyboardMarkup(row_width=1)
     markup.add(InlineKeyboardButton("✏️ ویرایش شماره کارت", callback_data="edit_card_number"), InlineKeyboardButton("✏️ ویرایش نام صاحب حساب", callback_data="edit_card_holder"))
     bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=markup)
 
@@ -296,43 +304,46 @@ def handle_admin_state_messages(message):
     chat_id = message.chat.id
     state_info = user_states[chat_id]
     state = state_info.get("state")
-    if state == "adding_plan_name":
-        state_info["name"] = message.text
-        state_info["state"] = "adding_plan_price"
-        bot.send_message(chat_id, "🔹 ۲/۴: قیمت (فقط عدد):")
-    elif state == "adding_plan_price":
-        try:
+    
+    try:
+        if state == "adding_plan_name":
+            state_info["name"] = message.text
+            state_info["state"] = "adding_plan_price"
+            bot.send_message(chat_id, "🔹 ۲/۴: قیمت (فقط عدد):")
+        elif state == "adding_plan_price":
             state_info["price"] = int(message.text)
             state_info["state"] = "adding_plan_duration"
             bot.send_message(chat_id, "🔹 ۳/۴: زمان (روز):")
-        except ValueError: bot.send_message(chat_id, "خطا: لطفاً عدد وارد کنید.")
-    elif state == "adding_plan_duration":
-        try:
+        elif state == "adding_plan_duration":
             state_info["duration"] = int(message.text)
             state_info["state"] = "adding_plan_configs"
             bot.send_message(chat_id, "🔹 ۴/۴: کانفیگ‌ها (هر کدام در یک خط):")
-        except ValueError: bot.send_message(chat_id, "خطا: لطفاً عدد وارد کنید.")
-    elif state == "adding_plan_configs":
-        plan_id = str(uuid.uuid4())
-        conn, c = db_connect()
-        c.execute("INSERT INTO plans (plan_id, name, price, duration_days) VALUES (?, ?, ?, ?)", (plan_id, state_info['name'], state_info['price'], state_info['duration']))
-        conn.commit()
-        conn.close()
-        filepath = os.path.join(PLANS_CONFIG_DIR, f"{plan_id}.txt")
-        with open(filepath, 'w', encoding='utf-8') as f: f.writelines([c + '\n' for c in message.text.strip().split('\n')])
-        user_states.pop(chat_id, None)
-        bot.send_message(chat_id, "✅ پلن جدید ساخته شد.")
-        show_plan_management_panel(chat_id)
-    elif state == "editing_name":
-        conn, c = db_connect()
-        c.execute("UPDATE plans SET name = ? WHERE plan_id = ?", (message.text, state_info['plan_id']))
-        conn.commit()
-        conn.close()
-        bot.send_message(chat_id, "✅ نام ویرایش شد.")
-        user_states.pop(chat_id, None)
-        show_plan_management_panel(chat_id)
-    elif state == "editing_price":
-        try:
+        elif state == "adding_plan_configs":
+            plan_id = str(uuid.uuid4())
+            conn, c = db_connect()
+            c.execute("INSERT INTO plans (plan_id, name, price, duration_days) VALUES (?, ?, ?, ?)", (plan_id, state_info['name'], state_info['price'], state_info['duration']))
+            conn.commit()
+            conn.close()
+            # *** اصلاحیه کلیدی باگ اینجاست ***
+            configs = message.text.strip().split('\n')
+            filepath = os.path.join(PLANS_CONFIG_DIR, f"{plan_id}.txt")
+            with open(filepath, 'w', encoding='utf-8') as f:
+                for config_line in configs:
+                    f.write(config_line + '\n')
+            user_states.pop(chat_id, None)
+            bot.send_message(chat_id, "✅ پلن جدید ساخته شد.")
+            show_plan_management_panel(chat_id)
+
+        # حالات ویرایش
+        elif state == "editing_name":
+            conn, c = db_connect()
+            c.execute("UPDATE plans SET name = ? WHERE plan_id = ?", (message.text, state_info['plan_id']))
+            conn.commit()
+            conn.close()
+            bot.send_message(chat_id, "✅ نام ویرایش شد.")
+            user_states.pop(chat_id, None)
+            show_plan_management_panel(chat_id)
+        elif state == "editing_price":
             conn, c = db_connect()
             c.execute("UPDATE plans SET price = ? WHERE plan_id = ?", (int(message.text), state_info['plan_id']))
             conn.commit()
@@ -340,9 +351,7 @@ def handle_admin_state_messages(message):
             bot.send_message(chat_id, "✅ قیمت ویرایش شد.")
             user_states.pop(chat_id, None)
             show_plan_management_panel(chat_id)
-        except ValueError: bot.send_message(chat_id, "خطا: قیمت باید عدد باشد.")
-    elif state == "editing_duration":
-        try:
+        elif state == "editing_duration":
             conn, c = db_connect()
             c.execute("UPDATE plans SET duration_days = ? WHERE plan_id = ?", (int(message.text), state_info['plan_id']))
             conn.commit()
@@ -350,27 +359,25 @@ def handle_admin_state_messages(message):
             bot.send_message(chat_id, "✅ زمان ویرایش شد.")
             user_states.pop(chat_id, None)
             show_plan_management_panel(chat_id)
-        except ValueError: bot.send_message(chat_id, "خطا: زمان باید عدد باشد.")
-    elif state == "editing_add_configs":
-        filepath = os.path.join(PLANS_CONFIG_DIR, f"{state_info['plan_id']}.txt")
-        with open(filepath, 'a', encoding='utf-8') as f:
-            for config in message.text.strip().split('\n'): f.write(config + '\n')
-        bot.send_message(chat_id, f"✅ کانفیگ‌های جدید اضافه شد.")
-        user_states.pop(chat_id, None)
-        show_plan_management_panel(chat_id)
-    elif state == "editing_card_number":
-        update_env_file("CARD_NUMBER", message.text)
-        bot.send_message(chat_id, "✅ شماره کارت با موفقیت ویرایش شد.")
-        user_states.pop(chat_id, None)
-    elif state == "editing_card_holder":
-        update_env_file("CARD_HOLDER", message.text)
-        bot.send_message(chat_id, "✅ نام صاحب حساب با موفقیت ویرایش شد.")
-        user_states.pop(chat_id, None)
+        elif state == "editing_add_configs":
+            filepath = os.path.join(PLANS_CONFIG_DIR, f"{state_info['plan_id']}.txt")
+            with open(filepath, 'a', encoding='utf-8') as f:
+                for config in message.text.strip().split('\n'): f.write(config + '\n')
+            bot.send_message(chat_id, f"✅ کانفیگ‌های جدید اضافه شد.")
+            user_states.pop(chat_id, None)
+            show_plan_management_panel(chat_id)
+        elif state == "editing_card_number":
+            update_env_file("CARD_NUMBER", message.text)
+            bot.send_message(chat_id, "✅ شماره کارت ویرایش شد.")
+            user_states.pop(chat_id, None)
+        elif state == "editing_card_holder":
+            update_env_file("CARD_HOLDER", message.text)
+            bot.send_message(chat_id, "✅ نام صاحب حساب ویرایش شد.")
+            user_states.pop(chat_id, None)
 
-if __name__ == "__main__":
-    init_db()
-    logger.info("ربات در حال شروع به کار (Polling)...")
-    try:
-        bot.polling(none_stop=True, timeout=60)
+    except (ValueError, TypeError):
+        bot.send_message(chat_id, "خطا: ورودی نامعتبر است. لطفاً دوباره تلاش کنید.")
     except Exception as e:
-        logger.error(f"خطای مرگبار در حلقه اصلی ربات: {e}")
+        logger.error(f"خطا در پردازش وضعیت ادمین: {e}")
+        bot.send_message(chat_id, "یک خطای پیش‌بینی نشده رخ داد. لطفاً لاگ‌ها را بررسی کنید.")
+        user_s
