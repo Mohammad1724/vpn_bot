@@ -11,6 +11,7 @@ from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMar
 from dotenv import load_dotenv
 import uuid
 
+# (کدهای اولیه تا handle_callbacks بدون تغییر)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 dotenv_path = '.env'
@@ -117,7 +118,7 @@ def send_welcome(message):
         balance = get_user_balance(user.id)
         bot.send_message(user.id, f"سلام {user.first_name} عزیز!\n💰 موجودی: **{balance:,} تومان**", parse_mode="Markdown", reply_markup=get_user_keyboard())
 
-@bot.message_handler(func=lambda m: m.from_user.id != ADMIN_ID)
+@bot.message_handler(func=lambda m: m.from_user.id != ADMIN_ID and not user_states.get(m.chat.id))
 def handle_user_panel(message):
     if message.text == "🛍 خرید سرویس": show_plans_to_user(message.from_user.id)
     elif message.text == "💰 کیف پول":
@@ -209,14 +210,8 @@ def handle_callbacks(call):
     user_id = call.from_user.id
     data = call.data
     if user_id == ADMIN_ID:
-        try:
-            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
-        except telebot.apihelper.ApiTelegramException as e:
-            if 'message to edit not found' not in e.description:
-                logger.error(f"Telegram API error in admin callback: {e}")
-        except Exception as e:
-            logger.error(f"Unexpected error in admin callback: {e}")
-
+        try: bot.delete_message(call.message.chat.id, call.message.message_id)
+        except: pass
         if data == "add_plan":
             user_states[user_id] = {"state": "adding_plan_name"}
             bot.send_message(user_id, "🔹 ۱/۴: نام پلن:")
@@ -257,11 +252,11 @@ def handle_callbacks(call):
                 if amount_to_add <= 0: raise ValueError("مبلغ نامعتبر")
                 update_user_balance(target_user_id, amount_to_add, top_up=True)
                 new_balance = get_user_balance(target_user_id)
+                bot.edit_message_text(f"✅ مبلغ {amount_to_add:,} تومان به کاربر {target_user_id} اضافه شد.", call.message.chat.id, call.message.message_id)
                 bot.send_message(target_user_id, f"✅ کیف پول شما {amount_to_add:,} تومان شارژ شد.\nموجودی جدید: {new_balance:,} تومان")
-                bot.send_message(ADMIN_ID, f"✅ مبلغ {amount_to_add:,} تومان به کاربر {target_user_id} اضافه شد.")
             except Exception as e:
                 logger.error(f"خطا در تایید شارژ: {e}")
-                bot.send_message(ADMIN_ID, "خطا در پردازش اطلاعات.")
+                bot.edit_message_text("خطا در پردازش اطلاعات.", call.message.chat.id, call.message.message_id)
         elif data == "edit_card_number":
             user_states[user_id] = {"state": "editing_card_number"}
             bot.send_message(user_id, "لطفاً شماره کارت جدید را وارد کنید:")
@@ -269,6 +264,8 @@ def handle_callbacks(call):
             user_states[user_id] = {"state": "editing_card_holder"}
             bot.send_message(user_id, "لطفاً نام جدید صاحب حساب را وارد کنید (به فارسی):")
         return
+
+    # Callbacks کاربر
     if data.startswith("buy_"):
         plan_id = data.split('_')[1]
         conn, c = db_connect()
@@ -285,18 +282,29 @@ def handle_callbacks(call):
                 bot.send_message(user_id, f"✅ خرید **{plan['name']}** انجام شد.\nکانفیگ:\n`{config}`", parse_mode="Markdown")
             else: bot.answer_callback_query(call.id, "موجودی کانفیگ تمام شده.", show_alert=True)
         else: bot.answer_callback_query(call.id, "موجودی کافی نیست.", show_alert=True)
+    
+    # *** اصلاحیه کلیدی باگ اینجاست ***
     elif data == 'charge_wallet':
-        msg = bot.send_message(user_id, "مبلغ شارژ را به تومان وارد کنید:")
-        bot.register_next_step_handler(msg, process_charge_amount)
+        bot.answer_callback_query(call.id)
+        # به جای ثبت next_step_handler، وضعیت کاربر را تنظیم می‌کنیم
+        user_states[user_id] = {"state": "awaiting_charge_amount"}
+        bot.send_message(user_id, "لطفاً مبلغ مورد نظر برای شارژ کیف پول را به تومان وارد کنید (فقط عدد):")
 
-def process_charge_amount(message):
+# *** تابع جدید برای پردازش مبلغ شارژ کاربر ***
+@bot.message_handler(func=lambda m: m.from_user.id != ADMIN_ID and user_states.get(m.chat.id, {}).get('state') == 'awaiting_charge_amount')
+def handle_user_charge_amount(message):
+    user_id = message.from_user.id
     try:
         amount = int(message.text)
         if amount <= 0: raise ValueError()
-        user_states[message.from_user.id] = {"state": "awaiting_charge_receipt", "amount": amount}
+        # وضعیت کاربر را برای انتظار رسید آپدیت می‌کنیم
+        user_states[user_id] = {"state": "awaiting_charge_receipt", "amount": amount}
         payment_info = (f"برای شارژ **{amount:,} تومان**، وجه را به کارت زیر واریز و رسید را ارسال کنید:\n\n💳 `{os.getenv('CARD_NUMBER')}`\n👤 **{os.getenv('CARD_HOLDER')}**")
-        bot.send_message(message.chat.id, payment_info, parse_mode="Markdown")
-    except ValueError: bot.send_message(message.chat.id, "لطفاً عدد صحیح و مثبت وارد کنید.")
+        bot.send_message(user_id, payment_info, parse_mode="Markdown")
+    except ValueError:
+        bot.send_message(user_id, "لطفاً یک عدد صحیح و مثبت وارد کنید. دوباره تلاش کنید.")
+        # وضعیت را برای تلاش مجدد حفظ می‌کنیم
+        user_states[user_id] = {"state": "awaiting_charge_amount"}
 
 @bot.message_handler(func=lambda m: m.from_user.id == ADMIN_ID and user_states.get(m.chat.id))
 def handle_admin_state_messages(message):
