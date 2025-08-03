@@ -223,11 +223,9 @@ def handle_receipt(message):
     bot.reply_to(message, "✅ رسید شما ارسال شد. لطفاً منتظر بمانید.")
 
 # --- مدیریت پنل ادمین (معماری جدید و پایدار) ---
-@bot.message_handler(content_types=['text'], func=lambda m: m.from_user.id == ADMIN_ID and m.text in MAIN_MENU_COMMANDS)
+@bot.message_handler(content_types=['text'], func=lambda m: m.from_user.id == ADMIN_ID and not user_states.get(m.chat.id))
 def handle_admin_panel(message):
     chat_id = message.chat.id
-    user_states.pop(chat_id, None) # لغو خودکار عملیات قبلی
-    
     if message.text == "➕ مدیریت پلن‌ها": show_plan_management_panel(chat_id)
     elif message.text == "⚙️ تنظیمات پرداخت": show_payment_settings_panel(chat_id)
     elif message.text == "🔄 ریستارت ربات":
@@ -262,7 +260,7 @@ def handle_callbacks(call):
         except: pass
         if data == "add_plan":
             user_states[user_id] = {"data": {}, "history": ["adding_plan_name"]}
-            bot.send_message(user_id, PROMPTS["adding_plan_name"], reply_markup=get_back_keyboard())
+            bot.send_message(user_id, f"{PROMPTS['adding_plan_name']}\n(برای لغو /cancel را ارسال کنید)", reply_markup=get_back_keyboard())
         elif data.startswith("edit_plan_"):
             plan_id = data.split('_')[2]
             markup = InlineKeyboardMarkup(row_width=2)
