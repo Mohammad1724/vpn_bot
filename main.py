@@ -8,7 +8,7 @@ import shutil
 import zipfile
 import telebot
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
-from dotenv import load_dotenv
+from dotenv import load_dotenv, set_key
 import uuid
 
 # --- تنظیمات اولیه ---
@@ -93,7 +93,6 @@ def create_service(user_id, plan_id, config):
     conn.close()
     
 def update_env_file(key, value):
-    from dotenv import set_key
     set_key(dotenv_path, key, value, encoding='utf-8')
     os.environ[key] = value
 
@@ -118,7 +117,6 @@ def send_welcome(message):
         balance = get_user_balance(user.id)
         bot.send_message(user.id, f"سلام {user.first_name} عزیز!\n💰 موجودی: **{balance:,} تومان**", parse_mode="Markdown", reply_markup=get_user_keyboard())
 
-# *** اصلاحیه: این تابع فقط برای کاربران عادی است ***
 @bot.message_handler(func=lambda m: m.from_user.id != ADMIN_ID and not user_states.get(m.chat.id))
 def handle_user_panel(message):
     if message.text == "🛍 خرید سرویس": show_plans_to_user(message.from_user.id)
@@ -286,7 +284,6 @@ def handle_callbacks(call):
         user_states[user_id] = {"state": "awaiting_charge_amount"}
         bot.send_message(user_id, "لطفاً مبلغ مورد نظر برای شارژ کیف پول را به تومان وارد کنید (فقط عدد):")
 
-# *** تابع جدید برای پردازش مبلغ شارژ کاربر ***
 @bot.message_handler(func=lambda m: m.from_user.id != ADMIN_ID and user_states.get(m.chat.id, {}).get('state') == 'awaiting_charge_amount')
 def handle_user_charge_amount(message):
     user_id = message.from_user.id
@@ -300,7 +297,6 @@ def handle_user_charge_amount(message):
         bot.send_message(user_id, "لطفاً یک عدد صحیح و مثبت وارد کنید. دوباره تلاش کنید.")
         user_states[user_id] = {"state": "awaiting_charge_amount"}
 
-# *** اصلاحیه: این تابع فقط برای پیام‌های متنی ادمین در وضعیت خاص است ***
 @bot.message_handler(content_types=['text'], func=lambda m: m.from_user.id == ADMIN_ID and user_states.get(m.chat.id))
 def handle_admin_state_messages(message):
     chat_id = message.chat.id
@@ -368,5 +364,11 @@ def handle_admin_state_messages(message):
             bot.send_message(chat_id, "✅ شماره کارت ویرایش شد.")
             user_states.pop(chat_id, None)
         elif state == "editing_card_holder":
+            # *** اصلاحیه نهایی باگ ***
             update_env_file("CARD_HOLDER", message.text)
-            bot.send_message(chat_id, "✅ نام صاحب حساب ویرای
+            bot.send_message(chat_id, "✅ نام صاحب حساب ویرایش شد.")
+            user_states.pop(chat_id, None)
+
+    except (ValueError, TypeError): bot.send_message(chat_id, "خطا: ورودی نامعتبر است.")
+    except Exception as e:
+        logger
