@@ -137,7 +137,6 @@ def send_welcome(message):
 def handle_user_panel(message):
     user_id = message.from_user.id
     text = message.text
-
     if text == "🛍 خرید سرویس":
         show_plans_to_user(user_id)
     elif text == "💰 کیف پول":
@@ -191,12 +190,10 @@ def handle_receipt(message):
     bot.reply_to(message, "✅ رسید شما برای ادمین ارسال شد. پس از تایید، کیف پول شما شارژ خواهد شد.")
 
 # --- مدیریت پنل ادمین ---
-@bot.message_handler(func=lambda m: m.from_user.id == ADMIN_ID)
+@bot.message_handler(func=lambda m: m.from_user.id == ADMIN_ID and not user_states.get(m.chat.id))
 def handle_admin_panel(message):
     text = message.text
     chat_id = message.chat.id
-    user_states.pop(chat_id, None)
-
     if text == "➕ مدیریت پلن‌ها":
         show_plan_management_panel(chat_id)
     elif text == "🔄 ریستارت ربات":
@@ -246,9 +243,7 @@ def backup_data(chat_id):
             shutil.rmtree(temp_backup_dir)
 
 def restore_data(message):
-    # (پیاده‌سازی این تابع به عنوان تمرین یا در آپدیت بعدی)
     bot.reply_to(message, "قابلیت ریستور در حال توسعه است.")
-
 
 # --- مدیریت Callback ها ---
 @bot.callback_query_handler(func=lambda call: True)
