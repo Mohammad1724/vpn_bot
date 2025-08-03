@@ -10,7 +10,11 @@ import telebot
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 import uuid
 
-# --- بلوک خواندن دستی فایل .env (راه حل نهایی) ---
+# --- تنظیمات اولیه لاگ‌گیری (باید در ابتدا باشد) ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# --- بلوک خواندن دستی فایل .env ---
 def load_env_manual(path='.env'):
     try:
         with open(path, 'r', encoding='utf-8') as f:
@@ -19,9 +23,8 @@ def load_env_manual(path='.env'):
                 if line and not line.startswith('#'):
                     key, value = line.split('=', 1)
                     key = key.strip()
-                    value = value.strip().strip('"\'') # حذف کوتیشن‌ها
+                    value = value.strip().strip('"\'')
                     os.environ[key] = value
-                    logger.info(f"متغیر محیطی لود شد: {key}")
     except Exception as e:
         logger.error(f"خطا در خواندن دستی فایل .env: {e}")
         exit(f"خطا در خواندن دستی فایل .env: {e}")
@@ -30,10 +33,7 @@ load_env_manual()
 # --- پایان بلوک خواندن دستی ---
 
 
-# --- تنظیمات اولیه ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-
+# --- خواندن و بررسی متغیرهای محیطی ---
 try:
     TOKEN = os.getenv("TOKEN")
     ADMIN_ID_STR = os.getenv("ADMIN_ID")
@@ -59,7 +59,6 @@ bot = telebot.TeleBot(TOKEN)
 user_states = {}
 
 # --- (بقیه کد شما از اینجا به بعد بدون هیچ تغییری کپی می‌شود) ---
-# (برای جلوگیری از تکرار، من بقیه کد را اینجا قرار نمی‌دهم، اما شما باید کد کامل قبلی را از این نقطه به بعد کپی کنید)
 def db_connect():
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -384,4 +383,6 @@ def handle_admin_state_messages(message):
         except ValueError: bot.send_message(chat_id, "خطا: زمان باید عدد باشد.")
     elif state == "editing_add_configs":
         filepath = os.path.join(PLANS_CONFIG_DIR, f"{state_info['plan_id']}.txt")
-        wi
+        with open(filepath, 'a', encoding='utf-8') as f:
+            for config in message.text.strip().split('\n'): f.write(config + '\n')
+        bo
