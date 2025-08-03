@@ -8,48 +8,22 @@ import shutil
 import zipfile
 import telebot
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from dotenv import load_dotenv, set_key
 import uuid
 
-# --- تنظیمات اولیه لاگ‌گیری (باید در ابتدا باشد) ---
+# --- تنظیمات اولیه ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+dotenv_path = '.env'
+load_dotenv(dotenv_path, encoding='utf-8')
 
-# --- بلوک خواندن دستی فایل .env ---
-def load_env_manual(path='.env'):
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#'):
-                    key, value = line.split('=', 1)
-                    key = key.strip()
-                    value = value.strip().strip('"\'')
-                    os.environ[key] = value
-    except Exception as e:
-        logger.error(f"خطا در خواندن دستی فایل .env: {e}")
-        exit(f"خطا در خواندن دستی فایل .env: {e}")
-
-load_env_manual()
-# --- پایان بلوک خواندن دستی ---
-
-
-# --- خواندن و بررسی متغیرهای محیطی ---
 try:
     TOKEN = os.getenv("TOKEN")
-    ADMIN_ID_STR = os.getenv("ADMIN_ID")
-    CARD_NUMBER = os.getenv("CARD_NUMBER")
-    CARD_HOLDER = os.getenv("CARD_HOLDER")
-
-    if not all([TOKEN, ADMIN_ID_STR, CARD_NUMBER, CARD_HOLDER]):
-        missing = [v for v, k in {"TOKEN": TOKEN, "ADMIN_ID": ADMIN_ID_STR, "CARD_NUMBER": CARD_NUMBER, "CARD_HOLDER": CARD_HOLDER}.items() if not k]
-        raise ValueError(f"متغیرهای زیر در فایل .env خالی هستند: {', '.join(missing)}")
-    
-    ADMIN_ID = int(ADMIN_ID_STR)
-
-except (ValueError, TypeError) as e:
-    logger.error(f"خطا در متغیرهای محیطی: {e}")
-    exit(f"خطا در متغیرهای محیطی: {e}")
-
+    ADMIN_ID = int(os.getenv("ADMIN_ID"))
+    # متغیرهای پرداخت بعداً لود می‌شوند
+except (TypeError, ValueError) as e:
+    logger.error(f"خطا در خواندن TOKEN یا ADMIN_ID: {e}")
+    exit("خطا: TOKEN یا ADMIN_ID در فایل .env به درستی تنظیم نشده‌اند.")
 
 DB_FILE = "bot_database.db"
 PLANS_CONFIG_DIR = "plan_configs"
@@ -58,7 +32,7 @@ SERVICE_NAME = "vpn_bot.service"
 bot = telebot.TeleBot(TOKEN)
 user_states = {}
 
-# --- (بقیه کد شما از اینجا به بعد بدون هیچ تغییری کپی می‌شود) ---
+# (تمام توابع کمکی و دیتابیس بدون تغییر باقی می‌مانند)
 def db_connect():
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -91,10 +65,8 @@ def get_user_balance(user_id):
 def update_user_balance(user_id, amount, top_up=True):
     conn, c = db_connect()
     c.execute("INSERT OR IGNORE INTO users (user_id, wallet_balance) VALUES (?, 0)", (user_id,))
-    if top_up:
-        c.execute("UPDATE users SET wallet_balance = wallet_balance + ? WHERE user_id = ?", (amount, user_id))
-    else:
-        c.execute("UPDATE users SET wallet_balance = wallet_balance - ? WHERE user_id = ?", (amount, user_id))
+    if top_up: c.execute("UPDATE users SET wallet_balance = wallet_balance + ? WHERE user_id = ?", (amount, user_id))
+    else: c.execute("UPDATE users SET wallet_balance = wallet_balance - ? WHERE user_id = ?", (amount, user_id))
     conn.commit()
     conn.close()
 
@@ -116,12 +88,16 @@ def create_service(user_id, plan_id, config):
     c.execute("INSERT INTO services (user_id, plan_id, config, purchase_date, expiry_date) VALUES (?, ?, ?, ?, ?)", (user_id, plan_id, config, purchase_date, expiry_date))
     conn.commit()
     conn.close()
+    
+def update_env_file(key, value):
+    set_key(dotenv_path, key, value, encoding='utf-8')
+    os.environ[key] = value
 
+# --- کیبوردها ---
 def get_admin_keyboard():
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row(KeyboardButton("➕ مدیریت پلن‌ها"), KeyboardButton("📊 آمار"))
-    markup.row(KeyboardButton("📥 بکاپ"), KeyboardButton("📤 ریستور"))
-    markup.row(KeyboardButton("🔄 ریستارت ربات"))
+    markup.row(KeyboardButton("⚙️ تنظیمات پرداخت"), KeyboardButton("🔄 ریستارت ربات"))
     return markup
 
 def get_user_keyboard():
@@ -130,6 +106,7 @@ def get_user_keyboard():
     markup.row(KeyboardButton("💰 کیف پول"))
     return markup
 
+# --- (بقیه کد کامل از اینجا به بعد) ---
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     user = message.from_user
@@ -200,14 +177,12 @@ def handle_receipt(message):
 
 @bot.message_handler(func=lambda m: m.from_user.id == ADMIN_ID and not user_states.get(m.chat.id))
 def handle_admin_panel(message):
-    if message.text == "➕ مدیریت پلن‌ها": show_plan_management_panel(message.chat.id)
+    chat_id = message.chat.id
+    if message.text == "➕ مدیریت پلن‌ها": show_plan_management_panel(chat_id)
+    elif message.text == "⚙️ تنظیمات پرداخت": show_payment_settings_panel(chat_id)
     elif message.text == "🔄 ریستارت ربات":
-        bot.send_message(message.chat.id, "در حال ری‌استارت...")
+        bot.send_message(chat_id, "در حال ری‌استارت...")
         os.system(f"systemctl restart {SERVICE_NAME}")
-    elif message.text == "📥 بکاپ": backup_data(message.chat.id)
-    elif message.text == "📤 ریستور":
-        msg = bot.send_message(message.chat.id, "فایل بکاپ (.zip) را ارسال کنید.")
-        bot.register_next_step_handler(msg, restore_data)
 
 def show_plan_management_panel(chat_id):
     conn, c = db_connect()
@@ -220,24 +195,13 @@ def show_plan_management_panel(chat_id):
     markup.add(InlineKeyboardButton("➕ افزودن پلن جدید", callback_data="add_plan"))
     bot.send_message(chat_id, "⚙️ پنل مدیریت پلن‌ها:", reply_markup=markup)
 
-def backup_data(chat_id):
-    bot.send_message(chat_id, "در حال ایجاد بکاپ کامل...")
-    try:
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
-        backup_filename_base, temp_backup_dir = f'full_backup_{timestamp}', 'temp_backup_dir'
-        os.makedirs(temp_backup_dir, exist_ok=True)
-        shutil.copy(DB_FILE, temp_backup_dir)
-        if os.path.exists(PLANS_CONFIG_DIR): shutil.copytree(PLANS_CONFIG_DIR, os.path.join(temp_backup_dir, PLANS_CONFIG_DIR))
-        shutil.make_archive(backup_filename_base, 'zip', temp_backup_dir)
-        with open(f'{backup_filename_base}.zip', 'rb') as f: bot.send_document(chat_id, f, caption="✅ بکاپ ایجاد شد.")
-    except Exception as e:
-        logger.error(f"خطا در بکاپ: {e}")
-        bot.send_message(chat_id, f"❌ خطا: {e}")
-    finally:
-        if 'backup_filename_base' in locals() and os.path.exists(f'{backup_filename_base}.zip'): os.remove(f'{backup_filename_base}.zip')
-        if 'temp_backup_dir' in locals() and os.path.exists(temp_backup_dir): shutil.rmtree(temp_backup_dir)
-
-def restore_data(message): bot.reply_to(message, "در حال توسعه...")
+def show_payment_settings_panel(chat_id):
+    card_number = os.getenv("CARD_NUMBER")
+    card_holder = os.getenv("CARD_HOLDER")
+    text = f"**تنظیمات فعلی پرداخت:**\n\n💳 شماره کارت: `{card_number}`\n👤 نام صاحب حساب: **{card_holder}**"
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(InlineKeyboardButton("✏️ ویرایش شماره کارت", callback_data="edit_card_number"), InlineKeyboardButton("✏️ ویرایش نام صاحب حساب", callback_data="edit_card_holder"))
+    bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
@@ -291,6 +255,12 @@ def handle_callbacks(call):
             except Exception as e:
                 logger.error(f"خطا در تایید شارژ: {e}")
                 bot.edit_message_text("خطا در پردازش اطلاعات.", call.message.chat.id, call.message.message_id)
+        elif data == "edit_card_number":
+            user_states[user_id] = {"state": "editing_card_number"}
+            bot.send_message(user_id, "لطفاً شماره کارت جدید را وارد کنید:")
+        elif data == "edit_card_holder":
+            user_states[user_id] = {"state": "editing_card_holder"}
+            bot.send_message(user_id, "لطفاً نام جدید صاحب حساب را وارد کنید (به فارسی):")
         return
     if data.startswith("buy_"):
         plan_id = data.split('_')[1]
@@ -317,7 +287,7 @@ def process_charge_amount(message):
         amount = int(message.text)
         if amount <= 0: raise ValueError()
         user_states[message.from_user.id] = {"state": "awaiting_charge_receipt", "amount": amount}
-        payment_info = (f"برای شارژ **{amount:,} تومان**، وجه را به کارت زیر واریز و رسید را ارسال کنید:\n\n💳 `{CARD_NUMBER}`\n👤 **{CARD_HOLDER}**")
+        payment_info = (f"برای شارژ **{amount:,} تومان**، وجه را به کارت زیر واریز و رسید را ارسال کنید:\n\n💳 `{os.getenv('CARD_NUMBER')}`\n👤 **{os.getenv('CARD_HOLDER')}**")
         bot.send_message(message.chat.id, payment_info, parse_mode="Markdown")
     except ValueError: bot.send_message(message.chat.id, "لطفاً عدد صحیح و مثبت وارد کنید.")
 
@@ -385,4 +355,22 @@ def handle_admin_state_messages(message):
         filepath = os.path.join(PLANS_CONFIG_DIR, f"{state_info['plan_id']}.txt")
         with open(filepath, 'a', encoding='utf-8') as f:
             for config in message.text.strip().split('\n'): f.write(config + '\n')
-        bo
+        bot.send_message(chat_id, f"✅ کانفیگ‌های جدید اضافه شد.")
+        user_states.pop(chat_id, None)
+        show_plan_management_panel(chat_id)
+    elif state == "editing_card_number":
+        update_env_file("CARD_NUMBER", message.text)
+        bot.send_message(chat_id, "✅ شماره کارت با موفقیت ویرایش شد.")
+        user_states.pop(chat_id, None)
+    elif state == "editing_card_holder":
+        update_env_file("CARD_HOLDER", message.text)
+        bot.send_message(chat_id, "✅ نام صاحب حساب با موفقیت ویرایش شد.")
+        user_states.pop(chat_id, None)
+
+if __name__ == "__main__":
+    init_db()
+    logger.info("ربات در حال شروع به کار (Polling)...")
+    try:
+        bot.polling(none_stop=True, timeout=60)
+    except Exception as e:
+        logger.error(f"خطای مرگبار در حلقه اصلی ربات: {e}")
