@@ -1,4 +1,4 @@
-# main.py (نسخه نهایی، قطعی و پایدار با معماری دکمه‌محور)
+# main.py
 
 import os
 import sqlite3
@@ -34,6 +34,7 @@ DB_FILE = "bot_database.db"
 PLANS_CONFIG_DIR = "plan_configs"
 SERVICE_NAME = "vpn_bot.service"
 bot = telebot.TeleBot(TOKEN)
+user_states = {}
 
 # --- توابع دیتابیس و کمکی ---
 def db_connect():
@@ -142,9 +143,8 @@ def handle_receipt(message):
 # --- مدیریت پنل ادمین ---
 @bot.message_handler(func=lambda m: m.from_user.id == ADMIN_ID)
 def handle_admin_panel(message):
-    if message.reply_to_message:
-        if "رسید شارژ کیف پول" in message.reply_to_message.text:
-            process_admin_charge_confirmation(message)
+    if message.reply_to_message and "رسید شارژ کیف پول" in message.reply_to_message.text:
+        process_admin_charge_confirmation(message)
         return
         
     if message.text == "➕ افزودن پلن":
@@ -198,7 +198,7 @@ def process_new_plan_message(message):
         bot.send_message(ADMIN_ID, f"✅ پلن جدید '{name}' با موفقیت ساخته شد.", reply_markup=get_admin_keyboard())
     except Exception as e:
         logger.error(f"خطا در افزودن پلن: {e}")
-        bot.send_message(ADMIN_ID, f"❌ خطایی در پردازش پیام رخ داد:\n`{e}`\n\nلطفاً فرمت را بررسی و دوباره تلاش کنید.", parse_mode="Markdown")
+        bot.send_message(ADMIN_ID, f"❌ خطایی در پردازش پیام رخ داد:\n`{e}`\n\nلطفاً فرمت را بررسی و دوباره تلاش کنید.", parse_mode="Markdown", reply_markup=get_admin_keyboard())
 
 def show_plan_management_panel(chat_id):
     conn, c = db_connect()
@@ -209,20 +209,20 @@ def show_plan_management_panel(chat_id):
         bot.send_message(chat_id, "هیچ پلنی تعریف نشده است.")
         return
         
-    response = "📋 **لیست پلن‌های فعلی:**\n\n"
     for plan in plans:
         config_path = os.path.join(PLANS_CONFIG_DIR, f"{plan['plan_id']}.txt")
         try:
             with open(config_path, 'r') as f: available = len(f.readlines())
         except: available = 0
-        response += f"🔹 **{plan['name']}** - {plan['price']:,} تومان ({plan['duration_days']} روز)\n   - موجودی کانفیگ: {available}\n"
-        markup = InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            InlineKeyboardButton(f"➕ افزودن کانفیگ", callback_data=f"add_config_{plan['plan_id']}"),
-            InlineKeyboardButton(f"🗑 حذف", callback_data=f"delete_plan_{plan['plan_id']}")
-        )
+        
+        response = (f"🔹 **{plan['name']}** - {plan['price']:,} تومان ({plan['duration_days']} روز)\n"
+                    f"   - موجودی کانفیگ: {available}\n"
+                    f"   - ID: `{plan['plan_id']}`\n\n"
+                    "برای افزودن کانفیگ به این پلن، روی این پیام ریپلای کرده و کانفیگ‌ها را ارسال کنید.")
+        
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton(f"🗑 حذف این پلن", callback_data=f"delete_plan_{plan['plan_id']}"))
         bot.send_message(chat_id, response, parse_mode="Markdown", reply_markup=markup)
-        response = "" # ریست کردن برای پیام بعدی
 
 def process_admin_charge_confirmation(message):
     try:
@@ -267,6 +267,7 @@ def handle_callbacks(call):
     user_id = call.from_user.id
     data = call.data
     
+    # *** اصلاحیه نهایی باگ: جدا کردن کامل منطق ادمین و کاربر ***
     if user_id == ADMIN_ID:
         if data.startswith("delete_plan_"):
             plan_id_to_delete = data.split('_')[2]
@@ -279,38 +280,27 @@ def handle_callbacks(call):
             if os.path.exists(filepath): os.remove(filepath)
             bot.answer_callback_query(call.id, "پلن با موفقیت حذف شد.")
             bot.delete_message(call.message.chat.id, call.message.message_id)
-        
-        elif data.startswith("add_config_"):
-            plan_id = data.split('_')[2]
+    else: # منطق برای کاربران عادی
+        if data.startswith("buy_"):
+            plan_id = data.split('_')[1]
             conn, c = db_connect()
-            c.execute("SELECT name FROM plans WHERE plan_id = ?", (plan_id,))
-            plan_name = c.fetchone()['name']
+            c.execute("SELECT * FROM plans WHERE plan_id = ?", (plan_id,))
+            plan = c.fetchone()
             conn.close()
-            msg = bot.send_message(ADMIN_ID, f"لطفاً کانفیگ‌های جدید را برای پلن **{plan_name}** ارسال کنید (هر کدام در یک خط):", parse_mode="Markdown")
-            bot.register_next_step_handler(msg, process_add_configs_to_plan, plan_id)
-        return
-
-    # Callbacks کاربر
-    if data.startswith("buy_"):
-        plan_id = data.split('_')[1]
-        conn, c = db_connect()
-        c.execute("SELECT * FROM plans WHERE plan_id = ?", (plan_id,))
-        plan = c.fetchone()
-        conn.close()
-        balance = get_user_balance(user_id)
-        if balance >= plan['price']:
-            config = get_a_config_for_plan(plan_id)
-            if config:
-                update_user_balance(user_id, plan['price'], top_up=False)
-                create_service(user_id, plan_id, config)
-                bot.answer_callback_query(call.id, "خرید انجام شد.")
-                bot.send_message(user_id, f"✅ خرید **{plan['name']}** انجام شد.\nکانفیگ:\n`{config}`", parse_mode="Markdown")
-            else: bot.answer_callback_query(call.id, "موجودی کانفیگ تمام شده.", show_alert=True)
-        else: bot.answer_callback_query(call.id, "موجودی کافی نیست.", show_alert=True)
-    elif data == 'charge_wallet':
-        bot.answer_callback_query(call.id)
-        msg = bot.send_message(user_id, "لطفاً مبلغ شارژ را به تومان وارد کنید (فقط عدد):")
-        bot.register_next_step_handler(msg, process_charge_user_amount)
+            balance = get_user_balance(user_id)
+            if balance >= plan['price']:
+                config = get_a_config_for_plan(plan_id)
+                if config:
+                    update_user_balance(user_id, plan['price'], top_up=False)
+                    create_service(user_id, plan_id, config)
+                    bot.answer_callback_query(call.id, "خرید انجام شد.")
+                    bot.send_message(user_id, f"✅ خرید **{plan['name']}** انجام شد.\nکانفیگ:\n`{config}`", parse_mode="Markdown")
+                else: bot.answer_callback_query(call.id, "موجودی کانفیگ تمام شده.", show_alert=True)
+            else: bot.answer_callback_query(call.id, "موجودی کافی نیست.", show_alert=True)
+        elif data == 'charge_wallet':
+            bot.answer_callback_query(call.id)
+            msg = bot.send_message(user_id, "لطفاً مبلغ شارژ را به تومان وارد کنید (فقط عدد):")
+            bot.register_next_step_handler(msg, process_charge_user_amount)
 
 def process_charge_user_amount(message):
     try:
@@ -322,17 +312,6 @@ def process_charge_user_amount(message):
         msg = bot.send_message(message.chat.id, "لطفاً عدد صحیح و مثبت وارد کنید.")
         bot.register_next_step_handler(msg, process_charge_user_amount)
 
-def process_add_configs_to_plan(message, plan_id):
-    try:
-        new_configs = message.text.strip().split('\n')
-        filepath = os.path.join(PLANS_CONFIG_DIR, f"{plan_id}.txt")
-        with open(filepath, 'a', encoding='utf-8') as f:
-            for config in new_configs:
-                f.write(config + '\n')
-        bot.send_message(ADMIN_ID, f"✅ تعداد {len(new_configs)} کانفیگ جدید به پلن اضافه شد.", reply_markup=get_admin_keyboard())
-    except Exception as e:
-        logger.error(f"خطا در افزودن کانفیگ به پلن: {e}")
-        bot.send_message(ADMIN_ID, "خطایی در پردازش رخ داد.", reply_markup=get_admin_keyboard())
 
 if __name__ == "__main__":
     init_db()
