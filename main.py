@@ -50,7 +50,7 @@ PROMPTS = {
     "editing_card_holder": "نام جدید صاحب حساب را وارد کنید:"
 }
 
-# (توابع دیتابیس و کمکی بدون تغییر)
+# --- توابع دیتابیس و کمکی ---
 def db_connect():
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -64,7 +64,6 @@ def init_db():
     conn.commit()
     conn.close()
     os.makedirs(PLANS_CONFIG_DIR, exist_ok=True)
-    logger.info("پایگاه داده و پوشه‌ها با موفقیت مقداردهی اولیه شدند.")
 
 def add_or_update_user(user_id, first_name, username):
     conn, c = db_connect()
@@ -111,6 +110,7 @@ def update_env_file(key, value):
     set_key(dotenv_path, key, value, encoding='utf-8')
     os.environ[key] = value
 
+# --- کیبوردها ---
 def get_admin_keyboard():
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row(KeyboardButton("➕ مدیریت پلن‌ها"), KeyboardButton("📊 آمار"))
@@ -132,7 +132,7 @@ def get_back_keyboard():
 @bot.message_handler(commands=['start', 'cancel'])
 def handle_start_cancel(message):
     user_id = message.from_user.id
-    user_states.pop(user_id, None) # همیشه وضعیت را پاک می‌کند
+    user_states.pop(user_id, None)
     
     if user_id == ADMIN_ID:
         bot.send_message(user_id, "به منوی اصلی بازگشتید.", reply_markup=get_admin_keyboard())
@@ -153,7 +153,6 @@ def handle_user_messages(message):
     elif message.content_type in ['photo', 'document']:
         handle_receipt(message)
 
-# (توابع کاربران عادی بدون تغییر)
 def handle_user_panel(message):
     if message.text == "🛍 خرید سرویس": show_plans_to_user(message.from_user.id)
     elif message.text == "💰 کیف پول":
@@ -224,27 +223,29 @@ def handle_receipt(message):
     bot.reply_to(message, "✅ رسید شما ارسال شد. لطفاً منتظر بمانید.")
 
 # --- مدیریت پنل ادمین ---
-@bot.message_handler(func=lambda m: m.from_user.id == ADMIN_ID)
+@bot.message_handler(content_types=['text'], func=lambda m: m.from_user.id == ADMIN_ID)
 def handle_admin_messages(message):
     chat_id = message.chat.id
     text = message.text
     
-    # اگر پیام یک دستور اصلی یا بازگشت است، وضعیت قبلی را لغو کن
-    if text in MAIN_MENU_COMMANDS or text == "⬅️ بازگشت":
+    if text == "⬅️ بازگشت":
+        go_back(message)
+        return
+
+    if text in MAIN_MENU_COMMANDS:
         user_states.pop(chat_id, None)
         if text == "➕ مدیریت پلن‌ها": show_plan_management_panel(chat_id)
         elif text == "⚙️ تنظیمات پرداخت": show_payment_settings_panel(chat_id)
         elif text == "🔄 ریستارت ربات":
             bot.send_message(chat_id, "در حال ری‌استارت...")
             os.system(f"systemctl restart {SERVICE_NAME}")
-        elif text == "⬅️ بازگشت":
-            go_back(message)
-    # اگر پیام یک دستور اصلی نیست، بررسی کن آیا در وضعیت خاصی هستیم یا نه
+        elif text == "📊 آمار":
+            bot.send_message(chat_id, "آمار کلی در حال توسعه است.")
+    
     elif user_states.get(chat_id):
         handle_admin_state_messages(message)
-    # در غیر این صورت، پیام نامعتبر است
     else:
-        bot.send_message(chat_id, "دستور نامشخص است. لطفاً از دکمه‌ها استفاده کنید.", reply_markup=get_admin_keyboard())
+        bot.send_message(chat_id, "دستور نامشخص است.", reply_markup=get_admin_keyboard())
 
 def show_plan_management_panel(chat_id):
     conn, c = db_connect()
@@ -351,7 +352,6 @@ def handle_admin_state_messages(message):
     chat_id = message.chat.id
     state_info = user_states[chat_id]
     current_state = state_info["history"][-1]
-    
     try:
         if current_state == "adding_plan_name":
             state_info["data"]["name"] = message.text
@@ -388,40 +388,36 @@ def handle_admin_state_messages(message):
             c.execute("UPDATE plans SET name = ? WHERE plan_id = ?", (message.text, state_info['data']['plan_id']))
             conn.commit()
             conn.close()
-            bot.send_message(chat_id, "✅ نام ویرایش شد.", reply_markup=get_admin_keyboard())
             user_states.pop(chat_id, None)
-            show_plan_management_panel(chat_id)
+            bot.send_message(chat_id, "✅ نام ویرایش شد.", reply_markup=get_admin_keyboard())
         elif current_state == "editing_price":
             conn, c = db_connect()
             c.execute("UPDATE plans SET price = ? WHERE plan_id = ?", (int(message.text), state_info['data']['plan_id']))
             conn.commit()
             conn.close()
-            bot.send_message(chat_id, "✅ قیمت ویرایش شد.", reply_markup=get_admin_keyboard())
             user_states.pop(chat_id, None)
-            show_plan_management_panel(chat_id)
+            bot.send_message(chat_id, "✅ قیمت ویرایش شد.", reply_markup=get_admin_keyboard())
         elif current_state == "editing_duration":
             conn, c = db_connect()
             c.execute("UPDATE plans SET duration_days = ? WHERE plan_id = ?", (int(message.text), state_info['data']['plan_id']))
             conn.commit()
             conn.close()
-            bot.send_message(chat_id, "✅ زمان ویرایش شد.", reply_markup=get_admin_keyboard())
             user_states.pop(chat_id, None)
-            show_plan_management_panel(chat_id)
+            bot.send_message(chat_id, "✅ زمان ویرایش شد.", reply_markup=get_admin_keyboard())
         elif current_state == "editing_add_configs":
             filepath = os.path.join(PLANS_CONFIG_DIR, f"{state_info['data']['plan_id']}.txt")
             with open(filepath, 'a', encoding='utf-8') as f:
                 for config in message.text.strip().split('\n'): f.write(config + '\n')
-            bot.send_message(chat_id, f"✅ کانفیگ‌های جدید اضافه شد.", reply_markup=get_admin_keyboard())
             user_states.pop(chat_id, None)
-            show_plan_management_panel(chat_id)
+            bot.send_message(chat_id, f"✅ کانفیگ‌های جدید اضافه شد.", reply_markup=get_admin_keyboard())
         elif current_state == "editing_card_number":
             update_env_file("CARD_NUMBER", message.text)
-            bot.send_message(chat_id, "✅ شماره کارت ویرایش شد.", reply_markup=get_admin_keyboard())
             user_states.pop(chat_id, None)
+            bot.send_message(chat_id, "✅ شماره کارت ویرایش شد.", reply_markup=get_admin_keyboard())
         elif current_state == "editing_card_holder":
             update_env_file("CARD_HOLDER", message.text)
-            bot.send_message(chat_id, "✅ نام صاحب حساب ویرایش شد.", reply_markup=get_admin_keyboard())
             user_states.pop(chat_id, None)
+            bot.send_message(chat_id, "✅ نام صاحب حساب ویرایش شد.", reply_markup=get_admin_keyboard())
 
     except (ValueError, TypeError): bot.send_message(chat_id, "خطا: ورودی نامعتبر است. لطفاً دوباره تلاش کنید.", reply_markup=get_back_keyboard())
     except Exception as e:
@@ -438,11 +434,6 @@ def go_back(message):
     
     state_info["history"].pop()
     previous_state = state_info["history"][-1]
-    
-    # حذف داده مربوط به مرحله‌ای که از آن بازگشتیم
-    if previous_state == "adding_plan_name": state_info["data"].pop("name", None)
-    elif previous_state == "adding_plan_price": state_info["data"].pop("price", None)
-    elif previous_state == "adding_plan_duration": state_info["data"].pop("duration", None)
     
     bot.send_message(chat_id, f"به مرحله قبل بازگشتید.\n{PROMPTS[previous_state]}", reply_markup=get_back_keyboard())
     
