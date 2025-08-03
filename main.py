@@ -11,7 +11,6 @@ from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMar
 from dotenv import load_dotenv
 import uuid
 
-# --- تنظیمات اولیه ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 dotenv_path = '.env'
@@ -22,13 +21,10 @@ try:
     ADMIN_ID_STR = os.getenv("ADMIN_ID")
     CARD_NUMBER = os.getenv("CARD_NUMBER")
     CARD_HOLDER = os.getenv("CARD_HOLDER")
-
     if not all([TOKEN, ADMIN_ID_STR, CARD_NUMBER, CARD_HOLDER]):
         missing = [v for v, k in {"TOKEN": TOKEN, "ADMIN_ID": ADMIN_ID_STR, "CARD_NUMBER": CARD_NUMBER, "CARD_HOLDER": CARD_HOLDER}.items() if not k]
         raise ValueError(f"متغیرهای زیر در فایل .env خالی هستند: {', '.join(missing)}")
-    
     ADMIN_ID = int(ADMIN_ID_STR)
-
 except (ValueError, TypeError) as e:
     logger.error(f"خطا در متغیرهای محیطی: {e}")
     exit(f"خطا در متغیرهای محیطی: {e}")
@@ -36,11 +32,9 @@ except (ValueError, TypeError) as e:
 DB_FILE = "bot_database.db"
 PLANS_CONFIG_DIR = "plan_configs"
 SERVICE_NAME = "vpn_bot.service"
-
 bot = telebot.TeleBot(TOKEN)
 user_states = {}
 
-# (تمام توابع کمکی و دیتابیس بدون تغییر باقی می‌مانند)
 def db_connect():
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -98,7 +92,6 @@ def create_service(user_id, plan_id, config):
     conn.close()
     
 def update_env_file(key, value):
-    # این کتابخانه باید import شود
     from dotenv import set_key
     set_key(dotenv_path, key, value, encoding='utf-8')
     os.environ[key] = value
@@ -216,8 +209,14 @@ def handle_callbacks(call):
     user_id = call.from_user.id
     data = call.data
     if user_id == ADMIN_ID:
-        try: bot.delete_message(call.message.chat.id, call.message.message_id)
-        except: pass
+        try:
+            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+        except telebot.apihelper.ApiTelegramException as e:
+            if 'message to edit not found' not in e.description:
+                logger.error(f"Telegram API error in admin callback: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error in admin callback: {e}")
+
         if data == "add_plan":
             user_states[user_id] = {"state": "adding_plan_name"}
             bot.send_message(user_id, "🔹 ۱/۴: نام پلن:")
@@ -258,11 +257,11 @@ def handle_callbacks(call):
                 if amount_to_add <= 0: raise ValueError("مبلغ نامعتبر")
                 update_user_balance(target_user_id, amount_to_add, top_up=True)
                 new_balance = get_user_balance(target_user_id)
-                bot.edit_message_text(f"✅ مبلغ {amount_to_add:,} تومان به کاربر {target_user_id} اضافه شد.", call.message.chat.id, call.message.message_id)
                 bot.send_message(target_user_id, f"✅ کیف پول شما {amount_to_add:,} تومان شارژ شد.\nموجودی جدید: {new_balance:,} تومان")
+                bot.send_message(ADMIN_ID, f"✅ مبلغ {amount_to_add:,} تومان به کاربر {target_user_id} اضافه شد.")
             except Exception as e:
                 logger.error(f"خطا در تایید شارژ: {e}")
-                bot.edit_message_text("خطا در پردازش اطلاعات.", call.message.chat.id, call.message.message_id)
+                bot.send_message(ADMIN_ID, "خطا در پردازش اطلاعات.")
         elif data == "edit_card_number":
             user_states[user_id] = {"state": "editing_card_number"}
             bot.send_message(user_id, "لطفاً شماره کارت جدید را وارد کنید:")
@@ -304,7 +303,6 @@ def handle_admin_state_messages(message):
     chat_id = message.chat.id
     state_info = user_states[chat_id]
     state = state_info.get("state")
-    
     try:
         if state == "adding_plan_name":
             state_info["name"] = message.text
@@ -324,17 +322,13 @@ def handle_admin_state_messages(message):
             c.execute("INSERT INTO plans (plan_id, name, price, duration_days) VALUES (?, ?, ?, ?)", (plan_id, state_info['name'], state_info['price'], state_info['duration']))
             conn.commit()
             conn.close()
-            # *** اصلاحیه کلیدی باگ اینجاست ***
             configs = message.text.strip().split('\n')
             filepath = os.path.join(PLANS_CONFIG_DIR, f"{plan_id}.txt")
             with open(filepath, 'w', encoding='utf-8') as f:
-                for config_line in configs:
-                    f.write(config_line + '\n')
+                for config_line in configs: f.write(config_line + '\n')
             user_states.pop(chat_id, None)
             bot.send_message(chat_id, "✅ پلن جدید ساخته شد.")
             show_plan_management_panel(chat_id)
-
-        # حالات ویرایش
         elif state == "editing_name":
             conn, c = db_connect()
             c.execute("UPDATE plans SET name = ? WHERE plan_id = ?", (message.text, state_info['plan_id']))
@@ -374,10 +368,16 @@ def handle_admin_state_messages(message):
             update_env_file("CARD_HOLDER", message.text)
             bot.send_message(chat_id, "✅ نام صاحب حساب ویرایش شد.")
             user_states.pop(chat_id, None)
-
-    except (ValueError, TypeError):
-        bot.send_message(chat_id, "خطا: ورودی نامعتبر است. لطفاً دوباره تلاش کنید.")
+    except (ValueError, TypeError): bot.send_message(chat_id, "خطا: ورودی نامعتبر است.")
     except Exception as e:
         logger.error(f"خطا در پردازش وضعیت ادمین: {e}")
-        bot.send_message(chat_id, "یک خطای پیش‌بینی نشده رخ داد. لطفاً لاگ‌ها را بررسی کنید.")
-        user_s
+        bot.send_message(chat_id, "یک خطای پیش‌بینی نشده رخ داد.")
+        user_states.pop(chat_id, None)
+
+if __name__ == "__main__":
+    init_db()
+    logger.info("ربات در حال شروع به کار (Polling)...")
+    try:
+        bot.polling(none_stop=True, timeout=60)
+    except Exception as e:
+        logger.error(f"خطای مرگبار در حلقه اصلی ربات: {e}")
