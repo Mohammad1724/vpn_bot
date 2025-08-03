@@ -40,7 +40,6 @@ def db_connect():
 
 def init_db():
     conn, c = db_connect()
-    # (کد ساخت جداول بدون تغییر)
     c.execute('''
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY, first_name TEXT, username TEXT, wallet_balance INTEGER DEFAULT 0
@@ -185,7 +184,14 @@ def handle_receipt(message):
         bot.reply_to(message, "لطفاً ابتدا از طریق دکمه «کیف پول»، درخواست شارژ را ثبت کنید.")
         return
 
-    requested_amount = state_info.get("amount", "نامشخص")
+    try:
+        requested_amount = int(state_info.get("amount", 0))
+        if requested_amount <= 0: raise ValueError
+    except (ValueError, TypeError):
+        bot.reply_to(message, "خطایی در ثبت مبلغ درخواستی شما رخ داده. لطفاً دوباره تلاش کنید.")
+        user_states.pop(user_id, None)
+        return
+        
     user_states.pop(user_id, None)
 
     msg_to_admin = (f" رسید شارژ کیف پول از:\n"
@@ -215,7 +221,7 @@ def handle_admin_panel(message):
     elif text == "📥 بکاپ":
         backup_data(chat_id)
     elif text == "📤 ریستور":
-        msg = bot.send_message(chat_id, "فایل بکاپ (.zip) را ارسال کنید.")
+        msg = bot.send_message(chat_id, "فایل بکاپ (.zip) را ارسال کنید تا اطلاعات بازیابی شود.")
         bot.register_next_step_handler(msg, restore_data)
 
 def show_plan_management_panel(chat_id):
@@ -234,7 +240,7 @@ def show_plan_management_panel(chat_id):
     bot.send_message(chat_id, "⚙️ پنل مدیریت پلن‌ها:", reply_markup=markup)
 
 def backup_data(chat_id):
-    # (کد بکاپ بدون تغییر)
+    # (پیاده‌سازی این تابع در صورت نیاز)
     pass
 def restore_data(message):
     bot.reply_to(message, "قابلیت ریستور در حال توسعه است.")
@@ -256,7 +262,6 @@ def handle_callbacks(call):
         
         elif data.startswith("edit_plan_"):
             plan_id = data.split('_')[2]
-            user_states[user_id] = {"state": "editing_plan_start", "plan_id": plan_id}
             markup = InlineKeyboardMarkup(row_width=2)
             markup.add(InlineKeyboardButton("✏️ نام", callback_data=f"edit_name_{plan_id}"), InlineKeyboardButton("💰 قیمت", callback_data=f"edit_price_{plan_id}"))
             markup.add(InlineKeyboardButton("⏳ زمان", callback_data=f"edit_duration_{plan_id}"), InlineKeyboardButton("➕ افزودن کانفیگ", callback_data=f"edit_add_configs_{plan_id}"))
@@ -291,12 +296,21 @@ def handle_callbacks(call):
             show_plan_management_panel(user_id)
         
         elif data.startswith("approve_charge_"):
-            parts = data.split('_')
-            target_user_id, amount_to_add = int(parts[2]), int(parts[3])
-            update_user_balance(target_user_id, amount_to_add, top_up=True)
-            new_balance = get_user_balance(target_user_id)
-            bot.edit_message_text(f"✅ مبلغ {amount_to_add:,} تومان به کیف پول کاربر {target_user_id} اضافه شد.", call.message.chat.id, call.message.message_id)
-            bot.send_message(target_user_id, f"✅ کیف پول شما توسط ادمین به مبلغ {amount_to_add:,} تومان شارژ شد.\nموجودی جدید: {new_balance:,} تومان")
+            try:
+                bot.answer_callback_query(call.id, "در حال پردازش...")
+                parts = data.split('_')
+                target_user_id, amount_to_add = int(parts[2]), int(parts[3])
+                if amount_to_add <= 0: raise ValueError("مبلغ نامعتبر")
+
+                update_user_balance(target_user_id, amount_to_add, top_up=True)
+                new_balance = get_user_balance(target_user_id)
+                
+                bot.edit_message_text(f"✅ مبلغ {amount_to_add:,} تومان به کیف پول کاربر {target_user_id} اضافه شد.", call.message.chat.id, call.message.message_id)
+                bot.send_message(target_user_id, f"✅ کیف پول شما توسط ادمین به مبلغ {amount_to_add:,} تومان شارژ شد.\nموجودی جدید: {new_balance:,} تومان")
+                logger.info(f"ادمین کیف پول کاربر {target_user_id} را به مبلغ {amount_to_add} شارژ کرد.")
+            except (IndexError, ValueError) as e:
+                logger.error(f"خطا در پردازش callback تایید شارژ: {e} | Data: {data}")
+                bot.edit_message_text("خطا در پردازش اطلاعات. لطفاً مطمئن شوید مبلغ صحیح است.", call.message.chat.id, call.message.message_id)
         
         return
 
@@ -353,15 +367,13 @@ def handle_admin_state_messages(message):
             state_info["price"] = int(message.text)
             state_info["state"] = "adding_plan_duration"
             bot.send_message(chat_id, "🔹 مرحله ۳/۴: مدت زمان پلن (روز):")
-        except ValueError:
-            bot.send_message(chat_id, "خطا: لطفاً قیمت را به صورت عدد وارد کنید.")
+        except ValueError: bot.send_message(chat_id, "خطا: لطفاً قیمت را به صورت عدد وارد کنید.")
     elif state == "adding_plan_duration":
         try:
             state_info["duration"] = int(message.text)
             state_info["state"] = "adding_plan_configs"
             bot.send_message(chat_id, "🔹 مرحله ۴/۴: کانفیگ‌های این پلن (هر کدام در یک خط):")
-        except ValueError:
-            bot.send_message(chat_id, "خطا: لطفاً مدت زمان را به صورت عدد وارد کنید.")
+        except ValueError: bot.send_message(chat_id, "خطا: لطفاً مدت زمان را به صورت عدد وارد کنید.")
     elif state == "adding_plan_configs":
         plan_id = str(uuid.uuid4())
         conn, c = db_connect()
@@ -375,8 +387,8 @@ def handle_admin_state_messages(message):
         user_states.pop(chat_id, None)
         bot.send_message(chat_id, "✅ پلن جدید با موفقیت ساخته شد.")
         show_plan_management_panel(chat_id)
-
-    # --- حالات ویرایش ---
+    
+    # حالات ویرایش
     elif state == "editing_name":
         conn, c = db_connect()
         c.execute("UPDATE plans SET name = ? WHERE plan_id = ?", (message.text, state_info['plan_id']))
@@ -413,7 +425,6 @@ def handle_admin_state_messages(message):
         bot.send_message(chat_id, f"✅ {len(configs)} کانفیگ جدید به پلن اضافه شد.")
         user_states.pop(chat_id, None)
         show_plan_management_panel(chat_id)
-
 
 # --- شروع به کار ربات ---
 if __name__ == "__main__":
