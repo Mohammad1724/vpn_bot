@@ -1,4 +1,4 @@
-# main.py (نسخه نهایی، قطعی و پایدار با معماری ساده‌شده)
+# main.py (نسخه نهایی، قطعی و پایدار با معماری دکمه‌محور)
 
 import os
 import sqlite3
@@ -94,7 +94,7 @@ def create_service(user_id, plan_id, config):
 # --- کیبوردها ---
 def get_admin_keyboard():
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row(KeyboardButton("➕ افزودن پلن"), KeyboardButton("📋 لیست/مدیریت پلن‌ها"))
+    markup.row(KeyboardButton("➕ افزودن پلن"), KeyboardButton("📋 مدیریت پلن‌ها"))
     markup.row(KeyboardButton("📊 آمار"), KeyboardButton("🔄 ریستارت ربات"))
     return markup
 
@@ -145,8 +145,6 @@ def handle_admin_panel(message):
     if message.reply_to_message:
         if "رسید شارژ کیف پول" in message.reply_to_message.text:
             process_admin_charge_confirmation(message)
-        elif "برای افزودن کانفیگ به این پلن" in message.reply_to_message.text:
-            process_add_configs_to_plan(message)
         return
         
     if message.text == "➕ افزودن پلن":
@@ -162,7 +160,7 @@ def handle_admin_panel(message):
             "کانفیگ ۲\n"
         )
         bot.send_message(ADMIN_ID, prompt, parse_mode="Markdown")
-    elif message.text == "📋 لیست/مدیریت پلن‌ها":
+    elif message.text == "📋 مدیریت پلن‌ها":
         show_plan_management_panel(ADMIN_ID)
     elif message.text == "🔄 ریستارت ربات":
         bot.send_message(ADMIN_ID, "در حال ری‌استارت...")
@@ -176,7 +174,6 @@ def handle_admin_panel(message):
 
 def process_new_plan_message(message):
     try:
-        # حذف /addplan از ابتدای پیام
         content = message.text.replace("/addplan", "").strip()
         parts = content.split('---')
         if len(parts) != 2: raise ValueError("فرمت پیام صحیح نیست (باید از '---' استفاده شود).")
@@ -201,7 +198,7 @@ def process_new_plan_message(message):
         bot.send_message(ADMIN_ID, f"✅ پلن جدید '{name}' با موفقیت ساخته شد.", reply_markup=get_admin_keyboard())
     except Exception as e:
         logger.error(f"خطا در افزودن پلن: {e}")
-        bot.send_message(ADMIN_ID, f"❌ خطایی در پردازش پیام رخ داد:\n`{e}`", parse_mode="Markdown", reply_markup=get_admin_keyboard())
+        bot.send_message(ADMIN_ID, f"❌ خطایی در پردازش پیام رخ داد:\n`{e}`\n\nلطفاً فرمت را بررسی و دوباره تلاش کنید.", parse_mode="Markdown")
 
 def show_plan_management_panel(chat_id):
     conn, c = db_connect()
@@ -212,36 +209,20 @@ def show_plan_management_panel(chat_id):
         bot.send_message(chat_id, "هیچ پلنی تعریف نشده است.")
         return
         
+    response = "📋 **لیست پلن‌های فعلی:**\n\n"
     for plan in plans:
         config_path = os.path.join(PLANS_CONFIG_DIR, f"{plan['plan_id']}.txt")
         try:
             with open(config_path, 'r') as f: available = len(f.readlines())
         except: available = 0
-        
-        response = (f"🔹 **{plan['name']}** - {plan['price']:,} تومان ({plan['duration_days']} روز)\n"
-                    f"   - موجودی کانفیگ: {available}\n"
-                    f"   - ID: `{plan['plan_id']}`\n\n"
-                    "برای افزودن کانفیگ به این پلن، روی این پیام ریپلای کرده و کانفیگ‌ها را ارسال کنید.")
-        
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton(f"🗑 حذف این پلن", callback_data=f"delete_plan_{plan['plan_id']}"))
+        response += f"🔹 **{plan['name']}** - {plan['price']:,} تومان ({plan['duration_days']} روز)\n   - موجودی کانفیگ: {available}\n"
+        markup = InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            InlineKeyboardButton(f"➕ افزودن کانفیگ", callback_data=f"add_config_{plan['plan_id']}"),
+            InlineKeyboardButton(f"🗑 حذف", callback_data=f"delete_plan_{plan['plan_id']}")
+        )
         bot.send_message(chat_id, response, parse_mode="Markdown", reply_markup=markup)
-
-def process_add_configs_to_plan(message):
-    try:
-        plan_id_line = [line for line in message.reply_to_message.text.split('\n') if 'ID:' in line]
-        plan_id = plan_id_line[0].split('`')[1]
-
-        new_configs = message.text.strip().split('\n')
-        filepath = os.path.join(PLANS_CONFIG_DIR, f"{plan_id}.txt")
-        with open(filepath, 'a', encoding='utf-8') as f:
-            for config in new_configs: f.write(config + '\n')
-        
-        bot.reply_to(message, f"✅ تعداد {len(new_configs)} کانفیگ جدید به پلن اضافه شد.")
-    except Exception as e:
-        logger.error(f"خطا در افزودن کانفیگ به پلن: {e}")
-        bot.reply_to(message, "خطا در پردازش. لطفاً روی پیام صحیح ریپلای کنید.")
-
+        response = "" # ریست کردن برای پیام بعدی
 
 def process_admin_charge_confirmation(message):
     try:
@@ -298,6 +279,15 @@ def handle_callbacks(call):
             if os.path.exists(filepath): os.remove(filepath)
             bot.answer_callback_query(call.id, "پلن با موفقیت حذف شد.")
             bot.delete_message(call.message.chat.id, call.message.message_id)
+        
+        elif data.startswith("add_config_"):
+            plan_id = data.split('_')[2]
+            conn, c = db_connect()
+            c.execute("SELECT name FROM plans WHERE plan_id = ?", (plan_id,))
+            plan_name = c.fetchone()['name']
+            conn.close()
+            msg = bot.send_message(ADMIN_ID, f"لطفاً کانفیگ‌های جدید را برای پلن **{plan_name}** ارسال کنید (هر کدام در یک خط):", parse_mode="Markdown")
+            bot.register_next_step_handler(msg, process_add_configs_to_plan, plan_id)
         return
 
     # Callbacks کاربر
@@ -331,6 +321,18 @@ def process_charge_user_amount(message):
     except ValueError: 
         msg = bot.send_message(message.chat.id, "لطفاً عدد صحیح و مثبت وارد کنید.")
         bot.register_next_step_handler(msg, process_charge_user_amount)
+
+def process_add_configs_to_plan(message, plan_id):
+    try:
+        new_configs = message.text.strip().split('\n')
+        filepath = os.path.join(PLANS_CONFIG_DIR, f"{plan_id}.txt")
+        with open(filepath, 'a', encoding='utf-8') as f:
+            for config in new_configs:
+                f.write(config + '\n')
+        bot.send_message(ADMIN_ID, f"✅ تعداد {len(new_configs)} کانفیگ جدید به پلن اضافه شد.", reply_markup=get_admin_keyboard())
+    except Exception as e:
+        logger.error(f"خطا در افزودن کانفیگ به پلن: {e}")
+        bot.send_message(ADMIN_ID, "خطایی در پردازش رخ داد.", reply_markup=get_admin_keyboard())
 
 if __name__ == "__main__":
     init_db()
