@@ -8,32 +8,48 @@ import shutil
 import zipfile
 import telebot
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
-from dotenv import load_dotenv
 import uuid
+
+# --- بلوک خواندن دستی فایل .env (راه حل نهایی) ---
+def load_env_manual(path='.env'):
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    key, value = line.split('=', 1)
+                    key = key.strip()
+                    value = value.strip().strip('"\'') # حذف کوتیشن‌ها
+                    os.environ[key] = value
+                    logger.info(f"متغیر محیطی لود شد: {key}")
+    except Exception as e:
+        logger.error(f"خطا در خواندن دستی فایل .env: {e}")
+        exit(f"خطا در خواندن دستی فایل .env: {e}")
+
+load_env_manual()
+# --- پایان بلوک خواندن دستی ---
+
 
 # --- تنظیمات اولیه ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-dotenv_path = '.env'
-load_dotenv(dotenv_path, encoding='utf-8')
-
-TOKEN = os.getenv("TOKEN")
-ADMIN_ID_STR = os.getenv("ADMIN_ID")
-CARD_NUMBER = os.getenv("CARD_NUMBER")
-CARD_HOLDER = os.getenv("CARD_HOLDER")
-
-if not all([TOKEN, ADMIN_ID_STR, CARD_NUMBER, CARD_HOLDER]):
-    missing = [v for v, k in {"TOKEN": TOKEN, "ADMIN_ID": ADMIN_ID_STR, "CARD_NUMBER": CARD_NUMBER, "CARD_HOLDER": CARD_HOLDER}.items() if not k]
-    error_msg = f"خطا: متغیرهای زیر در فایل .env خالی یا تعریف نشده‌اند: {', '.join(missing)}"
-    logger.error(error_msg)
-    exit(error_msg)
 
 try:
+    TOKEN = os.getenv("TOKEN")
+    ADMIN_ID_STR = os.getenv("ADMIN_ID")
+    CARD_NUMBER = os.getenv("CARD_NUMBER")
+    CARD_HOLDER = os.getenv("CARD_HOLDER")
+
+    if not all([TOKEN, ADMIN_ID_STR, CARD_NUMBER, CARD_HOLDER]):
+        missing = [v for v, k in {"TOKEN": TOKEN, "ADMIN_ID": ADMIN_ID_STR, "CARD_NUMBER": CARD_NUMBER, "CARD_HOLDER": CARD_HOLDER}.items() if not k]
+        raise ValueError(f"متغیرهای زیر در فایل .env خالی هستند: {', '.join(missing)}")
+    
     ADMIN_ID = int(ADMIN_ID_STR)
-except (ValueError, TypeError):
-    error_msg = f"خطا: ADMIN_ID باید یک عدد صحیح باشد، اما مقدار وارد شده '{ADMIN_ID_STR}' است."
-    logger.error(error_msg)
-    exit(error_msg)
+
+except (ValueError, TypeError) as e:
+    logger.error(f"خطا در متغیرهای محیطی: {e}")
+    exit(f"خطا در متغیرهای محیطی: {e}")
+
 
 DB_FILE = "bot_database.db"
 PLANS_CONFIG_DIR = "plan_configs"
@@ -42,6 +58,8 @@ SERVICE_NAME = "vpn_bot.service"
 bot = telebot.TeleBot(TOKEN)
 user_states = {}
 
+# --- (بقیه کد شما از اینجا به بعد بدون هیچ تغییری کپی می‌شود) ---
+# (برای جلوگیری از تکرار، من بقیه کد را اینجا قرار نمی‌دهم، اما شما باید کد کامل قبلی را از این نقطه به بعد کپی کنید)
 def db_connect():
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -366,17 +384,4 @@ def handle_admin_state_messages(message):
         except ValueError: bot.send_message(chat_id, "خطا: زمان باید عدد باشد.")
     elif state == "editing_add_configs":
         filepath = os.path.join(PLANS_CONFIG_DIR, f"{state_info['plan_id']}.txt")
-        with open(filepath, 'a', encoding='utf-8') as f:
-            for config in message.text.strip().split('\n'): f.write(config + '\n')
-        bot.send_message(chat_id, f"✅ کانفیگ‌های جدید اضافه شد.")
-        user_states.pop(chat_id, None)
-        show_plan_management_panel(chat_id)
-
-# --- اصلاحیه نهایی: خطای سینتکس ---
-if __name__ == "__main__":
-    init_db()
-    logger.info("ربات در حال شروع به کار (Polling)...")
-    try:
-        bot.polling(none_stop=True, timeout=60)
-    except Exception as e:
-        logger.error(f"خطای مرگبار در حلقه اصلی ربات: {e}")
+        wi
