@@ -1,5 +1,4 @@
-# main.py (نسخه متصل به Hiddify)
-
+# main.py
 import os
 import sqlite3
 import logging
@@ -9,7 +8,7 @@ from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMar
 from dotenv import load_dotenv
 import uuid
 import time
-from hiddify_api import HiddifyAPI # ایمپورت کردن کلاس جدید
+from hiddify_api import HiddifyAPI
 
 # --- تنظیمات اولیه ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -20,25 +19,39 @@ load_dotenv(dotenv_path, encoding='utf-8')
 try:
     TOKEN = os.getenv("TOKEN")
     ADMIN_ID_STR = os.getenv("ADMIN_ID")
-    CARD_NUMBER = os.getenv("CARD_HOLDER")
+    CARD_NUMBER = os.getenv("CARD_NUMBER")
     CARD_HOLDER = os.getenv("CARD_HOLDER")
     HIDDIFY_PANEL_DOMAIN = os.getenv("HIDDIFY_PANEL_DOMAIN")
-    HIDDIFY_ADMIN_UUID = os.getenv("HIDDIFY_ADMIN_UUID") # کلید جدید شما
-    if not all([TOKEN, ADMIN_ID_STR, CARD_NUMBER, CARD_HOLDER, HIDDIFY_PANEL_DOMAIN, HIDDIFY_ADMIN_UUID]):
-        raise ValueError("یکی از متغیرهای محیطی ضروری در فایل .env تعریف نشده است.")
+    HIDDIFY_ADMIN_UUID = os.getenv("HIDDIFY_ADMIN_UUID")
+    HIDDIFY_ADMIN_USER = os.getenv("HIDDIFY_ADMIN_USER")
+    HIDDIFY_ADMIN_PASS = os.getenv("HIDDIFY_ADMIN_PASS")
+
+    if not all([TOKEN, ADMIN_ID_STR, CARD_NUMBER, CARD_HOLDER, HIDDIFY_PANEL_DOMAIN, HIDDIFY_ADMIN_UUID, HIDDIFY_ADMIN_USER, HIDDIFY_ADMIN_PASS]):
+        logger.error("فایل .env یافت نشد یا متغیرهای ضروری در آن تعریف نشده‌اند.")
+        logger.error("لطفاً ابتدا اسکریپت setup.py را اجرا کنید.")
+        exit("خطا در بارگذاری تنظیمات.")
     ADMIN_ID = int(ADMIN_ID_STR)
 except (ValueError, TypeError) as e:
     logger.error(f"خطا در متغیرهای محیطی: {e}")
-    exit(f"خطا در متغیرهای محیطی: {e}")
+    exit(1)
 
 DB_FILE = "bot_database.db"
 bot = telebot.TeleBot(TOKEN)
 user_states = {}
 
-# ساخت یک نمونه از کلاینت Hiddify API
-hiddify_client = HiddifyAPI(panel_domain=HIDDIFY_PANEL_DOMAIN, admin_uuid=HIDDIFY_ADMIN_UUID)
+try:
+    hiddify_client = HiddifyAPI(
+        panel_domain=HIDDIFY_PANEL_DOMAIN,
+        admin_uuid=HIDDIFY_ADMIN_UUID,
+        admin_user=HIDDIFY_ADMIN_USER,
+        admin_pass=HIDDIFY_ADMIN_PASS
+    )
+except ConnectionError as e:
+    logger.error(f"نمی‌توان به پنل Hiddify متصل شد: {e}")
+    exit("اتصال به Hiddify ناموفق بود. ربات متوقف می‌شود.")
 
-# --- توابع دیتابیس (با ساختار جدید) ---
+
+# --- توابع دیتابیس ---
 def db_connect():
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -48,14 +61,12 @@ def init_db():
     conn = db_connect()
     c = conn.cursor()
     c.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, first_name TEXT, username TEXT, wallet_balance INTEGER DEFAULT 0)')
-    # پلن‌ها حالا حجم هم دارند
     c.execute('CREATE TABLE IF NOT EXISTS plans (plan_id TEXT PRIMARY KEY, name TEXT NOT NULL, price INTEGER NOT NULL, duration_days INTEGER NOT NULL, data_limit_gb INTEGER NOT NULL)')
-    # سرویس‌ها حالا شناسه کاربر هیدیفای را ذخیره می‌کنند
     c.execute('CREATE TABLE IF NOT EXISTS services (service_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, plan_id TEXT, hiddify_uuid TEXT NOT NULL, purchase_date DATE, is_active INTEGER DEFAULT 1, FOREIGN KEY (user_id) REFERENCES users (user_id), FOREIGN KEY (plan_id) REFERENCES plans (plan_id))')
     conn.commit()
     conn.close()
 
-# ... (سایر توابع کمکی مانند add_or_update_user, get_user_balance و... از کد قبلی بدون تغییر اینجا قرار می‌گیرند)
+# ... (سایر توابع کمکی ربات در اینجا قرار می‌گیرند)
 def add_or_update_user(user_id, first_name, username):
     conn = db_connect()
     c = conn.cursor()
@@ -71,29 +82,47 @@ def get_user_balance(user_id):
     result = c.fetchone()
     conn.close()
     return result['wallet_balance'] if result else 0
-
-# ... سایر توابع کمکی ...
-
-# --- کیبوردها (بدون تغییر) ---
+    
+# --- کیبوردها ---
 def get_admin_keyboard():
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row(KeyboardButton("➕ افزودن پلن"), KeyboardButton("📋 مدیریت پلن‌ها"))
     markup.row(KeyboardButton("📊 آمار"))
     return markup
-# ... سایر کیبوردها ...
 
-# --- منطق اصلی ربات ---
+def get_user_keyboard():
+    markup = ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.row(KeyboardButton("🛍 خرید سرویس"), KeyboardButton("🔄 سرویس‌های من"))
+    markup.row(KeyboardButton("💰 کیف پول"))
+    return markup
+    
+# --- منطق اصلی و هندلرها ---
+# (این بخش‌ها عمدتاً شبیه کدهای قبلی هستند، اما برای کامل بودن آورده شده‌اند)
 
-# بازنویسی کامل منطق خرید
+@bot.message_handler(commands=['start', 'cancel'])
+def send_welcome(message):
+    user_id = message.from_user.id
+    if user_id in user_states:
+        del user_states[user_id]
+        bot.send_message(user_id, "عملیات لغو شد.")
+
+    add_or_update_user(message.from_user.id, message.from_user.first_name, message.from_user.username)
+    if user_id == ADMIN_ID:
+        bot.send_message(user_id, "به پنل مدیریت Hiddify خوش آمدید.", reply_markup=get_admin_keyboard())
+    else:
+        balance = get_user_balance(user_id)
+        bot.send_message(user_id, f"سلام {message.from_user.first_name} عزیز!\n💰 موجودی: **{balance:,} تومان**", parse_mode="Markdown", reply_markup=get_user_keyboard())
+
 def process_purchase(user_id, plan_id, call):
+    # این تابع از کد قبلی با کمی تغییر استفاده می‌شود
     conn = db_connect()
     c = conn.cursor()
     try:
         c.execute("SELECT * FROM plans WHERE plan_id = ?", (plan_id,))
         plan = c.fetchone()
         c.execute("SELECT wallet_balance FROM users WHERE user_id = ?", (user_id,))
-        user = c.fetchone()
-        balance = user['wallet_balance']
+        user_db = c.fetchone()
+        balance = user_db['wallet_balance']
 
         if not plan:
             bot.answer_callback_query(call.id, "پلن یافت نشد!", show_alert=True)
@@ -120,7 +149,7 @@ def process_purchase(user_id, plan_id, call):
         
         c.execute("UPDATE users SET wallet_balance = wallet_balance - ? WHERE user_id = ?", (plan['price'], user_id))
         purchase_date = datetime.date.today()
-        c.execute("INSERT INTO services (user_id, plan_id, hiddify_uuid, purchase_date) VALUES (?, ?, ?, ?)", 
+        c.execute("INSERT INTO services (user_id, plan_id, hiddify_uuid, purchase_date, is_active) VALUES (?, ?, ?, ?, 1)", 
                   (user_id, plan_id, hiddify_uuid, purchase_date))
         
         conn.commit()
@@ -129,8 +158,7 @@ def process_purchase(user_id, plan_id, call):
         response_text = (f"✅ خرید **{plan['name']}** با موفقیت انجام شد.\n\n"
                          f"این لینک اشتراک شماست. آن را کپی کرده و در اپلیکیشن خود وارد کنید:\n\n"
                          f"`{subscription_link}`")
-        bot.edit_message_text(response_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown")
-
+        bot.edit_message_text(response_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=None)
     except Exception as e:
         conn.rollback()
         logger.error(f"خطا در تراکنش خرید Hiddify برای کاربر {user_id}: {e}")
@@ -138,8 +166,8 @@ def process_purchase(user_id, plan_id, call):
     finally:
         conn.close()
 
-# بازنویسی کامل نمایش سرویس‌های من
 def show_my_services(user_id):
+    # این تابع نیز از کد قبلی استفاده می‌کند
     conn = db_connect()
     c = conn.cursor()
     c.execute("SELECT s.hiddify_uuid, p.name AS plan_name FROM services s JOIN plans p ON s.plan_id = p.plan_id WHERE s.user_id = ? AND s.is_active = 1", (user_id,))
@@ -174,7 +202,7 @@ def show_my_services(user_id):
             response_text += (
                 f"🔹 **{service_db['plan_name']}**\n"
                 f"   - مصرف: **{usage:.2f} / {limit} گیگابایت**\n"
-                f"   - روزهای باقی‌مانده: **{days_left}**\n"
+                f"   - روزهای باقی‌مانده: **{days_left if days_left >= 0 else 'منقضی شده'}**\n"
                 f"   - لینک اشتراک: `{os.getenv('HIDDIFY_PANEL_DOMAIN')}/{os.getenv('HIDDIFY_ADMIN_UUID')}/{h_uuid}/`\n\n"
             )
 
@@ -184,28 +212,24 @@ def show_my_services(user_id):
     else:
         bot.send_message(user_id, "شما در حال حاضر هیچ سرویس فعالی ندارید.")
 
-# ... (هندلرهای start, cancel, admin_panel, stateful_messages و callbacks باید برای استفاده از منطق جدید تطبیق داده شوند)
-# برای مثال، افزودن پلن باید حجم را هم از ادمین بپرسد.
-# این یک نمونه خلاصه شده است. باید کد کامل را با این منطق‌ها جایگزین کنید.
-# بخش‌های مربوط به wallet و ... از کد قبلی قابل استفاده هستند.
-
-# برای سادگی، یک نسخه کامل و اجرایی از هندلرها در زیر آمده است:
-@bot.message_handler(commands=['start', 'cancel'])
-def send_welcome(message):
-    user_id = message.from_user.id
-    if user_id in user_states:
-        del user_states[user_id]
-        bot.send_message(user_id, "عملیات لغو شد.")
-
-    add_or_update_user(message.from_user.id, message.from_user.first_name, message.from_user.username)
-    if user_id == ADMIN_ID:
-        bot.send_message(user_id, "به پنل مدیریت Hiddify خوش آمدید.", reply_markup=get_admin_keyboard())
-    else:
-        balance = get_user_balance(user_id)
-        bot.send_message(user_id, f"سلام {message.from_user.first_name} عزیز!\n💰 موجودی: **{balance:,} تومان**", parse_mode="Markdown", reply_markup=get_user_keyboard())
-
-# و سایر هندلرها ...
-
+# ... (سایر هندلرها مانند handle_callbacks, handle_user_text_messages و ... باید اینجا قرار گیرند)
+# برای کامل بودن، یک نمونه از مهمترین هندلرها در اینجا آورده می‌شود
+@bot.message_handler(func=lambda m: m.from_user.id != ADMIN_ID, content_types=['text'])
+def handle_user_text_messages(message):
+    # ... (از کد قبلی)
+    pass
+    
+@bot.callback_query_handler(func=lambda call: True)
+def handle_callbacks(call):
+    # ... (از کد قبلی، با فراخوانی process_purchase)
+    user_id = call.from_user.id
+    data = call.data.split('_')
+    action = data[0]
+    if action == 'buy':
+        plan_id = data[1]
+        process_purchase(user_id, plan_id, call)
+    # ... سایر اکشن‌ها
+    
 # کد اجرایی اصلی
 if __name__ == "__main__":
     init_db()
