@@ -1,18 +1,26 @@
-# hiddify_api.py
+# config.py
 
-import requests
-import config
+# =========================================
+#      بخش تنظیمات ربات تلگرام
+# =========================================
+# توکن ربات تلگرام خود را که از @BotFather گرفته‌اید، اینجا قرار دهید
+TELEGRAM_BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
 
-BASE_URL = f"https://{config.HIDDIFY_DOMAIN}/{config.HIDDIFY_PATH}/{config.HIDDIFY_ADMIN_UUID}/api/v2/"
+# آیدی عددی اکانت ادمین اصلی در تلگرام
+# برای پیدا کردن آیدی خود به ربات @userinfobot پیام دهید
+ADMIN_ID = 123456789  # آیدی عددی خود را جایگزین کنید
 
-def get_panel_info():
-    """تست اتصال به پنل و دریافت اطلاعات کلی."""
-    try:
-        api_url = f"{BASE_URL}server/status/"
-        headers = {'Accept': 'application/json'}
-        response = requests.get(api_url, headers=headers, timeout=10)
-        response.raise_for_status() 
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        print(f"خطا در اتصال به Hiddify API: {e}")
-        return None
+# =========================================
+#      بخش تنظیمات پنل Hiddify
+# =========================================
+# آدرس دامنه پنل خود را بدون https:// و / در انتها وارد کنید
+# مثال: panel.mydomain.com
+HIDDIFY_DOMAIN = "mrm33.iranshop21.monster"
+
+# مقدار Proxy Path که در تنظیمات پنل مشخص شده است
+# مثال: "my-secret-path"
+HIDDIFY_PATH = "UA3jz9Ii21F7IHIxm5"
+
+# کلید API که از داخل تنظیمات پنل هیدیفای پیدا کرده‌اید
+# این مهم‌ترین بخش است!
+HIDDIFY_API_KEY = "YOUR_HIDDIFY_API_KEY"
