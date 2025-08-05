@@ -1,5 +1,3 @@
-# HiddifyBotProject/src/config_template.py
-
 # --- Telegram Bot Configuration ---
 BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
 ADMIN_ID = 0
@@ -8,3 +6,6 @@ ADMIN_ID = 0
 PANEL_DOMAIN = "YOUR_PANEL_DOMAIN_HERE"
 ADMIN_PATH = "YOUR_ADMIN_SECRET_PATH_HERE"
 API_KEY = "YOUR_HIDDIFY_API_KEY_HERE"
+
+# --- Other Settings ---
+SUPPORT_USERNAME = "YOUR_SUPPORT_USERNAME"
