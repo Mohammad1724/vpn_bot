@@ -1,5 +1,3 @@
-# HiddifyBotProject/src/hiddify_api.py
-
 import requests
 import json
 import uuid
@@ -22,7 +20,6 @@ def create_hiddify_user(plan_days, plan_gb, user_telegram_id=None):
             user_data = response.json()
             user_uuid = user_data.get('uuid')
             subscription_url = f"https://{PANEL_DOMAIN}/{ADMIN_PATH}/{user_uuid}/"
-            print(f"SUCCESS: User {user_name} created successfully.")
             return {"link": subscription_url, "uuid": user_uuid}
         else:
             print(f"ERROR (Create User): Hiddify API returned {response.status_code} -> {response.text}")
@@ -37,16 +34,25 @@ def get_user_info(user_uuid):
         if response.status_code == 200:
             return response.json()
         else:
-            print(f"ERROR (Get Info): Hiddify API returned {response.status_code} -> {response.text}")
+            print(f"ERROR (Get Info): Hiddify API returned {response.status_code} for UUID {user_uuid} -> {response.text}")
             return None
     except Exception as e:
         print(f"ERROR (Get Info): {e}"); return None
 
-def reset_user_traffic(user_uuid):
-    """حجم مصرفی یک کاربر را ریست می‌کند. (برای تمدید)"""
-    endpoint = f"{_get_base_url()}user/{user_uuid}/reset/"
+def reset_user_traffic(user_uuid, days):
+    """Resets user traffic and updates expiry date."""
+    endpoint = f"{_get_base_url()}user/{user_uuid}/"
+    payload = {"package_days": int(days)} # We just need to update the days to reset the sub
     try:
-        response = requests.post(endpoint, headers=_get_headers(), timeout=10)
-        return response.status_code in [200, 201]
+        response = requests.put(endpoint, headers=_get_headers(), json=payload, timeout=10)
+        # Hiddify Expanded API might use PUT for updates and returns 200
+        if response.status_code == 200:
+             # Also reset the traffic explicitly if there's an endpoint
+            reset_endpoint = f"{_get_base_url()}user/{user_uuid}/reset/"
+            requests.post(reset_endpoint, headers=_get_headers(), timeout=10)
+            return True
+        else:
+            print(f"ERROR (Reset/Renew): Hiddify API returned {response.status_code} -> {response.text}")
+            return False
     except Exception as e:
-        print(f"ERROR (Reset Traffic): {e}"); return False
+        print(f"ERROR (Reset/Renew): {e}"); return False
