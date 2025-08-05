@@ -81,21 +81,38 @@ async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("در حال دریافت اطلاعات سرویس‌های شما... ⏳")
     for service in services:
         info = hiddify_api.get_user_info(service['sub_uuid'])
+        
         if info:
-            expiry_date_obj = datetime.strptime(info.get('expiry_date', '1970-01-01'), "%Y-%m-%d").date()
-            is_expired = expiry_date_obj < datetime.now().date()
+            start_date_str = info.get('start_date')
+            package_days = info.get('package_days', 0)
+            expiry_date_display = "N/A"
+            is_expired = True
+
+            if start_date_str and package_days > 0:
+                try:
+                    start_date_obj = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+                    expiry_date_obj = start_date_obj + timedelta(days=package_days)
+                    expiry_date_display = expiry_date_obj.strftime("%Y-%m-%d")
+                    is_expired = expiry_date_obj < datetime.now().date()
+                except (ValueError, TypeError):
+                    print(f"[ERROR] Could not parse start_date: {start_date_str}")
+                    is_expired = True
+            
             status = "🔴 منقضی شده" if is_expired else "🟢 فعال"
             renewal_plan = db.get_plan(service['plan_id'])
+            
             message = (f"🔗 لینک پروفایل: `{service['sub_link']}`\n"
-                       f"🗓️ تاریخ انقضا: {info.get('expiry_date', 'N/A')}\n"
+                       f"🗓️ تاریخ انقضا: {expiry_date_display}\n"
                        f"📊 حجم مصرفی: {info.get('current_usage_GB', 0):.2f} / {info.get('usage_limit_GB', 0):.0f} گیگ\n"
                        f"🚦 وضعیت: {status}")
+                       
             keyboard = [[InlineKeyboardButton("📋 دریافت لینک‌های اشتراک", callback_data=f"showlinks_{service['sub_uuid']}")]]
             if renewal_plan and not is_expired:
                  keyboard.append([InlineKeyboardButton(f"🔄 تمدید ({renewal_plan['price']:.0f} تومان)", callback_data=f"renew_{service['service_id']}_{renewal_plan['plan_id']}")])
             await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
         else:
             await update.message.reply_text(f"خطا در دریافت اطلاعات برای لینک:\n`{service['sub_link']}`", parse_mode=ParseMode.MARKDOWN)
+    
     await msg.delete()
 
 # --- Conversations (Gift, Charge) ---
@@ -157,12 +174,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         subscription_path = SUB_PATH or ADMIN_PATH
         subscription_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
         base_link = f"https://{subscription_domain}/{subscription_path}/{user_uuid}"
-        
         user_info = hiddify_api.get_user_info(user_uuid)
         config_name = user_info.get('name', 'config') if user_info else 'config'
-        
         final_link = f"{base_link}/{link_type}/?asn=unknown#{config_name}"
-        
         await query.message.reply_text(f"لینک اشتراک شما از نوع **{link_type.capitalize()}**:\n\n`{final_link}`\n\nبا کلیک روی لینک، کپی می‌شود.", parse_mode=ParseMode.MARKDOWN)
         await query.edit_message_text(f"✅ لینک اشتراک شما از نوع {link_type.capitalize()} ارسال شد.", reply_markup=None)
 
@@ -225,7 +239,6 @@ async def show_link_options(query_or_update, user_uuid, is_edit=True):
     if is_edit:
         await query_or_update.edit_message_text(text, reply_markup=reply_markup)
     else:
-        # This is for the "showlinks" case
         await query_or_update.message.reply_text(text, reply_markup=reply_markup)
 
 # --- ADMIN CONVERSATION & FUNCTIONS ---
