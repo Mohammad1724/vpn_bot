@@ -1,63 +1,53 @@
 #!/bin/bash
 
-# ======================================================
-#   Hiddify VPN Bot Uninstaller
-#   This script will completely remove the bot,
-#   its service, and all related files.
-# ======================================================
+# Function to print colored messages
+print_color() {
+    COLOR=$1
+    TEXT=$2
+    case $COLOR in
+        "red") echo -e "\e[31m${TEXT}\e[0m" ;;
+        "green") echo -e "\e[32m${TEXT}\e[0m" ;;
+        "yellow") echo -e "\e[33m${TEXT}\e[0m" ;;
+    esac
+}
 
-echo "--- Starting Hiddify VPN Bot Uninstallation ---"
-echo "This will permanently delete the bot and its data."
-read -p "Are you sure you want to continue? (y/n): " CONFIRM
-
-if [ "$CONFIRM" != "y" ]; then
-    echo "Uninstallation cancelled."
-    exit 0
+if [ "$(id -u)" != "0" ]; then
+   print_color "red" "This script must be run as root. Please use 'sudo'."
+   exit 1
 fi
 
-# --- 1. Stop and disable the systemd service ---
-SERVICE_NAME="vpn_bot.service"
-echo "[1/3] Stopping and disabling the systemd service..."
+print_color "yellow" "--- Hiddify VPN Bot Uninstaller ---"
 
-if systemctl is-active --quiet $SERVICE_NAME; then
-    sudo systemctl stop $SERVICE_NAME
-    echo "Service stopped."
-else
-    echo "Service was not running."
-fi
+SERVICE_NAME="vpn_bot"
+DEFAULT_INSTALL_DIR="/opt/vpn-bot"
 
-if systemctl is-enabled --quiet $SERVICE_NAME; then
-    sudo systemctl disable $SERVICE_NAME
-    echo "Service disabled."
-else
-    echo "Service was not enabled."
-fi
+# Stop and disable the service
+print_color "yellow" "Stopping and disabling the systemd service..."
+systemctl stop $SERVICE_NAME > /dev/null 2>&1
+systemctl disable $SERVICE_NAME > /dev/null 2>&1
 
-# --- 2. Remove the systemd service file ---
-SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME"
-echo "[2/3] Removing the systemd service file..."
-
+# Remove the service file
+SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 if [ -f "$SERVICE_FILE" ]; then
-    sudo rm -f "$SERVICE_FILE"
-    sudo systemctl daemon-reload
-    echo "Service file removed and systemd reloaded."
-else
-    echo "Service file not found. Skipping."
+    print_color "yellow" "Removing systemd service file..."
+    rm $SERVICE_FILE
+    systemctl daemon-reload
 fi
 
-# --- 3. Remove the installation directory ---
-INSTALL_DIR="/opt/vpn_bot"
-echo "[3/3] Removing the installation directory ($INSTALL_DIR)..."
+# Remove the installation directory
+read -p "Enter the bot's installation directory [${DEFAULT_INSTALL_DIR}]: " INSTALL_DIR
+INSTALL_DIR=${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}
 
-if [ -d "$INSTALL_DIR" ]; then
-    sudo rm -rf "$INSTALL_DIR"
-    echo "Installation directory removed."
-else
-    echo "Installation directory not found. Skipping."
+if [ -d "$INSTALL_DIR" ]; {
+    read -p "Are you sure you want to permanently delete all bot files from ${INSTALL_DIR}? [y/N]: " CONFIRM
+    if [[ "$CONFIRM" =~ ^[yY]$ ]]; then
+        print_color "yellow" "Removing installation directory..."
+        rm -rf $INSTALL_DIR
+        print_color "green" "Directory removed."
+    else
+        print_color "yellow" "Skipping directory removal."
+    fi
+}
 fi
 
-echo ""
-echo "======================================================"
-echo "      ✅ Uninstallation Complete ✅"
-echo "The Hiddify VPN bot has been completely removed."
-echo "======================================================"
+print_color "green" "--- Uninstallation Complete ---"
