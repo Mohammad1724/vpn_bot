@@ -1,34 +1,19 @@
-import sqlite3
-import datetime
-import uuid
+import sqlite3, datetime, uuid
 
 DB_NAME = "vpn_bot.db"
 
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    # Users: added is_banned column
+    conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
     cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, balance REAL DEFAULT 0.0, join_date TEXT, is_banned INTEGER DEFAULT 0)')
-    # Plans: no change
     cursor.execute('CREATE TABLE IF NOT EXISTS plans (plan_id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, price REAL NOT NULL, days INTEGER NOT NULL, gb INTEGER NOT NULL)')
-    # Settings: no change
     cursor.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)')
-    # Active Services: no change
     cursor.execute('CREATE TABLE IF NOT EXISTS active_services (service_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, sub_uuid TEXT, sub_link TEXT, expiry_date TEXT, plan_id INTEGER)')
-    # Sales: no change
     cursor.execute('CREATE TABLE IF NOT EXISTS sales (sale_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, plan_id INTEGER, price REAL, sale_date TEXT)')
-    # Gift Codes: no change
     cursor.execute('CREATE TABLE IF NOT EXISTS gift_codes (code TEXT PRIMARY KEY, amount REAL, usage_limit INTEGER, used_count INTEGER DEFAULT 0)')
-    # New Table: Tickets
-    cursor.execute('CREATE TABLE IF NOT EXISTS tickets (ticket_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, subject TEXT, status TEXT DEFAULT "open", creation_date TEXT)')
-    # New Table: Ticket Messages
-    cursor.execute('CREATE TABLE IF NOT EXISTS ticket_messages (message_id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id INTEGER, sender_id INTEGER, message_text TEXT, timestamp TEXT)')
-    
     conn.commit()
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_number', '0000-0000-0000-0000'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_holder', 'نام صاحب حساب'))
-    conn.commit()
-    conn.close()
+    conn.commit(); conn.close()
 
 def get_setting(key):
     conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
@@ -65,23 +50,15 @@ def update_balance(user_id, amount, add=True):
     else: cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (amount, user_id))
     conn.commit(); conn.close()
 
-def add_plan(name, price, days, gb):
-    conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
-    cursor.execute("INSERT INTO plans (name, price, days, gb) VALUES (?, ?, ?, ?)", (name, price, days, gb)); conn.commit(); conn.close()
-def list_plans():
-    conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
-    cursor.execute("SELECT plan_id, name, price, days, gb FROM plans")
-    plans = [{"plan_id": p[0], "name": p[1], "price": p[2], "days": p[3], "gb": p[4]} for p in cursor.fetchall()]
-    conn.close(); return plans
+def add_plan(name, price, days, gb): conn = sqlite3.connect(DB_NAME); cursor = conn.cursor(); cursor.execute("INSERT INTO plans (name, price, days, gb) VALUES (?, ?, ?, ?)", (name, price, days, gb)); conn.commit(); conn.close()
+def list_plans(): conn = sqlite3.connect(DB_NAME); cursor = conn.cursor(); cursor.execute("SELECT plan_id, name, price, days, gb FROM plans"); plans = [{"plan_id": p[0], "name": p[1], "price": p[2], "days": p[3], "gb": p[4]} for p in cursor.fetchall()]; conn.close(); return plans
 def get_plan(plan_id):
     conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
     cursor.execute("SELECT plan_id, name, price, days, gb FROM plans WHERE plan_id = ?", (plan_id,)); p = cursor.fetchone()
     conn.close()
     if not p: return None
     return {"plan_id": p[0], "name": p[1], "price": p[2], "days": p[3], "gb": p[4]}
-def delete_plan(plan_id):
-    conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
-    cursor.execute("DELETE FROM plans WHERE plan_id = ?", (plan_id,)); conn.commit(); conn.close()
+def delete_plan(plan_id): conn = sqlite3.connect(DB_NAME); cursor = conn.cursor(); cursor.execute("DELETE FROM plans WHERE plan_id = ?", (plan_id,)); conn.commit(); conn.close()
 
 def add_active_service(user_id, sub_uuid, sub_link, plan_id, days):
     conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
@@ -95,8 +72,7 @@ def get_user_services(user_id):
     conn.close(); return services
 def renew_service(service_id, days):
     conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
-    cursor.execute("SELECT expiry_date FROM active_services WHERE service_id = ?", (service_id,))
-    current_expiry_str = cursor.fetchone()[0]
+    cursor.execute("SELECT expiry_date FROM active_services WHERE service_id = ?", (service_id,)); current_expiry_str = cursor.fetchone()[0]
     current_expiry = datetime.datetime.strptime(current_expiry_str, "%Y-%m-%d")
     start_date = max(current_expiry, datetime.datetime.now())
     new_expiry_date = (start_date + datetime.timedelta(days=days)).strftime("%Y-%m-%d")
@@ -138,6 +114,4 @@ def list_gift_codes():
     cursor.execute("SELECT code, amount, usage_limit, used_count FROM gift_codes")
     codes = [{"code": g[0], "amount": g[1], "usage_limit": g[2], "used_count": g[3]} for g in cursor.fetchall()]
     conn.close(); return codes
-def delete_gift_code(code):
-    conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
-    cursor.execute("DELETE FROM gift_codes WHERE code = ?", (code,)); conn.commit(); conn.close()
+def delete_gift_code(code): conn = sqlite3.connect(DB_NAME); cursor = conn.cursor(); cursor.execute("DELETE FROM gift_codes WHERE code = ?", (code,)); conn.commit(); conn.close()
