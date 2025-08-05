@@ -1,5 +1,3 @@
-# HiddifyBotProject/src/database.py
-
 import sqlite3
 import datetime
 import uuid
@@ -28,7 +26,7 @@ def init_db():
     conn.commit()
     conn.close()
 
-# --- توابع تنظیمات ---
+# --- Settings Functions ---
 def get_setting(key):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
@@ -43,7 +41,7 @@ def set_setting(key, value):
     conn.commit()
     conn.close()
 
-# --- توابع کاربران ---
+# --- User Functions ---
 def get_or_create_user(user_id):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
@@ -59,10 +57,8 @@ def get_or_create_user(user_id):
 def update_balance(user_id, amount, add=True):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    if add:
-        cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
-    else: # Subtract
-        cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (amount, user_id))
+    if add: cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
+    else: cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (amount, user_id))
     conn.commit()
     conn.close()
 def get_all_user_ids():
@@ -73,7 +69,7 @@ def get_all_user_ids():
     conn.close()
     return user_ids
 
-# --- توابع پلن‌ها ---
+# --- Plan Functions ---
 def add_plan(name, price, days, gb):
     conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
     cursor.execute("INSERT INTO plans (name, price, days, gb) VALUES (?, ?, ?, ?)", (name, price, days, gb))
@@ -95,7 +91,7 @@ def delete_plan(plan_id):
     cursor.execute("DELETE FROM plans WHERE plan_id = ?", (plan_id,))
     conn.commit(); conn.close()
 
-# --- توابع سرویس‌های فعال ---
+# --- Active Services Functions ---
 def add_active_service(user_id, sub_uuid, sub_link, days):
     conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
     expiry_date = (datetime.datetime.now() + datetime.timedelta(days=days)).strftime("%Y-%m-%d")
@@ -106,12 +102,24 @@ def get_user_services(user_id):
     cursor.execute("SELECT service_id, sub_uuid, sub_link, expiry_date FROM active_services WHERE user_id = ?", (user_id,))
     services = [{"service_id": s[0], "sub_uuid": s[1], "sub_link": s[2], "expiry_date": s[3]} for s in cursor.fetchall()]
     conn.close(); return services
+def renew_service(service_id, days):
+    conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
+    new_expiry_date = (datetime.datetime.now() + datetime.timedelta(days=days)).strftime("%Y-%m-%d")
+    cursor.execute("UPDATE active_services SET expiry_date = ? WHERE service_id = ?", (new_expiry_date, service_id))
+    conn.commit(); conn.close()
+def get_service(service_id):
+    conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
+    cursor.execute("SELECT * FROM active_services WHERE service_id = ?", (service_id,))
+    s = cursor.fetchone()
+    conn.close();
+    if not s: return None
+    return {"service_id": s[0], "user_id": s[1], "sub_uuid": s[2], "sub_link": s[3], "expiry_date": s[4]}
 
-# --- توابع آمار ---
+# --- Stats Functions ---
 def log_sale(user_id, plan_id, price):
     conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
     sale_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    cursor.execute("INSERT INTO sales (user_id, plan_id, price, sale_date) VALUES (?, ?, ?, ?)", (user_id, price, sale_date))
+    cursor.execute("INSERT INTO sales (user_id, plan_id, price, sale_date) VALUES (?, ?, ?, ?)", (user_id, plan_id, price, sale_date))
     conn.commit(); conn.close()
 def get_stats():
     conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
@@ -122,7 +130,7 @@ def get_stats():
     sales_count, total_revenue = (sales_data[0] or 0, sales_data[1] or 0)
     conn.close(); return {"user_count": user_count, "sales_count": sales_count, "total_revenue": total_revenue}
 
-# --- توابع کد هدیه ---
+# --- Gift Code Functions ---
 def create_gift_code(amount, usage_limit):
     conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
     code = str(uuid.uuid4().hex[:10]).upper()
