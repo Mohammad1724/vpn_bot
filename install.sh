@@ -74,9 +74,6 @@ if [ -n "$SUB_DOMAINS_INPUT" ]; then
     PYTHON_LIST_FORMAT="[\"${SUB_DOMAINS_INPUT//,/'\", \"'}\"]"
 fi
 
-# --- <<<< اصلاحیه کلیدی: استفاده از روش جایگزینی خط کامل >>>> ---
-# This method finds the line starting with the variable name and replaces the entire line.
-# It's much more robust than replacing a specific value.
 sed -i "/^BOT_TOKEN =/c\BOT_TOKEN = \"${BOT_TOKEN}\"" $CONFIG_FILE
 sed -i "/^ADMIN_ID =/c\ADMIN_ID = ${ADMIN_ID}" $CONFIG_FILE
 sed -i "/^PANEL_DOMAIN =/c\PANEL_DOMAIN = \"${PANEL_DOMAIN}\"" $CONFIG_FILE
