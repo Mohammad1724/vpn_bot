@@ -26,7 +26,7 @@ apt-get update > /dev/null 2>&1
 apt-get install -y python3 python3-pip python3-venv curl git > /dev/null 2>&1
 
 # 2. Get GitHub repository URL and installation directory
-GITHUB_REPO="https://github.com/Mohammad1724/vpn_bot.git" # آدرس ریپازیتوری شما
+GITHUB_REPO="https://github.com/Mohammad1724/vpn_bot.git"
 DEFAULT_INSTALL_DIR="/opt/vpn-bot"
 
 read -p "Enter the installation directory [${DEFAULT_INSTALL_DIR}]: " INSTALL_DIR
@@ -65,12 +65,32 @@ read -p "Enter your Hiddify admin secret path: " ADMIN_PATH
 read -p "Enter your Hiddify API Key: " API_KEY
 read -p "Enter your support Telegram username (without @): " SUPPORT_USERNAME
 
+# --- <<<< بخش جدید برای پرسیدن دامنه‌های اشتراک >>>> ---
+print_color "yellow" "\nEnter your subscription domains, separated by a comma."
+print_color "yellow" "Example: sub1.domain.com,sub2.domain.com"
+print_color "yellow" "If you want to use the main panel domain, just press Enter."
+read -p "Subscription Domains: " SUB_DOMAINS_INPUT
+
+PYTHON_LIST_FORMAT=""
+if [ -n "$SUB_DOMAINS_INPUT" ]; then
+    # Convert comma-separated string to Python list format: ["item1", "item2"]
+    PYTHON_LIST_FORMAT="[\"${SUB_DOMAINS_INPUT//,/'\", \"'}\"]"
+fi
+# --- <<<< پایان بخش جدید >>>> ---
+
+
 sed -i "s|YOUR_BOT_TOKEN_HERE|${BOT_TOKEN}|" $CONFIG_FILE
-sed -i "s|ADMIN_ID = 0|ADMIN_ID = ${ADMIN_ID}|" $CONFIG_FILE
+sed -i "s|ADMIN_ID = 0|${ADMIN_ID}|" $CONFIG_FILE
 sed -i "s|YOUR_PANEL_DOMAIN_HERE|${PANEL_DOMAIN}|" $CONFIG_FILE
 sed -i "s|YOUR_ADMIN_SECRET_PATH_HERE|${ADMIN_PATH}|" $CONFIG_FILE
 sed -i "s|YOUR_HIDDIFY_API_KEY_HERE|${API_KEY}|" $CONFIG_FILE
 sed -i "s|YOUR_SUPPORT_USERNAME|${SUPPORT_USERNAME}|" $CONFIG_FILE
+# Replace the empty list with the formatted list
+if [ -n "$PYTHON_LIST_FORMAT" ]; then
+    sed -i "s|SUB_DOMAINS = ```math
+```|SUB_DOMAINS = ${PYTHON_LIST_FORMAT}|" $CONFIG_FILE
+fi
+
 
 print_color "green" "Configuration file created successfully."
 
