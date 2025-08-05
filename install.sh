@@ -26,8 +26,7 @@ apt-get update > /dev/null 2>&1
 apt-get install -y python3 python3-pip python3-venv curl git > /dev/null 2>&1
 
 # 2. Get GitHub repository URL and installation directory
-# !!! این آدرس را به آدرس گیت‌هاب خودتان تغییر دهید !!!
-GITHUB_REPO="https://github.com/YourUsername/YourVpnBot.git" #<---  مهم: آدرس گیت‌هاب خودتان را وارد کنید
+GITHUB_REPO="https://github.com/Mohammad1724/vpn_bot.git" # <--- آدرس صحیح شما
 DEFAULT_INSTALL_DIR="/opt/vpn-bot"
 
 read -p "Enter the installation directory [${DEFAULT_INSTALL_DIR}]: " INSTALL_DIR
