@@ -1,4 +1,9 @@
-import logging, os, shutil, asyncio, random, sqlite3
+import logging
+import os
+import shutil
+import asyncio
+import random
+import sqlite3
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, InputFile
 from telegram.ext import (Application, CommandHandler, CallbackQueryHandler, MessageHandler, 
@@ -14,18 +19,19 @@ os.makedirs('backups', exist_ok=True)
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-(ADMIN_MENU, PLAN_MENU, SETTINGS_MENU, BACKUP_MENU,
+(ADMIN_MENU, PLAN_MENU, SETTINGS_MENU, BROADCAST_MENU, BACKUP_MENU, GIFT_MENU,
  PLAN_NAME, PLAN_PRICE, PLAN_DAYS, PLAN_GB,
  SET_CARD_NUMBER, SET_CARD_HOLDER,
+ BROADCAST_MESSAGE, BROADCAST_CONFIRM, BROADCAST_TO_USER_ID, BROADCAST_TO_USER_MESSAGE,
  CHARGE_AMOUNT, CHARGE_RECEIPT,
+ GIFT_AMOUNT, GIFT_COUNT,
  REDEEM_GIFT,
- RESTORE_UPLOAD, RESTORE_CONFIRM) = range(15)
+ RESTORE_UPLOAD, RESTORE_CONFIRM) = range(23)
 
 def get_main_menu_keyboard(user_id):
     keyboard = [["🛍️ خرید سرویس", "📋 سرویس‌های من"], ["💰 موجودی و شارژ", "🎁 کد هدیه"], ["📞 پشتیبانی", " راهنمای اتصال 📚"]]
     if user_id == ADMIN_ID: keyboard.append(["👑 ورود به پنل ادمین"])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-
 def get_admin_menu_keyboard():
     keyboard = [["➕ مدیریت پلن‌ها", "📊 آمار ربات"], ["⚙️ تنظیمات", "🎁 مدیریت کد هدیه"], ["📩 ارسال پیام", "💾 پشتیبان‌گیری و بازیابی"], ["🛑 خاموش کردن ربات", "↩️ خروج از پنل"]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -63,7 +69,7 @@ async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     start_date_obj = datetime.now().date() if not start_date_str else datetime.strptime(start_date_str, "%Y-%m-%d").date()
                     expiry_date_obj = start_date_obj + timedelta(days=package_days)
                     expiry_date_display, is_expired = expiry_date_obj.strftime("%Y-%m-%d"), expiry_date_obj < datetime.now().date()
-                except (ValueError, TypeError): print(f"[ERROR] Could not parse start_date: {start_date_str}"); is_expired = True
+                except (ValueError, TypeError): logger.error(f"Could not parse start_date: {start_date_str}"); is_expired = True
             status, renewal_plan = "🔴 منقضی شده" if is_expired else "🟢 فعال", db.get_plan(service['plan_id'])
             message = (f"🔗 لینک پروفایل: `{service['sub_link']}`\n🗓️ تاریخ انقضا: {expiry_date_display}\n📊 حجم مصرفی: {info.get('current_usage_GB', 0):.2f} / {info.get('usage_limit_GB', 0):.0f} گیگ\n🚦 وضعیت: {status}")
             keyboard = [[InlineKeyboardButton("📋 دریافت لینک‌های اشتراک", callback_data=f"showlinks_{service['sub_uuid']}")]]
@@ -173,7 +179,6 @@ async def back_to_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     stats = db.get_stats(); message = (f"📊 **آمار کلی ربات**\n\n👥 تعداد کل کاربران: {stats['user_count']} نفر\n🛒 تعداد کل فروش‌ها: {stats['sales_count']} عدد\n💳 درآمد کل: {stats['total_revenue']:.0f} تومان")
     await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
-
 async def plan_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE): keyboard = [["➕ افزودن پلن جدید", "📋 لیست پلن‌ها"], ["بازگشت به منوی ادمین"]]; await update.message.reply_text("بخش مدیریت پلن‌ها", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)); return PLAN_MENU
 async def add_plan_start(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("لطفا نام پلن را وارد کنید:", reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)); return PLAN_NAME
 async def plan_name_received(update: Update, context: ContextTypes.DEFAULT_TYPE): context.user_data['plan_name'] = update.message.text; await update.message.reply_text("نام ثبت شد. قیمت را به تومان وارد کنید:"); return PLAN_PRICE
@@ -187,8 +192,7 @@ async def plan_gb_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         context.user_data['plan_gb'] = int(update.message.text)
         db.add_plan(context.user_data['plan_name'], context.user_data['plan_price'], context.user_data['plan_days'], context.user_data['plan_gb'])
-        await update.message.reply_text("✅ پلن جدید اضافه شد!", reply_markup=get_admin_menu_keyboard())
-        context.user_data.clear(); return ADMIN_MENU
+        await update.message.reply_text("✅ پلن جدید اضافه شد!", reply_markup=get_admin_menu_keyboard()); context.user_data.clear(); return ADMIN_MENU
     except ValueError: await update.message.reply_text("لطفا حجم را به صورت عدد وارد کنید."); return PLAN_GB
 async def list_plans_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     plans = db.list_plans()
@@ -212,6 +216,24 @@ async def handle_settings_text(update: Update, context: ContextTypes.DEFAULT_TYP
         except Exception: pass
     context.user_data.clear(); return ADMIN_MENU
 
+async def broadcast_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [["ارسال به همه کاربران", "ارسال به کاربر خاص"], ["بازگشت به منوی ادمین"]]
+    await update.message.reply_text("بخش ارسال پیام", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)); return BROADCAST_MENU
+async def broadcast_to_all_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("لطفا پیام خود را برای ارسال به همه کاربران وارد کنید:", reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)); return BROADCAST_MESSAGE
+async def broadcast_to_all_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['broadcast_message'] = update.message
+    await update.message.reply_text(f"آیا از ارسال پیام زیر به همه کاربران مطمئن هستید؟", reply_markup=ReplyKeyboardMarkup([["بله، ارسال کن"], ["خیر، لغو کن"]], resize_keyboard=True)); return BROADCAST_CONFIRM
+async def broadcast_to_all_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message_to_send = context.user_data['broadcast_message']
+    user_ids = db.get_all_user_ids(); sent_count, failed_count = 0, 0
+    await update.message.reply_text(f"در حال ارسال پیام به {len(user_ids)} کاربر...", reply_markup=get_admin_menu_keyboard())
+    for user_id in user_ids:
+        try: await message_to_send.copy(chat_id=user_id); sent_count += 1; await asyncio.sleep(0.1)
+        except (Forbidden, BadRequest): failed_count += 1
+    await update.message.reply_text(f"✅ پیام همگانی با موفقیت ارسال شد.\n\nتعداد ارسال موفق: {sent_count}\nتعداد ارسال ناموفق: {failed_count}")
+    context.user_data.clear(); return ADMIN_MENU
+
 async def backup_restore_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [["📥 دریافت فایل پشتیبان", "📤 بارگذاری فایل پشتیبان"], ["بازگشت به منوی ادمین"]]; await update.message.reply_text("بخش پشتیبان‌گیری و بازیابی.", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)); return BACKUP_MENU
 async def send_backup_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -231,11 +253,11 @@ async def restore_receive_file(update: Update, context: ContextTypes.DEFAULT_TYP
     document = update.message.document
     if not document.file_name.endswith('.db'): await update.message.reply_text("فرمت فایل نامعتبر است. لطفاً یک فایل `.db` ارسال کنید."); return RESTORE_UPLOAD
     file = await document.get_file()
-    temp_path = os.path.join("backups", f"restore_temp_{update.effective_user.id}.db"); await file.download_to_drive(temp_path)
+    temp_path = os.path.join("backups", f"restore_temp.db"); await file.download_to_drive(temp_path)
     if not is_valid_sqlite(temp_path): await update.message.reply_text("❌ فایل ارسالی یک دیتابیس SQLite معتبر نیست."); os.remove(temp_path); return BACKUP_MENU
     context.user_data['restore_path'] = temp_path
     keyboard = [[InlineKeyboardButton("✅ بله، مطمئنم", callback_data="confirm_restore"), InlineKeyboardButton("❌ خیر، لغو کن", callback_data="cancel_restore")]]
-    await update.message.reply_text("**آیا از جایگزینی دیتابیس فعلی کاملاً مطمئن هستید؟ این عمل غیرقابل بازگشت است.**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN); return BACKUP_MENU
+    await update.message.reply_text("**آیا از جایگزینی دیتابیس فعلی کاملاً مطمئن هستید؟ این عمل غیرقابل بازگشت است.**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
 
 async def shutdown_bot(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("ربات در حال خاموش شدن است..."); asyncio.create_task(context.application.shutdown())
 async def admin_generic_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("عملیات لغو شد.", reply_markup=get_admin_menu_keyboard()); context.user_data.clear(); return ADMIN_MENU
@@ -244,18 +266,24 @@ def main():
     db.init_db()
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     admin_filter, user_filter = filters.User(user_id=ADMIN_ID), ~filters.User(user_id=ADMIN_ID)
+    
     gift_handler = ConversationHandler(entry_points=[MessageHandler(filters.Regex('^🎁 کد هدیه$') & user_filter, gift_code_entry)], states={REDEEM_GIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, redeem_gift_code)]}, fallbacks=[CommandHandler('cancel', start)])
     charge_handler = ConversationHandler(entry_points=[CallbackQueryHandler(charge_start, pattern='^start_charge$')], states={CHARGE_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, charge_amount_received)], CHARGE_RECEIPT: [MessageHandler(filters.PHOTO, charge_receipt_received)]}, fallbacks=[CommandHandler('cancel', start)])
+    
     admin_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^👑 ورود به پنل ادمین$') & admin_filter, admin_entry)],
         states={
-            ADMIN_MENU: [MessageHandler(filters.Regex('^➕ مدیریت پلن‌ها$'), plan_management_menu), MessageHandler(filters.Regex('^📊 آمار ربات$'), show_stats), MessageHandler(filters.Regex('^⚙️ تنظیمات$'), settings_menu), MessageHandler(filters.Regex('^💾 پشتیبان‌گیری و بازیابی$'), backup_restore_menu), MessageHandler(filters.Regex('^🛑 خاموش کردن ربات$'), shutdown_bot)],
+            ADMIN_MENU: [MessageHandler(filters.Regex('^➕ مدیریت پلن‌ها$'), plan_management_menu), MessageHandler(filters.Regex('^📊 آمار ربات$'), show_stats), MessageHandler(filters.Regex('^⚙️ تنظیمات$'), settings_menu), MessageHandler(filters.Regex('^💾 پشتیبان‌گیری و بازیابی$'), backup_restore_menu), MessageHandler(filters.Regex('^📩 ارسال پیام$'), broadcast_menu), MessageHandler(filters.Regex('^🛑 خاموش کردن ربات$'), shutdown_bot)],
             PLAN_MENU: [MessageHandler(filters.Regex('^➕ افزودن پلن جدید$'), add_plan_start), MessageHandler(filters.Regex('^📋 لیست پلن‌ها$'), list_plans_admin), MessageHandler(filters.Regex('^بازگشت به منوی ادمین$'), back_to_admin_menu)],
             SETTINGS_MENU: [CallbackQueryHandler(button_handler), MessageHandler(filters.TEXT & ~filters.COMMAND, handle_settings_text), MessageHandler(filters.Regex('^بازگشت به منوی ادمین$'), back_to_admin_menu)],
             BACKUP_MENU: [MessageHandler(filters.Regex('^📥 دریافت فایل پشتیبان$'), send_backup_file), MessageHandler(filters.Regex('^📤 بارگذاری فایل پشتیبان$'), restore_start), MessageHandler(filters.Regex('^بازگشت به منوی ادمین$'), back_to_admin_menu)],
+            BROADCAST_MENU: [MessageHandler(filters.Regex('^ارسال به همه کاربران$'), broadcast_to_all_start), MessageHandler(filters.Regex('^بازگشت به منوی ادمین$'), back_to_admin_menu)],
             PLAN_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_name_received)], PLAN_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_price_received)],
             PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_days_received)], PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_gb_received)],
             RESTORE_UPLOAD: [MessageHandler(filters.Document.FileExtension("db"), restore_receive_file)],
+            RESTORE_CONFIRM: [CallbackQueryHandler(button_handler)],
+            BROADCAST_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_to_all_confirm)],
+            BROADCAST_CONFIRM: [MessageHandler(filters.Regex('^بله، ارسال کن$'), broadcast_to_all_send), MessageHandler(filters.Regex('^خیر، لغو کن$'), back_to_admin_menu)],
         }, fallbacks=[MessageHandler(filters.Regex('^↩️ خروج از پنل$'), exit_admin_panel), CommandHandler('cancel', admin_generic_cancel)]
     )
     application.add_handler(admin_conv); application.add_handler(gift_handler); application.add_handler(charge_handler)
