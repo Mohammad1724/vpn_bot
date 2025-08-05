@@ -16,15 +16,8 @@ def create_hiddify_user(plan_days, plan_gb, user_telegram_id=None):
     comment = f"Telegram user: {user_telegram_id}" if user_telegram_id else "Created by script"
     payload = {"name": user_name, "package_days": int(plan_days), "usage_limit_GB": int(plan_gb), "comment": comment}
     
-    print("--- DEBUG: Attempting to create user ---")
-    print(f"DEBUG: Endpoint: {endpoint}")
-    print(f"DEBUG: Payload: {json.dumps(payload)}")
-    
     try:
         response = requests.post(endpoint, headers=_get_headers(), data=json.dumps(payload), timeout=20)
-        print(f"DEBUG: Hiddify API Response Status: {response.status_code}")
-        print(f"DEBUG: Hiddify API Response Body: {response.text}")
-
         if response.status_code in [200, 201]:
             user_data = response.json()
             user_uuid = user_data.get('uuid')
@@ -33,17 +26,14 @@ def create_hiddify_user(plan_days, plan_gb, user_telegram_id=None):
                 print("ERROR: 'uuid' not found in Hiddify API response.")
                 return None
 
-            if SUB_DOMAINS:
-                subscription_domain = random.choice(SUB_DOMAINS)
-            else:
-                subscription_domain = PANEL_DOMAIN
-            
-            subscription_url = f"https://{subscription_domain}/{ADMIN_PATH}/{user_uuid}/sub/"
-            
-            print(f"SUCCESS: User {user_name} created. Sub Link: {subscription_url}")
-            return {"link": subscription_url, "uuid": user_uuid}
+            # ما لینک اصلی پروفایل (که در پاسخ API آمده) را برای ذخیره در دیتابیس نیاز داریم
+            # اما برای انتخاب کاربر، دیکشنری لینک‌ها را می‌سازیم
+            full_profile_url = user_data.get("subscription_url", "")
+
+            print(f"SUCCESS: User '{user_name}' created successfully.")
+            return {"full_link": full_profile_url, "uuid": user_uuid}
         else:
-            print(f"ERROR (Create User): Hiddify API returned an unsuccessful status code.")
+            print(f"ERROR (Create User): Hiddify API returned {response.status_code} -> {response.text}")
             return None
     except Exception as e:
         print(f"ERROR (Create User Exception): {e}"); return None
