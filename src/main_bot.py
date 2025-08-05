@@ -88,9 +88,14 @@ async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
             expiry_date_display = "N/A"
             is_expired = True
 
-            if start_date_str and package_days > 0:
+            if package_days > 0:
                 try:
-                    start_date_obj = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+                    # اگر start_date وجود نداشت (برای کاربران جدید)، از تاریخ امروز استفاده کن
+                    if not start_date_str:
+                        start_date_obj = datetime.now().date()
+                    else:
+                        start_date_obj = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+                    
                     expiry_date_obj = start_date_obj + timedelta(days=package_days)
                     expiry_date_display = expiry_date_obj.strftime("%Y-%m-%d")
                     is_expired = expiry_date_obj < datetime.now().date()
