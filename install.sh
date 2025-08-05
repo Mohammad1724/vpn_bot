@@ -61,30 +61,26 @@ cp src/config_template.py $CONFIG_FILE
 read -p "Enter your Telegram Bot Token: " BOT_TOKEN
 read -p "Enter your numeric Telegram Admin ID: " ADMIN_ID
 read -p "Enter your Hiddify panel domain (e.g., mypanel.com): " PANEL_DOMAIN
-read -p "Enter your Hiddify admin secret path: " ADMIN_PATH
+read -p "Enter your Hiddify ADMIN secret path: " ADMIN_PATH
+read -p "Enter your Hiddify SUBSCRIPTION secret path: " SUB_PATH
 read -p "Enter your Hiddify API Key: " API_KEY
 read -p "Enter your support Telegram username (without @): " SUPPORT_USERNAME
 
-print_color "yellow" "\nEnter your subscription domains, separated by a comma."
-print_color "yellow" "Example: sub1.domain.com,sub2.domain.com"
-print_color "yellow" "If you want to use the main panel domain, just press Enter."
+print_color "yellow" "\nEnter your subscription domains, separated by a comma (or press Enter to use panel domain)."
 read -p "Subscription Domains: " SUB_DOMAINS_INPUT
 
-PYTHON_LIST_FORMAT="[]" # Default to empty list
+PYTHON_LIST_FORMAT="[]"
 if [ -n "$SUB_DOMAINS_INPUT" ]; then
     PYTHON_LIST_FORMAT="[\"${SUB_DOMAINS_INPUT//,/'\", \"'}\"]"
 fi
 
 sed -i "s|YOUR_BOT_TOKEN_HERE|${BOT_TOKEN}|" $CONFIG_FILE
-sed -i "s|ADMIN_ID = 0|ADMIN_ID = ${ADMIN_ID}|" $CONFIG_FILE
+sed -i "s|ADMIN_ID = 0|${ADMIN_ID}|" $CONFIG_FILE
 sed -i "s|YOUR_PANEL_DOMAIN_HERE|${PANEL_DOMAIN}|" $CONFIG_FILE
 sed -i "s|YOUR_ADMIN_SECRET_PATH_HERE|${ADMIN_PATH}|" $CONFIG_FILE
+sed -i "s|YOUR_SUBSCRIPTION_SECRET_PATH_HERE|${SUB_PATH}|" $CONFIG_FILE
 sed -i "s|YOUR_HIDDIFY_API_KEY_HERE|${API_KEY}|" $CONFIG_FILE
 sed -i "s|YOUR_SUPPORT_USERNAME|${SUPPORT_USERNAME}|" $CONFIG_FILE
-
-# <<<< اصلاحیه کلیدی برای رفع باگ SyntaxError >>>>
-# This command finds the line containing "SUB_DOMAINS =" and replaces the entire line.
-# This is much safer than trying to replace the brackets.
 sed -i "/SUB_DOMAINS =/c\SUB_DOMAINS = ${PYTHON_LIST_FORMAT}" $CONFIG_FILE
 
 print_color "green" "Configuration file created successfully."
