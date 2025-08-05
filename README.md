@@ -40,7 +40,7 @@ sudo bash -c "$(curl -sL https://raw.githubusercontent.com/Mohammad1724/vpn_bot/
 
 
 ---
-## حذف کامل ربات
+## **حذف_کامل_ربات**
 
 
 ```bash
