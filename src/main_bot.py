@@ -245,14 +245,19 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN); return SETTINGS_MENU
 async def handle_settings_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     next_state = context.user_data.get('next_state')
+    if not next_state:
+        await update.message.reply_text("لطفا ابتدا یکی از گزینه‌های ویرایش را از طریق دکمه‌های شیشه‌ای انتخاب کنید.")
+        return SETTINGS_MENU
     if next_state == SET_CARD_NUMBER:
         db.set_setting('card_number', update.message.text)
         await update.message.reply_text("✅ شماره کارت به‌روز شد.")
     elif next_state == SET_CARD_HOLDER:
         db.set_setting('card_holder', update.message.text)
         await update.message.reply_text("✅ نام صاحب حساب به‌روز شد.")
+    if 'query_message_id' in context.user_data:
+        try: await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=context.user_data.pop('query_message_id'))
+        except Exception: pass
     context.user_data.clear()
-    await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=context.user_data.pop('query_message_id'))
     await settings_menu(update, context)
     return SETTINGS_MENU
 
@@ -273,7 +278,15 @@ def main():
     gift_handler = ConversationHandler(entry_points=[MessageHandler(filters.Regex('^🎁 کد هدیه$') & user_filter, gift_code_entry)], states={REDEEM_GIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, redeem_gift_code)]}, fallbacks=[MessageHandler(filters.Regex('^لغو$'), start)])
     charge_handler = ConversationHandler(entry_points=[CallbackQueryHandler(charge_start, pattern='^start_charge$')], states={CHARGE_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, charge_amount_received)], CHARGE_RECEIPT: [MessageHandler(filters.PHOTO, charge_receipt_received)]}, fallbacks=[MessageHandler(filters.Regex('^لغو$'), start)])
     
-    plan_sub_handler = ConversationHandler(entry_points=[MessageHandler(filters.Regex('^➕ افزودن پلن جدید$') & admin_filter, add_plan_start)], states={PLAN_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_name_received)], PLAN_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_price_received)], PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_days_received)], PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_gb_received)],}, fallbacks=[MessageHandler(filters.Regex('^لغو$'), back_to_admin_menu)], map_to_parent={ADMIN_MENU: ADMIN_MENU})
+    plan_sub_handler = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex('^➕ افزودن پلن جدید$') & admin_filter, add_plan_start)],
+        states={
+            PLAN_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_name_received)],
+            PLAN_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_price_received)],
+            PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_days_received)],
+            PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_gb_received)],
+        }, fallbacks=[MessageHandler(filters.Regex('^لغو$'), back_to_admin_menu)], map_to_parent={ADMIN_MENU: ADMIN_MENU}
+    )
 
     admin_conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^👑 ورود به پنل ادمین$') & admin_filter, admin_entry)],
@@ -291,7 +304,8 @@ def main():
             ],
             SETTINGS_MENU: [
                 CallbackQueryHandler(button_handler),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_settings_text)
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_settings_text),
+                MessageHandler(filters.Regex('^بازگشت به منوی ادمین$') & admin_filter, back_to_admin_menu),
             ],
         },
         fallbacks=[MessageHandler(filters.Regex('^↩️ خروج از پنل$') & admin_filter, exit_admin_panel)]
