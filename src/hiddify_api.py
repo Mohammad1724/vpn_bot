@@ -2,7 +2,7 @@ import requests
 import json
 import uuid
 import random
-from config import PANEL_DOMAIN, ADMIN_PATH, API_KEY, SUB_DOMAINS
+from config import PANEL_DOMAIN, ADMIN_PATH, API_KEY, SUB_DOMAINS, SUB_PATH
 
 def _get_base_url():
     return f"https://{PANEL_DOMAIN}/{ADMIN_PATH}/api/v2/admin/"
@@ -26,10 +26,13 @@ def create_hiddify_user(plan_days, plan_gb, user_telegram_id=None):
                 print("ERROR: 'uuid' not found in Hiddify API response.")
                 return None
 
-            # ما لینک اصلی پروفایل (که در پاسخ API آمده) را برای ذخیره در دیتابیس نیاز داریم
-            # اما برای انتخاب کاربر، دیکشنری لینک‌ها را می‌سازیم
-            full_profile_url = user_data.get("subscription_url", "")
-
+            # Determine the path and domain for subscription links
+            subscription_path = SUB_PATH if SUB_PATH else ADMIN_PATH
+            subscription_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
+            
+            # The full profile link to be stored in the database
+            full_profile_url = f"https://{subscription_domain}/{subscription_path}/{user_uuid}/"
+            
             print(f"SUCCESS: User '{user_name}' created successfully.")
             return {"full_link": full_profile_url, "uuid": user_uuid}
         else:
