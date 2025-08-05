@@ -157,7 +157,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         subscription_path = SUB_PATH or ADMIN_PATH
         subscription_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
         base_link = f"https://{subscription_domain}/{subscription_path}/{user_uuid}"
-        final_link = f"{base_link}/{link_type}/"
+        
+        user_info = hiddify_api.get_user_info(user_uuid)
+        config_name = user_info.get('name', 'config') if user_info else 'config'
+        
+        final_link = f"{base_link}/{link_type}/?asn=unknown#{config_name}"
+        
         await query.message.reply_text(f"لینک اشتراک شما از نوع **{link_type.capitalize()}**:\n\n`{final_link}`\n\nبا کلیک روی لینک، کپی می‌شود.", parse_mode=ParseMode.MARKDOWN)
         await query.edit_message_text(f"✅ لینک اشتراک شما از نوع {link_type.capitalize()} ارسال شد.", reply_markup=None)
 
@@ -216,10 +221,11 @@ async def show_link_options(query_or_update, user_uuid, is_edit=True):
         [InlineKeyboardButton("💻 لینک استاندارد (Sub)", callback_data=f"getlink_sub_{user_uuid}")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    text = "لطفاً نوع لینک اشتراک مورد نظر خود را انتخاب کنید:"
+    text = "✅ سرویس شما با موفقیت ساخته شد! لطفاً نوع لینک اشتراک مورد نظر خود را انتخاب کنید:"
     if is_edit:
         await query_or_update.edit_message_text(text, reply_markup=reply_markup)
     else:
+        # This is for the "showlinks" case
         await query_or_update.message.reply_text(text, reply_markup=reply_markup)
 
 # --- ADMIN CONVERSATION & FUNCTIONS ---
