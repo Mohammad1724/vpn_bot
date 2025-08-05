@@ -2,6 +2,7 @@ import logging
 import os
 import shutil
 import asyncio
+import random
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, InputFile
 from telegram.ext import (Application, CommandHandler, CallbackQueryHandler, MessageHandler, 
@@ -11,7 +12,7 @@ from telegram.error import Forbidden, BadRequest
 
 import database as db
 import hiddify_api
-from config import BOT_TOKEN, ADMIN_ID, SUPPORT_USERNAME
+from config import BOT_TOKEN, ADMIN_ID, SUPPORT_USERNAME, SUB_DOMAINS, ADMIN_PATH, PANEL_DOMAIN
 
 # Enable logging
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -85,14 +86,14 @@ async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
             is_expired = expiry_date_obj < datetime.now().date()
             status = "🔴 منقضی شده" if is_expired else "🟢 فعال"
             renewal_plan = db.get_plan(service['plan_id'])
-            message = (f"🔗 لینک: `{service['sub_link']}`\n"
+            message = (f"🔗 لینک پروفایل: `{service['sub_link']}`\n"
                        f"🗓️ تاریخ انقضا: {info.get('expiry_date', 'N/A')}\n"
                        f"📊 حجم مصرفی: {info.get('current_usage_GB', 0):.2f} / {info.get('usage_limit_GB', 0):.0f} گیگ\n"
                        f"🚦 وضعیت: {status}")
-            keyboard = None
+            keyboard = [[InlineKeyboardButton("📋 دریافت لینک‌های اشتراک", callback_data=f"showlinks_{service['sub_uuid']}")]]
             if renewal_plan and not is_expired:
-                 keyboard = [[InlineKeyboardButton(f"🔄 تمدید ({renewal_plan['price']:.0f} تومان)", callback_data=f"renew_{service['service_id']}_{renewal_plan['plan_id']}")]]
-            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None)
+                 keyboard.append([InlineKeyboardButton(f"🔄 تمدید ({renewal_plan['price']:.0f} تومان)", callback_data=f"renew_{service['service_id']}_{renewal_plan['plan_id']}")])
+            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
         else:
             await update.message.reply_text(f"خطا در دریافت اطلاعات برای لینک:\n`{service['sub_link']}`", parse_mode=ParseMode.MARKDOWN)
     await msg.delete()
@@ -135,29 +136,31 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = data[0]
 
     if action == "buy":
-        print(f"--- DEBUG: Buy action initiated by user {user_id} ---")
         plan_id = int(data[1]); plan = db.get_plan(plan_id); user = db.get_or_create_user(user_id)
-        if not plan: 
-            print("DEBUG: Plan not found."); await query.edit_message_text("❌ این پلن دیگر موجود نیست."); return
-        if user['balance'] < plan['price']: 
-            print("DEBUG: Insufficient balance."); await query.edit_message_text(f"موجودی شما کافی نیست!\nموجودی: {user['balance']:.0f} تومان\nقیمت پلن: {plan['price']:.0f} تومان"); return
-        try: await query.message.delete()
-        except Exception: pass
-        msg_loading = await context.bot.send_message(chat_id=user_id, text="در حال ساخت سرویس شما... ⏳")
+        if not plan: await query.edit_message_text("❌ این پلن دیگر موجود نیست."); return
+        if user['balance'] < plan['price']: await query.edit_message_text(f"موجودی شما کافی نیست!\nموجودی: {user['balance']:.0f} تومان\nقیمت پلن: {plan['price']:.0f} تومان"); return
+        await query.edit_message_text("در حال ساخت سرویس شما... ⏳")
         result = hiddify_api.create_hiddify_user(plan['days'], plan['gb'], user_id)
-        print(f"DEBUG: Result from hiddify_api: {result}")
-        await msg_loading.delete()
-        if result and result.get('link'):
-            print("DEBUG: Link creation successful. Proceeding to update database and send link.")
+        if result and result.get('uuid'):
             db.update_balance(user_id, plan['price'], add=False)
-            db.add_active_service(user_id, result['uuid'], result['link'], plan['plan_id'], plan['days'])
+            db.add_active_service(user_id, result['uuid'], result['full_link'], plan['plan_id'], plan['days'])
             db.log_sale(user_id, plan['plan_id'], plan['price'])
-            final_message = f"✅ سرویس شما با موفقیت ساخته شد!\n\nلینک اتصال:\n`{result['link']}`\n\nبا کلیک روی لینک، به صورت خودکار کپی می‌شود."
-            await context.bot.send_message(chat_id=user_id, text=final_message, parse_mode=ParseMode.MARKDOWN)
-        else:
-            print("ERROR: Link creation failed. 'result' is None or does not contain a link.")
-            await context.bot.send_message(chat_id=user_id, text="❌ متاسفانه در ساخت سرویس مشکلی پیش آمد. لطفا به پشتیبانی اطلاع دهید.")
-    
+            await show_link_options(query, result['uuid'])
+        else: await query.edit_message_text("❌ متاسفانه در ساخت سرویس مشکلی پیش آمد. لطفا به پشتیبانی اطلاع دهید.")
+
+    elif action == "showlinks":
+        user_uuid = data[1]
+        await show_link_options(query, user_uuid)
+
+    elif action == "getlink":
+        link_type = data[1]; user_uuid = data[2]
+        if SUB_DOMAINS: subscription_domain = random.choice(SUB_DOMAINS)
+        else: subscription_domain = PANEL_DOMAIN
+        base_link = f"https://{subscription_domain}/{ADMIN_PATH}/{user_uuid}"
+        final_link = f"{base_link}/{link_type}/"
+        await query.message.reply_text(f"لینک اشتراک شما از نوع **{link_type.capitalize()}**:\n\n`{final_link}`\n\nبا کلیک روی لینک، کپی می‌شود.", parse_mode=ParseMode.MARKDOWN)
+        await query.edit_message_text(f"✅ لینک اشتراک شما از نوع {link_type.capitalize()} ارسال شد.", reply_markup=None)
+
     elif action == "renew":
         service_id, plan_id_to_renew = int(data[1]), int(data[2])
         service, plan, user = db.get_service(service_id), db.get_plan(plan_id_to_renew), db.get_or_create_user(user_id)
@@ -205,6 +208,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data[1] == "card" and data[2] == "holder":
             await query.message.reply_text(f"نام صاحب حساب فعلی: {db.get_setting('card_holder')}\nنام جدید را وارد کنید:")
             context.user_data['next_state'] = SET_CARD_HOLDER
+
+async def show_link_options(query, user_uuid):
+    keyboard = [
+        [InlineKeyboardButton("🔗 لینک هوشمند (Auto)", callback_data=f"getlink_auto_{user_uuid}")],
+        [InlineKeyboardButton("📱 لینک SingBox", callback_data=f"getlink_singbox_{user_uuid}")],
+        [InlineKeyboardButton("💻 لینک استاندارد (Sub)", callback_data=f"getlink_sub_{user_uuid}")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.edit_message_text("✅ سرویس شما با موفقیت ساخته شد! لطفاً نوع لینک اشتراک مورد نظر خود را انتخاب کنید:", reply_markup=reply_markup)
 
 # --- ADMIN CONVERSATION & FUNCTIONS ---
 async def admin_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
