@@ -38,7 +38,7 @@ fi
 read -p "Enter the bot's installation directory [${DEFAULT_INSTALL_DIR}]: " INSTALL_DIR
 INSTALL_DIR=${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}
 
-if [ -d "$INSTALL_DIR" ]; {
+if [ -d "$INSTALL_DIR" ]; then
     read -p "Are you sure you want to permanently delete all bot files from ${INSTALL_DIR}? [y/N]: " CONFIRM
     if [[ "$CONFIRM" =~ ^[yY]$ ]]; then
         print_color "yellow" "Removing installation directory..."
@@ -47,7 +47,6 @@ if [ -d "$INSTALL_DIR" ]; {
     else
         print_color "yellow" "Skipping directory removal."
     fi
-}
 fi
 
 print_color "green" "--- Uninstallation Complete ---"
