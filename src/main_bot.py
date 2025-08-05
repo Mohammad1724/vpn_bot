@@ -12,7 +12,7 @@ from telegram.error import Forbidden, BadRequest
 
 import database as db
 import hiddify_api
-from config import BOT_TOKEN, ADMIN_ID, SUPPORT_USERNAME, SUB_DOMAINS, ADMIN_PATH, PANEL_DOMAIN
+from config import BOT_TOKEN, ADMIN_ID, SUPPORT_USERNAME, SUB_DOMAINS, ADMIN_PATH, PANEL_DOMAIN, SUB_PATH
 
 # Enable logging
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -147,16 +147,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             db.log_sale(user_id, plan['plan_id'], plan['price'])
             await show_link_options(query, result['uuid'])
         else: await query.edit_message_text("❌ متاسفانه در ساخت سرویس مشکلی پیش آمد. لطفا به پشتیبانی اطلاع دهید.")
-
+    
     elif action == "showlinks":
         user_uuid = data[1]
-        await show_link_options(query, user_uuid)
+        await show_link_options(query, user_uuid, is_edit=False)
 
     elif action == "getlink":
-        link_type = data[1]; user_uuid = data[2]
-        if SUB_DOMAINS: subscription_domain = random.choice(SUB_DOMAINS)
-        else: subscription_domain = PANEL_DOMAIN
-        base_link = f"https://{subscription_domain}/{ADMIN_PATH}/{user_uuid}"
+        link_type, user_uuid = data[1], data[2]
+        subscription_path = SUB_PATH or ADMIN_PATH
+        subscription_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
+        base_link = f"https://{subscription_domain}/{subscription_path}/{user_uuid}"
         final_link = f"{base_link}/{link_type}/"
         await query.message.reply_text(f"لینک اشتراک شما از نوع **{link_type.capitalize()}**:\n\n`{final_link}`\n\nبا کلیک روی لینک، کپی می‌شود.", parse_mode=ParseMode.MARKDOWN)
         await query.edit_message_text(f"✅ لینک اشتراک شما از نوع {link_type.capitalize()} ارسال شد.", reply_markup=None)
@@ -209,14 +209,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text(f"نام صاحب حساب فعلی: {db.get_setting('card_holder')}\nنام جدید را وارد کنید:")
             context.user_data['next_state'] = SET_CARD_HOLDER
 
-async def show_link_options(query, user_uuid):
+async def show_link_options(query_or_update, user_uuid, is_edit=True):
     keyboard = [
         [InlineKeyboardButton("🔗 لینک هوشمند (Auto)", callback_data=f"getlink_auto_{user_uuid}")],
         [InlineKeyboardButton("📱 لینک SingBox", callback_data=f"getlink_singbox_{user_uuid}")],
         [InlineKeyboardButton("💻 لینک استاندارد (Sub)", callback_data=f"getlink_sub_{user_uuid}")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text("✅ سرویس شما با موفقیت ساخته شد! لطفاً نوع لینک اشتراک مورد نظر خود را انتخاب کنید:", reply_markup=reply_markup)
+    text = "لطفاً نوع لینک اشتراک مورد نظر خود را انتخاب کنید:"
+    if is_edit:
+        await query_or_update.edit_message_text(text, reply_markup=reply_markup)
+    else:
+        await query_or_update.message.reply_text(text, reply_markup=reply_markup)
 
 # --- ADMIN CONVERSATION & FUNCTIONS ---
 async def admin_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
