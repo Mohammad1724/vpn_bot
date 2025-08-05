@@ -1,10 +1,23 @@
-# .gitignore
+# HiddifyBotProject/.gitignore
+
+# Python cache
 __pycache__/
 *.pyc
+*.pyo
+
+# Virtual environment
 venv/
-.env
+.venv/
+env/
+venv.bak/
+
+# Sensitive user-specific files
+src/config.py
+
+# Database files
 *.db
-payments.db
-used_configs.txt
+*.db-journal
+*.sqlite3
+
+# Log files
 *.log
-*.zip
