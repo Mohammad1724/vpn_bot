@@ -1,6 +1,6 @@
 # --- Telegram Bot Configuration ---
 BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
-ADMIN_ID = 0
+ADMIN_ID = 0 
 
 # --- Hiddify Panel Configuration ---
 PANEL_DOMAIN = "YOUR_PANEL_DOMAIN_HERE"
