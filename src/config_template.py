@@ -1,4 +1,4 @@
-# src/config_template.py
+# HiddifyBotProject/src/config_template.py
 
 # --- Telegram Bot Configuration ---
 BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
