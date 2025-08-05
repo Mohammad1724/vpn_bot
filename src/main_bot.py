@@ -245,20 +245,19 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_settings_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     next_state = context.user_data.get('next_state')
     if not next_state:
-        await update.message.reply_text("دستور نامشخص. لطفا از دکمه‌ها استفاده کنید.")
-        return SETTINGS_MENU
+        await update.message.reply_text("به منوی اصلی ادمین بازگشتید.", reply_markup=get_admin_menu_keyboard())
+        return ADMIN_MENU
     if next_state == SET_CARD_NUMBER:
         db.set_setting('card_number', update.message.text)
-        await update.message.reply_text("✅ شماره کارت به‌روز شد.")
+        await update.message.reply_text("✅ شماره کارت به‌روز شد.", reply_markup=get_admin_menu_keyboard())
     elif next_state == SET_CARD_HOLDER:
         db.set_setting('card_holder', update.message.text)
-        await update.message.reply_text("✅ نام صاحب حساب به‌روز شد.")
+        await update.message.reply_text("✅ نام صاحب حساب به‌روز شد.", reply_markup=get_admin_menu_keyboard())
     if 'query_message_id' in context.user_data:
         try: await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=context.user_data.pop('query_message_id'))
         except Exception: pass
     context.user_data.clear()
-    await settings_menu(update, context) # Show updated settings
-    return SETTINGS_MENU
+    return ADMIN_MENU
 
 async def shutdown_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("ربات در حال خاموش شدن است...")
