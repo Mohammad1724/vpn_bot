@@ -139,20 +139,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         plan_id = int(data[1]); plan = db.get_plan(plan_id); user = db.get_or_create_user(user_id)
         if not plan: await query.edit_message_text("❌ این پلن دیگر موجود نیست."); return
         if user['balance'] < plan['price']: await query.edit_message_text(f"موجودی شما کافی نیست!\nموجودی: {user['balance']:.0f} تومان\nقیمت پلن: {plan['price']:.0f} تومان"); return
-        
-        await query.message.delete() # <<< اصلاح شد: حذف پیام "لطفا انتخاب کنید"
-        msg_loading = await context.bot.send_message(chat_id=user_id, text="در حال ساخت سرویس شما... ⏳")
-        
+        await query.edit_message_text("در حال ساخت سرویس شما... ⏳")
         result = hiddify_api.create_hiddify_user(plan['days'], plan['gb'], user_id)
-        
-        await msg_loading.delete() # <<< اصلاح شد: حذف پیام "در حال ساخت"
         if result and result.get('link'):
             db.update_balance(user_id, plan['price'], add=False)
             db.add_active_service(user_id, result['uuid'], result['link'], plan['plan_id'], plan['days'])
             db.log_sale(user_id, plan['plan_id'], plan['price'])
-            await context.bot.send_message(chat_id=user_id, text=f"✅ سرویس شما با موفقیت ساخته شد!\n\nلینک اتصال:\n`{result['link']}`\n\nبا کلیک روی لینک، به صورت خودکار کپی می‌شود.", parse_mode=ParseMode.MARKDOWN) # <<< اصلاح شد: ارسال پیام جدید
-        else:
-            await context.bot.send_message(chat_id=user_id, text="❌ متاسفانه در ساخت سرویس مشکلی پیش آمد. لطفا به پشتیبانی اطلاع دهید.")
+            final_message = f"✅ سرویس شما با موفقیت ساخته شد!\n\nلینک اتصال:\n`{result['link']}`\n\nبا کلیک روی لینک، به صورت خودکار کپی می‌شود."
+            await query.edit_message_text(text=final_message, parse_mode=ParseMode.MARKDOWN)
+        else: await query.edit_message_text("❌ متاسفانه در ساخت سرویس مشکلی پیش آمد. لطفا به پشتیبانی اطلاع دهید.")
     
     elif action == "renew":
         service_id, plan_id_to_renew = int(data[1]), int(data[2])
@@ -169,22 +164,32 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif action == "confirm" and data[1] == "charge" and user_id == ADMIN_ID:
         target_user_id, amount = int(data[2]), int(data[3])
         db.update_balance(target_user_id, amount, add=True)
-        await query.edit_message_text(f"✅ با موفقیت مبلغ {amount:,} تومان به حساب کاربر {target_user_id} اضافه شد.", reply_markup=None) # <<< اصلاح شد: حذف دکمه‌ها
+        user_message_sent = False
         try:
-            await context.bot.send_message(chat_id=target_user_id, text=f"حساب شما با موفقیت به مبلغ **{amount:,} تومان** شارژ شد!", parse_mode=ParseMode.MARKDOWN) # <<< اصلاح شد: ارسال پیام به کاربر
-        except (Forbidden, BadRequest): await query.message.reply_text("⚠️ کاربر ربات را بلاک کرده و پیام اطلاع‌رسانی ارسال نشد.")
-            
+            await context.bot.send_message(chat_id=target_user_id, text=f"حساب شما با موفقیت به مبلغ **{amount:,} تومان** شارژ شد!", parse_mode=ParseMode.MARKDOWN)
+            user_message_sent = True
+        except (Forbidden, BadRequest): pass
+        admin_feedback_message = f"✅ با موفقیت مبلغ {amount:,} تومان به حساب کاربر {target_user_id} اضافه شد."
+        if not user_message_sent: admin_feedback_message += "\n\n⚠️ **اخطار:** کاربر ربات را بلاک کرده و پیام اطلاع‌رسانی برای او ارسال نشد."
+        await query.edit_message_caption(caption=admin_feedback_message, reply_markup=None, parse_mode=ParseMode.MARKDOWN)
+
     elif action == "reject" and data[1] == "charge" and user_id == ADMIN_ID:
         target_user_id = int(data[2])
-        await query.edit_message_text(f"❌ درخواست شارژ کاربر {target_user_id} رد شد.", reply_markup=None) # <<< اصلاح شد: حذف دکمه‌ها
-        try: await context.bot.send_message(chat_id=target_user_id, text="متاسفانه درخواست شارژ حساب شما توسط ادمین رد شد.")
-        except (Forbidden, BadRequest): await query.message.reply_text("⚠️ کاربر ربات را بلاک کرده.")
+        user_message_sent = False
+        try:
+            await context.bot.send_message(chat_id=target_user_id, text="متاسفانه درخواست شارژ حساب شما توسط ادمین رد شد.")
+            user_message_sent = True
+        except (Forbidden, BadRequest): pass
+        admin_feedback_message = f"❌ درخواست شارژ کاربر {target_user_id} رد شد."
+        if not user_message_sent: admin_feedback_message += "\n\n⚠️ **اخطار:** کاربر ربات را بلاک کرده و پیام اطلاع‌رسانی برای او ارسال نشد."
+        await query.edit_message_caption(caption=admin_feedback_message, reply_markup=None, parse_mode=ParseMode.MARKDOWN)
     
     elif action == "delete" and data[1] == "plan" and user_id == ADMIN_ID:
         plan_id_to_delete = int(data[2]); db.delete_plan(plan_id_to_delete)
         await query.edit_message_text("پلن با موفقیت حذف شد.")
     
-    elif action == "edit" and user_id == ADMIN_ID: # <<< اصلاح شد: اضافه شدن هندلر برای دکمه‌های تنظیمات
+    elif action == "edit" and user_id == ADMIN_ID:
+        context.user_data['query_message_id'] = query.message.message_id
         if data[1] == "card" and data[2] == "number":
             await query.message.reply_text(f"شماره کارت فعلی: {db.get_setting('card_number')}\nشماره کارت جدید را وارد کنید:")
             context.user_data['next_state'] = SET_CARD_NUMBER
@@ -238,15 +243,18 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (f"⚙️ **تنظیمات ربات**\n\nشماره کارت فعلی: `{card_number}`\nصاحب حساب فعلی: `{card_holder}`")
     keyboard = [[InlineKeyboardButton("ویرایش شماره کارت", callback_data="edit_card_number"), InlineKeyboardButton("ویرایش نام صاحب حساب", callback_data="edit_card_holder")]]
     await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN); return SETTINGS_MENU
-async def handle_settings_text(update: Update, context: ContextTypes.DEFAULT_TYPE): # <<< اصلاح شد: تابع جدید برای مدیریت ورودی‌های تنظیمات
+async def handle_settings_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     next_state = context.user_data.get('next_state')
     if next_state == SET_CARD_NUMBER:
         db.set_setting('card_number', update.message.text)
-        await update.message.reply_text("✅ شماره کارت به‌روز شد.", reply_markup=get_admin_menu_keyboard());
+        await update.message.reply_text("✅ شماره کارت به‌روز شد.")
     elif next_state == SET_CARD_HOLDER:
         db.set_setting('card_holder', update.message.text)
-        await update.message.reply_text("✅ نام صاحب حساب به‌روز شد.", reply_markup=get_admin_menu_keyboard());
-    context.user_data.clear(); return ADMIN_MENU
+        await update.message.reply_text("✅ نام صاحب حساب به‌روز شد.")
+    context.user_data.clear()
+    await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=context.user_data.pop('query_message_id'))
+    await settings_menu(update, context)
+    return SETTINGS_MENU
 
 async def shutdown_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("ربات در حال خاموش شدن است...")
@@ -265,15 +273,7 @@ def main():
     gift_handler = ConversationHandler(entry_points=[MessageHandler(filters.Regex('^🎁 کد هدیه$') & user_filter, gift_code_entry)], states={REDEEM_GIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, redeem_gift_code)]}, fallbacks=[MessageHandler(filters.Regex('^لغو$'), start)])
     charge_handler = ConversationHandler(entry_points=[CallbackQueryHandler(charge_start, pattern='^start_charge$')], states={CHARGE_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, charge_amount_received)], CHARGE_RECEIPT: [MessageHandler(filters.PHOTO, charge_receipt_received)]}, fallbacks=[MessageHandler(filters.Regex('^لغو$'), start)])
     
-    plan_sub_handler = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex('^➕ افزودن پلن جدید$') & admin_filter, add_plan_start)],
-        states={
-            PLAN_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_name_received)],
-            PLAN_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_price_received)],
-            PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_days_received)],
-            PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_gb_received)],
-        }, fallbacks=[MessageHandler(filters.Regex('^لغو$'), back_to_admin_menu)], map_to_parent={ADMIN_MENU: ADMIN_MENU}
-    )
+    plan_sub_handler = ConversationHandler(entry_points=[MessageHandler(filters.Regex('^➕ افزودن پلن جدید$') & admin_filter, add_plan_start)], states={PLAN_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_name_received)], PLAN_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_price_received)], PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_days_received)], PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_gb_received)],}, fallbacks=[MessageHandler(filters.Regex('^لغو$'), back_to_admin_menu)], map_to_parent={ADMIN_MENU: ADMIN_MENU})
 
     admin_conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^👑 ورود به پنل ادمین$') & admin_filter, admin_entry)],
@@ -290,16 +290,14 @@ def main():
                 MessageHandler(filters.Regex('^بازگشت به منوی ادمین$') & admin_filter, back_to_admin_menu),
             ],
             SETTINGS_MENU: [
-                CallbackQueryHandler(button_handler), # <<< اصلاح شد: برای دریافت کلیک روی دکمه‌های ویرایش
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_settings_text) # <<< اصلاح شد: برای دریافت متن جدید
+                CallbackQueryHandler(button_handler),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_settings_text)
             ],
-        }, fallbacks=[MessageHandler(filters.Regex('^↩️ خروج از پنل$') & admin_filter, exit_admin_panel)]
+        },
+        fallbacks=[MessageHandler(filters.Regex('^↩️ خروج از پنل$') & admin_filter, exit_admin_panel)]
     )
-
-    application.add_handler(admin_conv_handler)
-    application.add_handler(gift_handler); application.add_handler(charge_handler)
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(admin_conv_handler); application.add_handler(gift_handler); application.add_handler(charge_handler)
+    application.add_handler(CommandHandler("start", start)); application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.Regex('^🛍️ خرید سرویس$') & user_filter, buy_service_list))
     application.add_handler(MessageHandler(filters.Regex('^📋 سرویس‌های من$') & user_filter, list_my_services))
     application.add_handler(MessageHandler(filters.Regex('^💰 موجودی و شارژ$') & user_filter, show_balance))
