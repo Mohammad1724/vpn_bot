@@ -74,14 +74,17 @@ if [ -n "$SUB_DOMAINS_INPUT" ]; then
     PYTHON_LIST_FORMAT="[\"${SUB_DOMAINS_INPUT//,/'\", \"'}\"]"
 fi
 
-sed -i "s|YOUR_BOT_TOKEN_HERE|${BOT_TOKEN}|" $CONFIG_FILE
-sed -i "s|ADMIN_ID = 0|${ADMIN_ID}|" $CONFIG_FILE
-sed -i "s|YOUR_PANEL_DOMAIN_HERE|${PANEL_DOMAIN}|" $CONFIG_FILE
-sed -i "s|YOUR_ADMIN_SECRET_PATH_HERE|${ADMIN_PATH}|" $CONFIG_FILE
-sed -i "s|YOUR_SUBSCRIPTION_SECRET_PATH_HERE|${SUB_PATH}|" $CONFIG_FILE
-sed -i "s|YOUR_HIDDIFY_API_KEY_HERE|${API_KEY}|" $CONFIG_FILE
-sed -i "s|YOUR_SUPPORT_USERNAME|${SUPPORT_USERNAME}|" $CONFIG_FILE
-sed -i "/SUB_DOMAINS =/c\SUB_DOMAINS = ${PYTHON_LIST_FORMAT}" $CONFIG_FILE
+# --- <<<< اصلاحیه کلیدی: استفاده از روش جایگزینی خط کامل >>>> ---
+# This method finds the line starting with the variable name and replaces the entire line.
+# It's much more robust than replacing a specific value.
+sed -i "/^BOT_TOKEN =/c\BOT_TOKEN = \"${BOT_TOKEN}\"" $CONFIG_FILE
+sed -i "/^ADMIN_ID =/c\ADMIN_ID = ${ADMIN_ID}" $CONFIG_FILE
+sed -i "/^PANEL_DOMAIN =/c\PANEL_DOMAIN = \"${PANEL_DOMAIN}\"" $CONFIG_FILE
+sed -i "/^ADMIN_PATH =/c\ADMIN_PATH = \"${ADMIN_PATH}\"" $CONFIG_FILE
+sed -i "/^SUB_PATH =/c\SUB_PATH = \"${SUB_PATH}\"" $CONFIG_FILE
+sed -i "/^API_KEY =/c\API_KEY = \"${API_KEY}\"" $CONFIG_FILE
+sed -i "/^SUPPORT_USERNAME =/c\SUPPORT_USERNAME = \"${SUPPORT_USERNAME}\"" $CONFIG_FILE
+sed -i "/^SUB_DOMAINS =/c\SUB_DOMAINS = ${PYTHON_LIST_FORMAT}" $CONFIG_FILE
 
 print_color "green" "Configuration file created successfully."
 
