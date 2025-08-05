@@ -40,8 +40,6 @@ sudo bash -c "$(curl -sL https://raw.githubusercontent.com/Mohammad1724/vpn_bot/
 
 
 ---
-## **حذف_کامل_ربات**
 
 
-```bash
-sudo bash -c "$(curl -sL https://raw.githubusercontent.com/Mohammad1724/vpn_bot/main/install.sh)"
+## **حذف**
