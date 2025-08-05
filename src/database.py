@@ -7,20 +7,24 @@ DB_NAME = "vpn_bot.db"
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    # جدول کاربران
-    cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, balance REAL DEFAULT 0.0, join_date TEXT)')
-    # جدول پلن‌ها
+    # Users: added is_banned column
+    cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, balance REAL DEFAULT 0.0, join_date TEXT, is_banned INTEGER DEFAULT 0)')
+    # Plans: no change
     cursor.execute('CREATE TABLE IF NOT EXISTS plans (plan_id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, price REAL NOT NULL, days INTEGER NOT NULL, gb INTEGER NOT NULL)')
-    # جدول تنظیمات
+    # Settings: no change
     cursor.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)')
-    # جدول سرویس‌های فعال کاربران
+    # Active Services: no change
     cursor.execute('CREATE TABLE IF NOT EXISTS active_services (service_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, sub_uuid TEXT, sub_link TEXT, expiry_date TEXT, plan_id INTEGER)')
-    # جدول فروش‌ها برای آمار
+    # Sales: no change
     cursor.execute('CREATE TABLE IF NOT EXISTS sales (sale_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, plan_id INTEGER, price REAL, sale_date TEXT)')
-    # جدول کدهای هدیه
+    # Gift Codes: no change
     cursor.execute('CREATE TABLE IF NOT EXISTS gift_codes (code TEXT PRIMARY KEY, amount REAL, usage_limit INTEGER, used_count INTEGER DEFAULT 0)')
+    # New Table: Tickets
+    cursor.execute('CREATE TABLE IF NOT EXISTS tickets (ticket_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, subject TEXT, status TEXT DEFAULT "open", creation_date TEXT)')
+    # New Table: Ticket Messages
+    cursor.execute('CREATE TABLE IF NOT EXISTS ticket_messages (message_id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id INTEGER, sender_id INTEGER, message_text TEXT, timestamp TEXT)')
+    
     conn.commit()
-    # مقداردهی اولیه تنظیمات
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_number', '0000-0000-0000-0000'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_holder', 'نام صاحب حساب'))
     conn.commit()
@@ -36,21 +40,30 @@ def set_setting(key, value):
 
 def get_or_create_user(user_id):
     conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
-    cursor.execute("SELECT user_id, balance FROM users WHERE user_id = ?", (user_id,)); user = cursor.fetchone()
+    cursor.execute("SELECT user_id, balance, is_banned FROM users WHERE user_id = ?", (user_id,)); user = cursor.fetchone()
     if not user:
         join_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute("INSERT INTO users (user_id, join_date) VALUES (?, ?)", (user_id, join_date)); conn.commit()
-        user = (user_id, 0.0)
-    conn.close(); return {"user_id": user[0], "balance": user[1]}
+        user = (user_id, 0.0, 0)
+    conn.close(); return {"user_id": user[0], "balance": user[1], "is_banned": bool(user[2])}
+def get_user(user_id):
+    conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
+    cursor.execute("SELECT user_id, balance, join_date, is_banned FROM users WHERE user_id = ?", (user_id,)); user = cursor.fetchone()
+    conn.close(); 
+    if not user: return None
+    return {"user_id": user[0], "balance": user[1], "join_date": user[2], "is_banned": bool(user[3])}
+def get_all_user_ids():
+    conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
+    cursor.execute("SELECT user_id FROM users WHERE is_banned = 0"); user_ids = [item[0] for item in cursor.fetchall()]
+    conn.close(); return user_ids
+def set_user_ban_status(user_id, is_banned):
+    conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
+    cursor.execute("UPDATE users SET is_banned = ? WHERE user_id = ?", (1 if is_banned else 0, user_id)); conn.commit(); conn.close()
 def update_balance(user_id, amount, add=True):
     conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
     if add: cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
     else: cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (amount, user_id))
     conn.commit(); conn.close()
-def get_all_user_ids():
-    conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
-    cursor.execute("SELECT user_id FROM users"); user_ids = [item[0] for item in cursor.fetchall()]
-    conn.close(); return user_ids
 
 def add_plan(name, price, days, gb):
     conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
@@ -70,11 +83,9 @@ def delete_plan(plan_id):
     conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
     cursor.execute("DELETE FROM plans WHERE plan_id = ?", (plan_id,)); conn.commit(); conn.close()
 
-# --- Active Services Functions ---
-def add_active_service(user_id, sub_uuid, sub_link, plan_id, days): # <<< اصلاح شد: plan_id اضافه شد
+def add_active_service(user_id, sub_uuid, sub_link, plan_id, days):
     conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
     expiry_date = (datetime.datetime.now() + datetime.timedelta(days=days)).strftime("%Y-%m-%d")
-    # <<< اصلاح شد: plan_id در دستور INSERT اضافه شد
     cursor.execute("INSERT INTO active_services (user_id, sub_uuid, sub_link, expiry_date, plan_id) VALUES (?, ?, ?, ?, ?)", (user_id, sub_uuid, sub_link, expiry_date, plan_id))
     conn.commit(); conn.close()
 def get_user_services(user_id):
@@ -84,7 +95,8 @@ def get_user_services(user_id):
     conn.close(); return services
 def renew_service(service_id, days):
     conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
-    current_expiry_str = cursor.execute("SELECT expiry_date FROM active_services WHERE service_id = ?", (service_id,)).fetchone()[0]
+    cursor.execute("SELECT expiry_date FROM active_services WHERE service_id = ?", (service_id,))
+    current_expiry_str = cursor.fetchone()[0]
     current_expiry = datetime.datetime.strptime(current_expiry_str, "%Y-%m-%d")
     start_date = max(current_expiry, datetime.datetime.now())
     new_expiry_date = (start_date + datetime.timedelta(days=days)).strftime("%Y-%m-%d")
@@ -96,7 +108,6 @@ def get_service(service_id):
     if not s: return None
     return {"service_id": s[0], "user_id": s[1], "sub_uuid": s[2], "sub_link": s[3], "expiry_date": s[4], "plan_id": s[5]}
 
-# --- Stats Functions ---
 def log_sale(user_id, plan_id, price):
     conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
     sale_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -108,7 +119,6 @@ def get_stats():
     sales_count, total_revenue = (sales_data[0] or 0, sales_data[1] or 0)
     conn.close(); return {"user_count": user_count, "sales_count": sales_count, "total_revenue": total_revenue}
 
-# --- Gift Code Functions ---
 def create_gift_code(amount, usage_limit):
     conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
     code = str(uuid.uuid4().hex[:10]).upper()
