@@ -1,35 +1,47 @@
 # hiddify_api.py
 
 import requests
-import config
+import json
+import uuid
+from config import PANEL_DOMAIN, ADMIN_PATH, API_KEY
 
-# URL پایه برای API v2 هیدیفای
-BASE_URL = f"https://{config.HIDDIFY_DOMAIN}/{config.HIDDIFY_PATH}/api/v2/"
-
-# هدرهای ثابت برای تمام درخواست‌ها
-# احراز هویت از طریق کلید API انجام می‌شود
+BASE_URL = f"https://{PANEL_DOMAIN}/{ADMIN_PATH}/api/v2/admin/"
 HEADERS = {
-    'Accept': 'application/json',
-    'Hiddify-API-Key': config.HIDDIFY_API_KEY
+    "Hiddify-API-Key": API_KEY,
+    "Content-Type": "application/json"
 }
 
-def get_panel_stats():
+def create_hiddify_user(plan_days, plan_gb, user_telegram_id=None):
     """
-    آمار کلی پنل را برای نمایش وضعیت دریافت می‌کند.
-    این تابع به عنوان تست اصلی اتصال هم عمل می‌کند.
+    با استفاده از پارامترهای صحیح Hiddify-API-Expanded کاربر ایجاد می‌کند.
     """
-    try:
-        api_url = f"{BASE_URL}server/status/"
-        response = requests.get(api_url, headers=HEADERS, timeout=15)
-        response.raise_for_status()  # اگر کد خطا بود، استثنا ایجاد می‌کند
-        return response.json()
-    except requests.exceptions.HTTPError as e:
-        print(f"خطای HTTP در دریافت آمار پنل: {e.response.status_code} - {e.response.text}")
-        return None
-    except requests.exceptions.RequestException as e:
-        print(f"خطای شبکه در دریافت آمار پنل: {e}")
-        return None
+    endpoint = BASE_URL + "user/"
+    
+    if user_telegram_id:
+        user_name = f"tg-{user_telegram_id}-{uuid.uuid4().hex[:4]}"
+        comment = f"Telegram user: {user_telegram_id}"
+    else:
+        user_name = f"test-user-{uuid.uuid4().hex[:8]}"
 
-# --- توابع آینده اینجا اضافه خواهند شد ---
-# def create_user(...):
-#     pass
+    payload = {
+        "name": user_name,
+        "package_days": int(plan_days),
+        "usage_limit_GB": int(plan_gb),
+        "comment": comment
+    }
+
+    try:
+        response = requests.post(endpoint, headers=HEADERS, data=json.dumps(payload), timeout=20)
+        
+        if response.status_code in [200, 201]:
+            user_data = response.json()
+            user_uuid = user_data.get('uuid')
+            subscription_url = f"https://{PANEL_DOMAIN}/{ADMIN_PATH}/{user_uuid}/"
+            print(f"SUCCESS: User {user_name} created successfully.")
+            return subscription_url
+        else:
+            print(f"ERROR: Hiddify API returned status {response.status_code} with message: {response.text}")
+            return None
+    except Exception as e:
+        print(f"ERROR: An exception occurred while connecting to Hiddify API: {e}")
+        return None
