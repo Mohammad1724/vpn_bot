@@ -1,26 +1,13 @@
 # config.py
 
-# =========================================
-#      بخش تنظیمات ربات تلگرام
-# =========================================
-# توکن ربات تلگرام خود را که از @BotFather گرفته‌اید، اینجا قرار دهید
-TELEGRAM_BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+# --- Telegram Bot Configuration ---
+# توکن ربات خود را از @BotFather بگیرید
+BOT_TOKEN = "TOKEN_BOT_TELEGRAM_KHOD_RA_INJA_VARED_KONID"
 
-# آیدی عددی اکانت ادمین اصلی در تلگرام
-# برای پیدا کردن آیدی خود به ربات @userinfobot پیام دهید
-ADMIN_ID = 123456789  # آیدی عددی خود را جایگزین کنید
+# آیدی عددی اکانت تلگرام خودتان به عنوان ادمین
+ADMIN_ID = 0  # <<<< این را حتما با آیدی عددی خودتان جایگزین کنید
 
-# =========================================
-#      بخش تنظیمات پنل Hiddify
-# =========================================
-# آدرس دامنه پنل خود را بدون https:// و / در انتها وارد کنید
-# مثال: panel.mydomain.com
-HIDDIFY_DOMAIN = "mrm33.iranshop21.monster"
-
-# مقدار Proxy Path که در تنظیمات پنل مشخص شده است
-# مثال: "my-secret-path"
-HIDDIFY_PATH = "UA3jz9Ii21F7IHIxm5"
-
-# کلید API که از داخل تنظیمات پنل هیدیفای پیدا کرده‌اید
-# این مهم‌ترین بخش است!
-HIDDIFY_API_KEY = "YOUR_HIDDIFY_API_KEY"
+# --- Hiddify Panel Configuration ---
+PANEL_DOMAIN = "testbot.iranshop21.ir"
+ADMIN_PATH = "doLBKIxxGEj"
+API_KEY = "eba2321e-9c2c-4e72-9107-04cdf1de4ead"
