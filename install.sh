@@ -74,6 +74,25 @@ if [ -n "$SUB_DOMAINS_INPUT" ]; then
     PYTHON_LIST_FORMAT="[\"${SUB_DOMAINS_INPUT//,/'\", \"'}\"]"
 fi
 
+# --- <<<< بخش جدید برای پرسیدن تنظیمات سرویس تست >>>> ---
+print_color "blue" "\n--- Free Trial Configuration ---"
+read -p "Do you want to enable the free trial service? [Y/n]: " ENABLE_TRIAL
+ENABLE_TRIAL=${ENABLE_TRIAL:-Y}
+
+TRIAL_ENABLED_VAL="False"
+TRIAL_DAYS_VAL=0
+TRIAL_GB_VAL=0
+
+if [[ "$ENABLE_TRIAL" =~ ^[yY]$ ]]; then
+    TRIAL_ENABLED_VAL="True"
+    read -p "Enter trial duration in days [1]: " TRIAL_DAYS_INPUT
+    TRIAL_DAYS_VAL=${TRIAL_DAYS_INPUT:-1}
+    
+    read -p "Enter trial data limit in GB [1]: " TRIAL_GB_INPUT
+    TRIAL_GB_VAL=${TRIAL_GB_INPUT:-1}
+fi
+# --- <<<< پایان بخش جدید >>>> ---
+
 sed -i "/^BOT_TOKEN =/c\BOT_TOKEN = \"${BOT_TOKEN}\"" $CONFIG_FILE
 sed -i "/^ADMIN_ID =/c\ADMIN_ID = ${ADMIN_ID}" $CONFIG_FILE
 sed -i "/^PANEL_DOMAIN =/c\PANEL_DOMAIN = \"${PANEL_DOMAIN}\"" $CONFIG_FILE
@@ -82,6 +101,12 @@ sed -i "/^SUB_PATH =/c\SUB_PATH = \"${SUB_PATH}\"" $CONFIG_FILE
 sed -i "/^API_KEY =/c\API_KEY = \"${API_KEY}\"" $CONFIG_FILE
 sed -i "/^SUPPORT_USERNAME =/c\SUPPORT_USERNAME = \"${SUPPORT_USERNAME}\"" $CONFIG_FILE
 sed -i "/^SUB_DOMAINS =/c\SUB_DOMAINS = ${PYTHON_LIST_FORMAT}" $CONFIG_FILE
+
+# <<<< جایگزینی مقادیر سرویس تست >>>>
+sed -i "/^TRIAL_ENABLED =/c\TRIAL_ENABLED = ${TRIAL_ENABLED_VAL}" $CONFIG_FILE
+sed -i "/^TRIAL_DAYS =/c\TRIAL_DAYS = ${TRIAL_DAYS_VAL}" $CONFIG_FILE
+sed -i "/^TRIAL_GB =/c\TRIAL_GB = ${TRIAL_GB_VAL}" $CONFIG_FILE
+
 
 print_color "green" "Configuration file created successfully."
 
