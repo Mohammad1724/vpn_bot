@@ -1,20 +1,16 @@
-# hiddify_api.py
+# HiddifyBotProject/src/hiddify_api.py
 
 import requests
 import json
 import uuid
 from config import PANEL_DOMAIN, ADMIN_PATH, API_KEY
 
-BASE_URL = f"https://{PANEL_DOMAIN}/{ADMIN_PATH}/api/v2/admin/"
-HEADERS = {
-    "Hiddify-API-Key": API_KEY,
-    "Content-Type": "application/json"
-}
-
 def create_hiddify_user(plan_days, plan_gb, user_telegram_id=None):
-    """
-    با استفاده از پارامترهای صحیح Hiddify-API-Expanded کاربر ایجاد می‌کند.
-    """
+    BASE_URL = f"https://{PANEL_DOMAIN}/{ADMIN_PATH}/api/v2/admin/"
+    HEADERS = {
+        "Hiddify-API-Key": API_KEY,
+        "Content-Type": "application/json"
+    }
     endpoint = BASE_URL + "user/"
     
     if user_telegram_id:
@@ -22,6 +18,7 @@ def create_hiddify_user(plan_days, plan_gb, user_telegram_id=None):
         comment = f"Telegram user: {user_telegram_id}"
     else:
         user_name = f"test-user-{uuid.uuid4().hex[:8]}"
+        comment = "Created by script"
 
     payload = {
         "name": user_name,
@@ -29,10 +26,8 @@ def create_hiddify_user(plan_days, plan_gb, user_telegram_id=None):
         "usage_limit_GB": int(plan_gb),
         "comment": comment
     }
-
     try:
         response = requests.post(endpoint, headers=HEADERS, data=json.dumps(payload), timeout=20)
-        
         if response.status_code in [200, 201]:
             user_data = response.json()
             user_uuid = user_data.get('uuid')
