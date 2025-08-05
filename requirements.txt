@@ -1,4 +1,5 @@
-# HiddifyBotProject/requirements.txt
-
-python-telegram-bot==21.2
+python-telegram-bot[ext]==21.2
 requests
+qrcode
+Pillow
+matplotlib
