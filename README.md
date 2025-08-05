@@ -42,4 +42,4 @@ sudo bash -c "$(curl -sL https://raw.githubusercontent.com/Mohammad1724/vpn_bot/
 ---
 
 
-## **حذف**
+**حذف**
