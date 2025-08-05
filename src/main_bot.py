@@ -1,4 +1,4 @@
-# HiddifyBotProject/src/main_bot.py
+# main_bot.py (نسخه اصلاح شده)
 
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
@@ -15,14 +15,23 @@ logger = logging.getLogger(__name__)
 # States for ConversationHandler
 PLAN_NAME, PLAN_PRICE, PLAN_DAYS, PLAN_GB = range(4)
 
+# --- Helper Functions ---
 async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     db.get_or_create_user(user_id)
-    keyboard = [["🛍️ خرید سرویس"], ["💰 موجودی و شارژ حساب", "📞 پشتیبانی"]]
+    
+    keyboard = [
+        ["🛍️ خرید سرویس"],
+        ["💰 موجودی و شارژ حساب", "📞 پشتیبانی"],
+    ]
+    # فقط اگر کاربر ادمین باشد، دکمه پنل ادمین را به منوی اصلی اضافه کن
     if user_id == ADMIN_ID:
         keyboard.append(["👑 پنل ادمین"])
-    await update.message.reply_text("لطفا یکی از گزینه‌های زیر را انتخاب کنید:", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+        
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    await update.message.reply_text("لطفا یکی از گزینه‌های زیر را انتخاب کنید:", reply_markup=reply_markup)
 
+# --- User Commands ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👋 به ربات فروش VPN خوش آمدید!")
     await send_main_menu(update, context)
@@ -42,6 +51,7 @@ async def buy_service_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton(f"{p['name']} - {p['days']} روزه {p['gb']} گیگ - {p['price']:.0f} تومان", callback_data=f"buy_{p['plan_id']}")] for p in plans]
     await update.message.reply_text("لطفا سرویس مورد نظر خود را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
 
+# --- Callback Query Handler (برای دکمه‌های شیشه‌ای) ---
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -72,14 +82,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.delete_plan(int(data[1]))
         await query.edit_message_text("پلن با موفقیت حذف شد.")
 
+# --- Admin Functions ---
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID: return
-    keyboard = [["➕ افزودن پلن جدید", "📋 لیست پلن‌ها"], ["↩️ بازگشت به منوی اصلی"]]
-    await update.message.reply_text("👑 به پنل ادمین خوش آمدید.", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+    # این تابع فقط توسط ادمین قابل دسترسی است
+    keyboard = [
+        ["➕ افزودن پلن جدید", "📋 لیست پلن‌ها"],
+        ["↩️ بازگشت به منوی اصلی"]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    await update.message.reply_text("👑 به پنل ادمین خوش آمدید. منوی شما تغییر کرد.", reply_markup=reply_markup)
 
 async def add_plan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID: return
-    await update.message.reply_text("لطفا نام پلن را وارد کنید (مثلا: پلن ۱ ماهه):", reply_markup=ReplyKeyboardMarkup([["لغو"]]))
+    await update.message.reply_text("لطفا نام پلن را وارد کنید (مثلا: پلن ۱ ماهه):", reply_markup=ReplyKeyboardMarkup([["لغو"]], resize_keyboard=True))
     return PLAN_NAME
 
 async def plan_name_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -112,18 +126,18 @@ async def plan_gb_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.add_plan(plan['plan_name'], plan['plan_price'], plan['plan_days'], plan['plan_gb'])
         await update.message.reply_text("✅ پلن جدید با موفقیت به سیستم اضافه شد!")
         context.user_data.clear()
-        await admin_panel(update, context)
+        await admin_panel(update, context) # بازگشت به منوی ادمین
         return ConversationHandler.END
     except ValueError:
         await update.message.reply_text("لطفا حجم را به صورت عدد صحیح وارد کنید.")
         return PLAN_GB
 
 async def list_plans_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID: return
     plans = db.list_plans()
     if not plans:
         await update.message.reply_text("هیچ پلنی تعریف نشده است.")
         return
+    await update.message.reply_text("لیست پلن‌ها:")
     for plan in plans:
         text = f"🔹 **{plan['name']}** (ID: `{plan['plan_id']}`)\n   - قیمت: {plan['price']:.0f} تومان\n   - مشخصات: {plan['days']} روزه / {plan['gb']} گیگ"
         await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑️ حذف این پلن", callback_data=f"delete_{plan['plan_id']}")]]) , parse_mode='Markdown')
@@ -131,35 +145,42 @@ async def list_plans_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("عملیات لغو شد.")
     context.user_data.clear()
-    await admin_panel(update, context)
+    await admin_panel(update, context) # بازگشت به منوی ادمین
     return ConversationHandler.END
 
 def main():
     db.init_db()
     application = Application.builder().token(BOT_TOKEN).build()
     
+    # --- تعریف فیلتر فقط برای ادمین ---
+    admin_filter = filters.User(user_id=ADMIN_ID)
+
+    # --- Conversation Handler برای افزودن پلن (فقط برای ادمین) ---
     add_plan_handler = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex('^➕ افزودن پلن جدید$'), add_plan_start)],
+        entry_points=[MessageHandler(filters.Regex('^➕ افزودن پلن جدید$') & admin_filter, add_plan_start)],
         states={
-            PLAN_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_name_received)],
-            PLAN_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_price_received)],
-            PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_days_received)],
-            PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_gb_received)],
+            PLAN_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, plan_name_received)],
+            PLAN_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, plan_price_received)],
+            PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, plan_days_received)],
+            PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, plan_gb_received)],
         },
-        fallbacks=[MessageHandler(filters.Regex('^لغو$'), cancel_conversation)],
+        fallbacks=[MessageHandler(filters.Regex('^لغو$') & admin_filter, cancel_conversation)],
     )
 
+    # --- ثبت کنترل‌کننده‌ها (Handlers) ---
     application.add_handler(CommandHandler("start", start))
     application.add_handler(add_plan_handler)
     application.add_handler(CallbackQueryHandler(button_handler))
     
-    menu_filters = filters.Regex('^🛍️ خرید سرویس$') | filters.Regex('^💰 موجودی و شارژ حساب$') | filters.Regex('^📞 پشتیبانی$') | filters.Regex('^👑 پنل ادمین$') | filters.Regex('^📋 لیست پلن‌ها$') | filters.Regex('^↩️ بازگشت به منوی اصلی$')
-    menu_map = {
-        '🛍️ خرید سرویس': buy_service_list, '💰 موجودی و شارژ حساب': show_balance,
-        '📞 پشتیبانی': show_support, '👑 پنل ادمین': admin_panel,
-        '📋 لیست پلن‌ها': list_plans_admin, '↩️ بازگشت به منوی اصلی': start
-    }
-    application.add_handler(MessageHandler(menu_filters, lambda u, c: menu_map[u.message.text](u, c)))
+    # --- کنترل‌کننده‌های عمومی برای همه کاربران ---
+    application.add_handler(MessageHandler(filters.Regex('^🛍️ خرید سرویس$'), buy_service_list))
+    application.add_handler(MessageHandler(filters.Regex('^💰 موجودی و شارژ حساب$'), show_balance))
+    application.add_handler(MessageHandler(filters.Regex('^📞 پشتیبانی$'), show_support))
+
+    # --- کنترل‌کننده‌های مخصوص ادمین ---
+    application.add_handler(MessageHandler(filters.Regex('^👑 پنل ادمین$') & admin_filter, admin_panel))
+    application.add_handler(MessageHandler(filters.Regex('^📋 لیست پلن‌ها$') & admin_filter, list_plans_admin))
+    application.add_handler(MessageHandler(filters.Regex('^↩️ بازگشت به منوی اصلی$') & admin_filter, start))
     
     print("Bot is running...")
     application.run_polling()
