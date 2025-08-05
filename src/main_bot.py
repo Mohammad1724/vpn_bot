@@ -23,17 +23,21 @@ os.makedirs('backups', exist_ok=True)
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-(ADMIN_MENU, PLAN_MENU, SETTINGS_MENU, BACKUP_MENU, GIFT_MENU, BROADCAST_MENU, USER_MANAGEMENT_MENU,
- PLAN_NAME, PLAN_PRICE, PLAN_DAYS, PLAN_GB,
- SET_CARD_NUMBER, SET_CARD_HOLDER,
- CHARGE_AMOUNT, CHARGE_RECEIPT,
- REDEEM_GIFT,
- RESTORE_UPLOAD, RESTORE_CONFIRM,
- BROADCAST_MESSAGE, BROADCAST_CONFIRM,
- GIFT_AMOUNT, GIFT_COUNT,
- MANAGE_USER_ID, MANAGE_USER_ACTION, MANAGE_USER_AMOUNT,
- BROADCAST_TO_USER_ID, BROADCAST_TO_USER_MESSAGE) = range(27)
+# --- Conversation States ---
+(
+    ADMIN_MENU, PLAN_MENU, SETTINGS_MENU, BACKUP_MENU, GIFT_MENU, BROADCAST_MENU, USER_MANAGEMENT_MENU,
+    PLAN_NAME, PLAN_PRICE, PLAN_DAYS, PLAN_GB,
+    SET_CARD_NUMBER, SET_CARD_HOLDER,
+    CHARGE_AMOUNT, CHARGE_RECEIPT,
+    REDEEM_GIFT,
+    RESTORE_UPLOAD, RESTORE_CONFIRM,
+    BROADCAST_MESSAGE, BROADCAST_CONFIRM,
+    GIFT_AMOUNT, GIFT_COUNT,
+    MANAGE_USER_ID, MANAGE_USER_ACTION, MANAGE_USER_AMOUNT,
+    BROADCAST_TO_USER_ID, BROADCAST_TO_USER_MESSAGE
+) = range(27)
 
+# --- KEYBOARDS ---
 def get_main_menu_keyboard(user_id):
     keyboard = [["🛍️ خرید سرویس", "📋 سرویس‌های من"], ["💰 موجودی و شارژ", "🎁 کد هدیه"], ["📞 پشتیبانی", " راهنمای اتصال 📚"]]
     if user_id == ADMIN_ID: keyboard.append(["👑 ورود به پنل ادمین"])
@@ -42,6 +46,7 @@ def get_admin_menu_keyboard():
     keyboard = [["➕ مدیریت پلن‌ها", "📊 آمار ربات"], ["⚙️ تنظیمات", "🎁 مدیریت کد هدیه"], ["📩 ارسال پیام", "💾 پشتیبان‌گیری"], ["👥 مدیریت کاربران"], ["🛑 خاموش کردن ربات", "↩️ خروج از پنل"]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
+# --- USER HANDLERS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_info = db.get_or_create_user(user_id)
@@ -176,8 +181,8 @@ async def show_link_options_with_qr(query_or_update, user_uuid, context, is_edit
     final_link = f"{base_link}/sub/?asn=unknown#{config_name}"
     qr_image = qrcode.make(final_link); bio = io.BytesIO(); bio.name = 'qrcode.png'; qr_image.save(bio, 'PNG'); bio.seek(0)
     caption = (f"✅ سرویس شما با موفقیت ساخته شد!\n\nمی‌توانید با اسکن QR کد زیر یا با استفاده از لینک اشتراک، به سرویس متصل شوید.\n\nلینک اشتراک استاندارد شما:\n`{final_link}`")
-    message_entity = query_or_update if isinstance(query_or_update, Update) else query_or_update.message
-    if is_edit: await query_or_update.message.delete()
+    message_entity = query_or_update.message if hasattr(query_or_update, 'message') else query_or_update
+    if is_edit: await message_entity.delete()
     await context.bot.send_photo(chat_id=message_entity.chat_id, photo=bio, caption=caption, parse_mode=ParseMode.MARKDOWN)
 
 async def admin_entry(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("👑 به پنل ادمین خوش آمدید.", reply_markup=get_admin_menu_keyboard()); return ADMIN_MENU
@@ -221,7 +226,6 @@ async def handle_settings_text(update: Update, context: ContextTypes.DEFAULT_TYP
         try: await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=context.user_data.pop('query_message_id'))
         except Exception: pass
     context.user_data.clear(); return ADMIN_MENU
-
 async def broadcast_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [["ارسال به همه کاربران", "ارسال به کاربر خاص"], ["بازگشت به منوی ادمین"]]; await update.message.reply_text("بخش ارسال پیام", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)); return BROADCAST_MENU
 async def broadcast_to_all_start(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("لطفا پیام خود را برای ارسال به همه کاربران وارد کنید:", reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)); return BROADCAST_MESSAGE
@@ -237,7 +241,21 @@ async def broadcast_to_all_send(update: Update, context: ContextTypes.DEFAULT_TY
         except (Forbidden, BadRequest): failed_count += 1
     await update.message.reply_text(f"✅ پیام همگانی با موفقیت ارسال شد.\n\nتعداد ارسال موفق: {sent_count}\nتعداد ارسال ناموفق: {failed_count}")
     context.user_data.clear(); return ADMIN_MENU
-
+async def broadcast_to_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("لطفا آیدی عددی کاربر هدف را وارد کنید:", reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)); return BROADCAST_TO_USER_ID
+async def broadcast_to_user_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        target_id = int(update.message.text)
+        context.user_data['target_user_id'] = target_id
+        await update.message.reply_text("آیدی ثبت شد. حالا پیامی که می‌خواهید برای این کاربر ارسال کنید را وارد نمایید:"); return BROADCAST_TO_USER_MESSAGE
+    except ValueError: await update.message.reply_text("لطفا یک آیدی عددی معتبر وارد کنید."); return BROADCAST_TO_USER_ID
+async def broadcast_to_user_message_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    target_id = context.user_data['target_user_id']
+    message_to_send = update.message
+    try:
+        await message_to_send.copy(chat_id=target_id)
+        await update.message.reply_text("✅ پیام با موفقیت به کاربر ارسال شد.", reply_markup=get_admin_menu_keyboard())
+    except (Forbidden, BadRequest): await update.message.reply_text("❌ ارسال پیام ناموفق بود. احتمالا کاربر ربات را بلاک کرده یا آیدی اشتباه است.", reply_markup=get_admin_menu_keyboard())
+    context.user_data.clear(); return ADMIN_MENU
 async def user_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("لطفا آیدی عددی کاربری که می‌خواهید مدیریت کنید را وارد نمایید:", reply_markup=ReplyKeyboardMarkup([["بازگشت به منوی ادمین"]], resize_keyboard=True)); return MANAGE_USER_ID
 async def manage_user_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -252,27 +270,20 @@ async def manage_user_id_received(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text(info_text, reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True), parse_mode=ParseMode.MARKDOWN); return MANAGE_USER_ACTION
     except ValueError: await update.message.reply_text("لطفا یک آیدی عددی معتبر وارد کنید."); return MANAGE_USER_ID
 async def manage_user_action_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    action = update.message.text
-    target_user_id = context.user_data['target_user_id']
+    action = update.message.text; target_user_id = context.user_data['target_user_id']
     if action == "افزایش موجودی" or action == "کاهش موجودی":
-        context.user_data['manage_action'] = action
-        await update.message.reply_text("لطفا مبلغ مورد نظر را به تومان وارد کنید:"); return MANAGE_USER_AMOUNT
+        context.user_data['manage_action'] = action; await update.message.reply_text("لطفا مبلغ مورد نظر را به تومان وارد کنید:"); return MANAGE_USER_AMOUNT
     elif "مسدود" in action or "آزاد" in action:
-        user_info = db.get_user(target_user_id)
-        new_ban_status = not user_info['is_banned']
+        user_info = db.get_user(target_user_id); new_ban_status = not user_info['is_banned']
         db.set_user_ban_status(target_user_id, new_ban_status)
-        await update.message.reply_text(f"✅ وضعیت کاربر با موفقیت به '{'مسدود' if new_ban_status else 'فعال'}' تغییر کرد.", reply_markup=get_admin_menu_keyboard())
-        return ADMIN_MENU
+        await update.message.reply_text(f"✅ وضعیت کاربر با موفقیت به '{'مسدود' if new_ban_status else 'فعال'}' تغییر کرد.", reply_markup=get_admin_menu_keyboard()); return ADMIN_MENU
 async def manage_user_amount_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        amount = float(update.message.text)
-        action = context.user_data['manage_action']
-        target_user_id = context.user_data['target_user_id']
+        amount = float(update.message.text); action, target_user_id = context.user_data['manage_action'], context.user_data['target_user_id']
         if action == "افزایش موجودی": db.update_balance(target_user_id, amount, add=True); await update.message.reply_text(f"✅ مبلغ {amount:.0f} تومان به حساب کاربر اضافه شد.")
         elif action == "کاهش موجودی": db.update_balance(target_user_id, amount, add=False); await update.message.reply_text(f"✅ مبلغ {amount:.0f} تومان از حساب کاربر کسر شد.")
         await back_to_admin_menu(update, context); return ADMIN_MENU
     except ValueError: await update.message.reply_text("لطفا مبلغ را به صورت عدد وارد کنید."); return MANAGE_USER_AMOUNT
-
 async def backup_restore_menu(update: Update, context: ContextTypes.DEFAULT_TYPE): keyboard = [["📥 دریافت فایل پشتیبان", "📤 بارگذاری فایل پشتیبان"], ["بازگشت به منوی ادمین"]]; await update.message.reply_text("بخش پشتیبان‌گیری و بازیابی.", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)); return BACKUP_MENU
 async def send_backup_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     timestamp, backup_filename = datetime.now().strftime("%Y-%m-%d_%H-%M"), f"backup.db"; shutil.copy(db.DB_NAME, backup_filename)
@@ -294,16 +305,16 @@ async def restore_receive_file(update: Update, context: ContextTypes.DEFAULT_TYP
     context.user_data['restore_path'] = temp_path
     keyboard = [[InlineKeyboardButton("✅ بله، مطمئنم", callback_data="confirm_restore"), InlineKeyboardButton("❌ خیر، لغو کن", callback_data="cancel_restore")]]
     await update.message.reply_text("**آیا از جایگزینی دیتابیس فعلی کاملاً مطمئن هستید؟ این عمل غیرقابل بازگشت است.**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
-
 async def shutdown_bot(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("ربات در حال خاموش شدن است..."); asyncio.create_task(context.application.shutdown())
 async def admin_generic_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("عملیات لغو شد.", reply_markup=get_admin_menu_keyboard()); context.user_data.clear(); return ADMIN_MENU
+async def user_generic_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("عملیات لغو شد.", reply_markup=get_main_menu_keyboard(update.effective_user.id)); context.user_data.clear(); return ConversationHandler.END
 
 def main():
     db.init_db()
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     admin_filter, user_filter = filters.User(user_id=ADMIN_ID), ~filters.User(user_id=ADMIN_ID)
-    gift_handler = ConversationHandler(entry_points=[MessageHandler(filters.Regex('^🎁 کد هدیه$') & user_filter, gift_code_entry)], states={REDEEM_GIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, redeem_gift_code)]}, fallbacks=[CommandHandler('cancel', start)])
-    charge_handler = ConversationHandler(entry_points=[CallbackQueryHandler(charge_start, pattern='^start_charge$')], states={CHARGE_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, charge_amount_received)], CHARGE_RECEIPT: [MessageHandler(filters.PHOTO, charge_receipt_received)]}, fallbacks=[CommandHandler('cancel', start)])
+    gift_handler = ConversationHandler(entry_points=[MessageHandler(filters.Regex('^🎁 کد هدیه$') & user_filter, gift_code_entry)], states={REDEEM_GIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, redeem_gift_code)]}, fallbacks=[CommandHandler('cancel', user_generic_cancel)])
+    charge_handler = ConversationHandler(entry_points=[CallbackQueryHandler(charge_start, pattern='^start_charge$')], states={CHARGE_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, charge_amount_received)], CHARGE_RECEIPT: [MessageHandler(filters.PHOTO, charge_receipt_received)]}, fallbacks=[CommandHandler('cancel', user_generic_cancel)])
     admin_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^👑 ورود به پنل ادمین$') & admin_filter, admin_entry)],
         states={
@@ -311,15 +322,17 @@ def main():
             PLAN_MENU: [MessageHandler(filters.Regex('^➕ افزودن پلن جدید$'), add_plan_start), MessageHandler(filters.Regex('^📋 لیست پلن‌ها$'), list_plans_admin), MessageHandler(filters.Regex('^بازگشت به منوی ادمین$'), back_to_admin_menu)],
             SETTINGS_MENU: [CallbackQueryHandler(button_handler), MessageHandler(filters.TEXT & ~filters.COMMAND, handle_settings_text), MessageHandler(filters.Regex('^بازگشت به منوی ادمین$'), back_to_admin_menu)],
             BACKUP_MENU: [MessageHandler(filters.Regex('^📥 دریافت فایل پشتیبان$'), send_backup_file), MessageHandler(filters.Regex('^📤 بارگذاری فایل پشتیبان$'), restore_start), MessageHandler(filters.Regex('^بازگشت به منوی ادمین$'), back_to_admin_menu)],
-            BROADCAST_MENU: [MessageHandler(filters.Regex('^ارسال به همه کاربران$'), broadcast_to_all_start), MessageHandler(filters.Regex('^بازگشت به منوی ادمین$'), back_to_admin_menu)],
+            BROADCAST_MENU: [MessageHandler(filters.Regex('^ارسال به همه کاربران$'), broadcast_to_all_start), MessageHandler(filters.Regex('^ارسال به کاربر خاص$'), broadcast_to_user_start), MessageHandler(filters.Regex('^بازگشت به منوی ادمین$'), back_to_admin_menu)],
             USER_MANAGEMENT_MENU: [MessageHandler(filters.Regex('^بازگشت به منوی ادمین$'), back_to_admin_menu), MessageHandler(filters.TEXT & ~filters.COMMAND, manage_user_id_received)],
             PLAN_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_name_received)], PLAN_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_price_received)],
             PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_days_received)], PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_gb_received)],
             RESTORE_UPLOAD: [MessageHandler(filters.Document.FileExtension("db"), restore_receive_file)], RESTORE_CONFIRM: [CallbackQueryHandler(button_handler)],
             BROADCAST_MESSAGE: [MessageHandler(filters.ALL & ~filters.COMMAND, broadcast_to_all_confirm)],
             BROADCAST_CONFIRM: [MessageHandler(filters.Regex('^بله، ارسال کن$'), broadcast_to_all_send), MessageHandler(filters.Regex('^خیر، لغو کن$'), back_to_admin_menu)],
+            BROADCAST_TO_USER_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_to_user_id_received)],
+            BROADCAST_TO_USER_MESSAGE: [MessageHandler(filters.ALL & ~filters.COMMAND, broadcast_to_user_message_received)],
             MANAGE_USER_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, manage_user_id_received)],
-            MANAGE_USER_ACTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, manage_user_action_handler)],
+            MANAGE_USER_ACTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, manage_user_action_handler), MessageHandler(filters.Regex('^بازگشت به منوی ادمین$'), back_to_admin_menu)],
             MANAGE_USER_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, manage_user_amount_received)],
         }, fallbacks=[MessageHandler(filters.Regex('^↩️ خروج از پنل$'), exit_admin_panel), CommandHandler('cancel', admin_generic_cancel)]
     )
