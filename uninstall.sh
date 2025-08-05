@@ -16,17 +16,15 @@ if [ "$(id -u)" != "0" ]; then
    exit 1
 fi
 
-print_color "yellow" "--- Hiddify VPN Bot Uninstaller ---"
+print_color "yellow" "--- Hiddify Advanced Bot Uninstaller ---"
 
 SERVICE_NAME="vpn_bot"
 DEFAULT_INSTALL_DIR="/opt/vpn-bot"
 
-# Stop and disable the service
 print_color "yellow" "Stopping and disabling the systemd service..."
 systemctl stop $SERVICE_NAME > /dev/null 2>&1
 systemctl disable $SERVICE_NAME > /dev/null 2>&1
 
-# Remove the service file
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 if [ -f "$SERVICE_FILE" ]; then
     print_color "yellow" "Removing systemd service file..."
@@ -34,7 +32,6 @@ if [ -f "$SERVICE_FILE" ]; then
     systemctl daemon-reload
 fi
 
-# Remove the installation directory
 read -p "Enter the bot's installation directory [${DEFAULT_INSTALL_DIR}]: " INSTALL_DIR
 INSTALL_DIR=${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}
 
