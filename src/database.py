@@ -1,10 +1,13 @@
-import sqlite3, datetime, uuid
+import sqlite3
+import datetime
+import uuid
 
 DB_NAME = "vpn_bot.db"
 
 def init_db():
-    conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
-    cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, balance REAL DEFAULT 0.0, join_date TEXT, is_banned INTEGER DEFAULT 0)')
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, balance REAL DEFAULT 0.0, join_date TEXT, is_banned INTEGER DEFAULT 0, has_used_trial INTEGER DEFAULT 0)')
     cursor.execute('CREATE TABLE IF NOT EXISTS plans (plan_id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, price REAL NOT NULL, days INTEGER NOT NULL, gb INTEGER NOT NULL)')
     cursor.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)')
     cursor.execute('CREATE TABLE IF NOT EXISTS active_services (service_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, sub_uuid TEXT, sub_link TEXT, expiry_date TEXT, plan_id INTEGER)')
@@ -13,7 +16,8 @@ def init_db():
     conn.commit()
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_number', '0000-0000-0000-0000'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_holder', 'نام صاحب حساب'))
-    conn.commit(); conn.close()
+    conn.commit()
+    conn.close()
 
 def get_setting(key):
     conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
@@ -25,18 +29,18 @@ def set_setting(key, value):
 
 def get_or_create_user(user_id):
     conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
-    cursor.execute("SELECT user_id, balance, is_banned FROM users WHERE user_id = ?", (user_id,)); user = cursor.fetchone()
+    cursor.execute("SELECT user_id, balance, is_banned, has_used_trial FROM users WHERE user_id = ?", (user_id,)); user = cursor.fetchone()
     if not user:
         join_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute("INSERT INTO users (user_id, join_date) VALUES (?, ?)", (user_id, join_date)); conn.commit()
-        user = (user_id, 0.0, 0)
-    conn.close(); return {"user_id": user[0], "balance": user[1], "is_banned": bool(user[2])}
+        user = (user_id, 0.0, 0, 0)
+    conn.close(); return {"user_id": user[0], "balance": user[1], "is_banned": bool(user[2]), "has_used_trial": bool(user[3])}
 def get_user(user_id):
     conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
-    cursor.execute("SELECT user_id, balance, join_date, is_banned FROM users WHERE user_id = ?", (user_id,)); user = cursor.fetchone()
+    cursor.execute("SELECT user_id, balance, join_date, is_banned, has_used_trial FROM users WHERE user_id = ?", (user_id,)); user = cursor.fetchone()
     conn.close(); 
     if not user: return None
-    return {"user_id": user[0], "balance": user[1], "join_date": user[2], "is_banned": bool(user[3])}
+    return {"user_id": user[0], "balance": user[1], "join_date": user[2], "is_banned": bool(user[3]), "has_used_trial": bool(user[4])}
 def get_all_user_ids():
     conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
     cursor.execute("SELECT user_id FROM users WHERE is_banned = 0"); user_ids = [item[0] for item in cursor.fetchall()]
@@ -49,6 +53,9 @@ def update_balance(user_id, amount, add=True):
     if add: cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
     else: cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (amount, user_id))
     conn.commit(); conn.close()
+def set_user_trial_used(user_id):
+    conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
+    cursor.execute("UPDATE users SET has_used_trial = 1 WHERE user_id = ?", (user_id,)); conn.commit(); conn.close()
 
 def add_plan(name, price, days, gb): conn = sqlite3.connect(DB_NAME); cursor = conn.cursor(); cursor.execute("INSERT INTO plans (name, price, days, gb) VALUES (?, ?, ?, ?)", (name, price, days, gb)); conn.commit(); conn.close()
 def list_plans(): conn = sqlite3.connect(DB_NAME); cursor = conn.cursor(); cursor.execute("SELECT plan_id, name, price, days, gb FROM plans"); plans = [{"plan_id": p[0], "name": p[1], "price": p[2], "days": p[3], "gb": p[4]} for p in cursor.fetchall()]; conn.close(); return plans
@@ -70,6 +77,12 @@ def get_user_services(user_id):
     cursor.execute("SELECT service_id, sub_uuid, sub_link, expiry_date, plan_id FROM active_services WHERE user_id = ?", (user_id,))
     services = [{"service_id": s[0], "sub_uuid": s[1], "sub_link": s[2], "expiry_date": s[3], "plan_id": s[4]} for s in cursor.fetchall()]
     conn.close(); return services
+def get_services_expiring_soon(days=3):
+    conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
+    target_date = (datetime.datetime.now() + datetime.timedelta(days=days)).strftime("%Y-%m-%d")
+    cursor.execute("SELECT user_id, sub_link, expiry_date FROM active_services WHERE expiry_date = ?", (target_date,))
+    services = cursor.fetchall()
+    conn.close(); return [{"user_id": s[0], "sub_link": s[1], "expiry_date": s[2]} for s in services]
 def renew_service(service_id, days):
     conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
     cursor.execute("SELECT expiry_date FROM active_services WHERE service_id = ?", (service_id,)); current_expiry_str = cursor.fetchone()[0]
