@@ -32,9 +32,8 @@ DEFAULT_INSTALL_DIR="/opt/vpn-bot"
 read -p "Enter the installation directory [${DEFAULT_INSTALL_DIR}]: " INSTALL_DIR
 INSTALL_DIR=${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}
 
-# Clean up previous installation if it exists
 if [ -d "$INSTALL_DIR" ]; then
-    print_color "yellow" "Existing directory found. Removing it to ensure a clean installation..."
+    print_color "yellow" "Existing directory found. Removing it for a clean installation..."
     rm -rf "$INSTALL_DIR"
 fi
 
@@ -66,9 +65,8 @@ read -p "Enter your Hiddify admin secret path: " ADMIN_PATH
 read -p "Enter your Hiddify API Key: " API_KEY
 read -p "Enter your support Telegram username (without @): " SUPPORT_USERNAME
 
-# Use sed to replace placeholder values
 sed -i "s|YOUR_BOT_TOKEN_HERE|${BOT_TOKEN}|" $CONFIG_FILE
-sed -i "s|ADMIN_ID = 0|${ADMIN_ID}|" $CONFIG_FILE
+sed -i "s|ADMIN_ID = 0|ADMIN_ID = ${ADMIN_ID}|" $CONFIG_FILE
 sed -i "s|YOUR_PANEL_DOMAIN_HERE|${PANEL_DOMAIN}|" $CONFIG_FILE
 sed -i "s|YOUR_ADMIN_SECRET_PATH_HERE|${ADMIN_PATH}|" $CONFIG_FILE
 sed -i "s|YOUR_HIDDIFY_API_KEY_HERE|${API_KEY}|" $CONFIG_FILE
@@ -77,7 +75,7 @@ sed -i "s|YOUR_SUPPORT_USERNAME|${SUPPORT_USERNAME}|" $CONFIG_FILE
 print_color "green" "Configuration file created successfully."
 
 # 6. Create systemd service
-print_color "yellow" "Creating systemd service to run the bot in the background..."
+print_color "yellow" "Creating systemd service..."
 SERVICE_NAME="vpn_bot"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
@@ -106,5 +104,5 @@ systemctl start $SERVICE_NAME
 
 print_color "blue" "--- Installation Complete ---"
 print_color "green" "The bot has been installed and started successfully."
-print_color "yellow" "To check the bot's status, use: systemctl status ${SERVICE_NAME}"
-print_color "yellow" "To view live logs, use: journalctl -u ${SERVICE_NAME} -f"
+print_color "yellow" "Check status: systemctl status ${SERVICE_NAME}"
+print_color "yellow" "View logs: journalctl -u ${SERVICE_NAME} -f"
