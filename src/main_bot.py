@@ -1,5 +1,3 @@
-# src/main_bot.py
-
 import logging
 import os
 import shutil
@@ -137,21 +135,28 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = data[0]
 
     if action == "buy":
+        print(f"--- DEBUG: Buy action initiated by user {user_id} ---")
         plan_id = int(data[1]); plan = db.get_plan(plan_id); user = db.get_or_create_user(user_id)
-        if not plan: await query.edit_message_text("❌ این پلن دیگر موجود نیست."); return
-        if user['balance'] < plan['price']: await query.edit_message_text(f"موجودی شما کافی نیست!\nموجودی: {user['balance']:.0f} تومان\nقیمت پلن: {plan['price']:.0f} تومان"); return
+        if not plan: 
+            print("DEBUG: Plan not found."); await query.edit_message_text("❌ این پلن دیگر موجود نیست."); return
+        if user['balance'] < plan['price']: 
+            print("DEBUG: Insufficient balance."); await query.edit_message_text(f"موجودی شما کافی نیست!\nموجودی: {user['balance']:.0f} تومان\nقیمت پلن: {plan['price']:.0f} تومان"); return
         try: await query.message.delete()
         except Exception: pass
         msg_loading = await context.bot.send_message(chat_id=user_id, text="در حال ساخت سرویس شما... ⏳")
         result = hiddify_api.create_hiddify_user(plan['days'], plan['gb'], user_id)
+        print(f"DEBUG: Result from hiddify_api: {result}")
         await msg_loading.delete()
         if result and result.get('link'):
+            print("DEBUG: Link creation successful. Proceeding to update database and send link.")
             db.update_balance(user_id, plan['price'], add=False)
             db.add_active_service(user_id, result['uuid'], result['link'], plan['plan_id'], plan['days'])
             db.log_sale(user_id, plan['plan_id'], plan['price'])
             final_message = f"✅ سرویس شما با موفقیت ساخته شد!\n\nلینک اتصال:\n`{result['link']}`\n\nبا کلیک روی لینک، به صورت خودکار کپی می‌شود."
             await context.bot.send_message(chat_id=user_id, text=final_message, parse_mode=ParseMode.MARKDOWN)
-        else: await context.bot.send_message(chat_id=user_id, text="❌ متاسفانه در ساخت سرویس مشکلی پیش آمد. لطفا به پشتیبانی اطلاع دهید.")
+        else:
+            print("ERROR: Link creation failed. 'result' is None or does not contain a link.")
+            await context.bot.send_message(chat_id=user_id, text="❌ متاسفانه در ساخت سرویس مشکلی پیش آمد. لطفا به پشتیبانی اطلاع دهید.")
     
     elif action == "renew":
         service_id, plan_id_to_renew = int(data[1]), int(data[2])
