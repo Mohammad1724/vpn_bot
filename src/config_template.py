@@ -12,9 +12,9 @@ API_KEY = "YOUR_HIDDIFY_API_KEY_HERE"
 SUB_DOMAINS = []
 
 # --- Free Trial Settings ---
-TRIAL_ENABLED = False # Placeholder, will be replaced by installer
-TRIAL_DAYS = 0      # Placeholder, will be replaced by installer
-TRIAL_GB = 0        # Placeholder, will be replaced by installer
+TRIAL_ENABLED = True
+TRIAL_DAYS = 1
+TRIAL_GB = 1
 
 # --- Other Settings ---
 SUPPORT_USERNAME = "YOUR_SUPPORT_USERNAME"
