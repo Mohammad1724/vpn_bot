@@ -81,7 +81,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_info = db.get_or_create_user(user_id)
     if user_info and user_info.get('is_banned'):
-        await update.message.reply_text("شما از استفاده از این ربات منع شده‌اید."); return ConversationHandler.END
+        await update.message.reply_text("شما از استفاده از این ربات منع شده‌اید.")
+        return ConversationHandler.END
     await update.message.reply_text("👋 به ربات فروش VPN خوش آمدید!", reply_markup=get_main_menu_keyboard(user_id))
     return ConversationHandler.END
 
@@ -89,7 +90,8 @@ async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     services = db.get_user_services(user_id)
     if not services:
-        await update.message.reply_text("شما در حال حاضر هیچ سرویس فعالی ندارید."); return
+        await update.message.reply_text("شما در حال حاضر هیچ سرویس فعالی ندارید.")
+        return
     msg = await update.message.reply_text("در حال دریافت اطلاعات سرویس‌های شما... ⏳")
     for service in services:
         await send_service_details(context, user_id, service)
@@ -104,7 +106,6 @@ async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
             status, expiry_date_display, is_expired = _get_service_status(info)
             renewal_plan = db.get_plan(service['plan_id'])
             
-            # <<< CHANGE: Add the service name to the message
             service_name_display = f"🏷️ نام سرویس: **{service['name']}**\n\n" if service['name'] else ""
             
             message = (f"{service_name_display}"
@@ -182,80 +183,101 @@ async def user_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         if service and service['user_id'] == user_id: await query.edit_message_text("در حال به‌روزرسانی اطلاعات...", reply_markup=None); await send_service_details(context, user_id, service, original_message=query.message)
         else: await query.answer("خطا: این سرویس متعلق به شما نیست.", show_alert=True)
 
-# --- Service Creation Logic ---
-async def create_service_after_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message_entity = update.message; user_id = message_entity.chat_id
-    plan_id = context.user_data.get('plan_to_buy'); 
-    # <<< CHANGE: Use a default name if user skips
-    custom_name = context.user_data.get('custom_name', "") or f"سرویس {plan_id}"
-    
-    if not plan_id: await message_entity.reply_text("خطای داخلی رخ داده است. لطفا مجددا تلاش کنید.", reply_markup=get_main_menu_keyboard(user_id)); context.user_data.clear(); return ConversationHandler.END
-    
-    plan = db.get_plan(plan_id)
-    msg = await message_entity.reply_text("در حال ساخت سرویس شما... ⏳")
-    result = hiddify_api.create_hiddify_user(plan['days'], plan['gb'], user_id, custom_name=custom_name)
-    
-    if result and result.get('uuid'):
-        db.update_balance(user_id, -plan['price'])
-        # <<< CHANGE: Pass the custom_name to the database
-        db.add_active_service(user_id, custom_name, result['uuid'], result['full_link'], plan['plan_id'])
-        db.log_sale(user_id, plan['plan_id'], plan['price'])
-        await show_link_options_menu(msg, result['uuid'], is_edit=True)
-    else: await msg.edit_text("❌ متاسفانه در ساخت سرویس مشکلی پیش آمد. لطفا به پشتیبانی اطلاع دهید.")
-    context.user_data.clear()
-
-
-# --- The rest of the functions are unchanged ---
+# --- Service Creation & Other Conversations ---
 async def show_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = db.get_or_create_user(update.effective_user.id); keyboard = [[InlineKeyboardButton("💳 شارژ حساب", callback_data="user_start_charge")]]; await update.message.reply_text(f"💰 موجودی فعلی شما: **{user['balance']:.0f}** تومان", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
-async def show_support(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text(f"جهت ارتباط با پشتیبانی به آیدی زیر پیام ارسال کنید:\n@{SUPPORT_USERNAME}")
-async def show_guide(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("راهنمای اتصال به سرویس‌ها:\n\n(اینجا می‌توانید آموزش‌های لازم را قرار دهید)")
+    user = db.get_or_create_user(update.effective_user.id)
+    keyboard = [[InlineKeyboardButton("💳 شارژ حساب", callback_data="user_start_charge")]]
+    await update.message.reply_text(f"💰 موجودی فعلی شما: **{user['balance']:.0f}** تومان", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+
+async def show_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(f"جهت ارتباط با پشتیبانی به آیدی زیر پیام ارسال کنید:\n@{SUPPORT_USERNAME}")
+
+async def show_guide(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("راهنمای اتصال به سرویس‌ها:\n\n(اینجا می‌توانید آموزش‌های لازم را قرار دهید)")
+
 async def buy_service_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    plans = db.list_plans();
+    plans = db.list_plans()
     if not plans: await update.message.reply_text("متاسفانه در حال حاضر هیچ پلنی برای فروش موجود نیست."); return
-    keyboard = [[InlineKeyboardButton(f"{p['name']} - {p['days']} روزه {p['gb']} گیگ - {p['price']:.0f} تومان", callback_data=f"user_buy_{p['plan_id']}")] for p in plans]; await update.message.reply_text("لطفا سرویس مورد نظر خود را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
+    keyboard = [[InlineKeyboardButton(f"{p['name']} - {p['days']} روزه {p['gb']} گیگ - {p['price']:.0f} تومان", callback_data=f"user_buy_{p['plan_id']}")] for p in plans]
+    await update.message.reply_text("لطفا سرویس مورد نظر خود را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
+
 async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id; user_info = db.get_or_create_user(user_id)
     if not TRIAL_ENABLED: await update.message.reply_text("در حال حاضر سرویس تست فعال نمی‌باشد."); return
     if user_info.get('has_used_trial'): await update.message.reply_text("شما قبلاً از سرویس تست رایگان استفاده کرده‌اید."); return
     msg_loading = await update.message.reply_text("در حال ساخت سرویس تست شما... ⏳")
     result = hiddify_api.create_hiddify_user(TRIAL_DAYS, TRIAL_GB, user_id, custom_name="سرویس تست")
-    if result and result.get('uuid'): 
+    if result and result.get('uuid'):
         db.set_user_trial_used(user_id)
-        # <<< CHANGE: Pass the name for trial service as well
         db.add_active_service(user_id, "سرویس تست", result['uuid'], result['full_link'], 0)
         await show_link_options_menu(msg_loading, result['uuid'], is_edit=True)
     else: await msg_loading.edit_text("❌ متاسفانه در ساخت سرویس تست مشکلی پیش آمد. لطفا بعداً تلاش کنید.")
-async def gift_code_entry(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("🎁 لطفا کد هدیه خود را وارد کنید:", reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)); return REDEEM_GIFT
+
+async def gift_code_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🎁 لطفا کد هدیه خود را وارد کنید:", reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)); return REDEEM_GIFT
+
 async def redeem_gift_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     code, user_id = update.message.text.upper(), update.effective_user.id; amount = db.use_gift_code(code, user_id)
     if amount: await update.message.reply_text(f"✅ تبریک! مبلغ {amount:.0f} تومان به کیف پول شما اضافه شد.", reply_markup=get_main_menu_keyboard(user_id))
     else: await update.message.reply_text("❌ کد هدیه نامعتبر یا استفاده شده است.", reply_markup=get_main_menu_keyboard(user_id))
     return ConversationHandler.END
-async def charge_start(update: Update, context: ContextTypes.DEFAULT_TYPE): query = update.callback_query; await query.answer(); await query.message.reply_text("لطفاً مبلغی که قصد واریز آن را دارید به تومان وارد کنید (فقط عدد):", reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)); return CHARGE_AMOUNT
+
+async def charge_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query; await query.answer()
+    await query.message.reply_text("لطفاً مبلغی که قصد واریز آن را دارید به تومان وارد کنید (فقط عدد):", reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)); return CHARGE_AMOUNT
+
 async def charge_amount_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        amount = int(update.message.text);
+        amount = int(update.message.text)
         if amount < 1000: raise ValueError
         context.user_data['charge_amount'] = amount; card_number, card_holder = db.get_setting('card_number'), db.get_setting('card_holder')
         await update.message.reply_text(f"لطفاً مبلغ **{amount:,} تومان** را به شماره کارت زیر واریز نمایید:\n\n`{card_number}`\nبه نام: {card_holder}\n\nسپس از رسید واریزی خود عکس گرفته و آن را ارسال کنید.", parse_mode=ParseMode.MARKDOWN); return CHARGE_RECEIPT
     except (ValueError, TypeError): await update.message.reply_text("لطفا یک عدد صحیح و بیشتر از 1000 تومان وارد کنید."); return CHARGE_AMOUNT
+
 async def charge_receipt_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user, amount = update.effective_user, context.user_data['charge_amount']; receipt_photo = update.message.photo[-1]
     caption = (f"درخواست شارژ جدید 🔔\n\nکاربر: {user.full_name} (@{user.username})\nآیدی عددی: `{user.id}`\nمبلغ درخواستی: **{amount:,} تومان**"); keyboard = [[InlineKeyboardButton("✅ تایید شارژ", callback_data=f"admin_confirm_charge_{user.id}_{amount}"), InlineKeyboardButton("❌ رد درخواست", callback_data=f"admin_reject_charge_{user.id}")]]; await context.bot.send_photo(chat_id=ADMIN_ID, photo=receipt_photo.file_id, caption=caption, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
     await update.message.reply_text("✅ رسید شما برای ادمین ارسال شد. لطفاً تا زمان بررسی منتظر بمانید.", reply_markup=get_main_menu_keyboard(user.id)); context.user_data.clear(); return ConversationHandler.END
+
 async def buy_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query; await query.answer();
+    query = update.callback_query; await query.answer()
     try: plan_id_str = query.data.split('_')[-1]; plan_id = int(plan_id_str)
     except (ValueError, IndexError): await query.edit_message_text("❌ خطای داخلی: اطلاعات پلن نامعتبر است."); return ConversationHandler.END
     user_id = query.from_user.id; plan, user = db.get_plan(plan_id), db.get_or_create_user(user_id)
     if not plan: await query.edit_message_text("❌ این پلن دیگر موجود نیست."); return ConversationHandler.END
     if user['balance'] < plan['price']: await query.edit_message_text(f"موجودی شما کافی نیست!\nموجودی: {user['balance']:.0f} تومان\nقیمت پلن: {plan['price']:.0f} تومان"); return ConversationHandler.END
     context.user_data['plan_to_buy'] = plan_id; await query.edit_message_text("✅ پلن شما انتخاب شد.\n\nلطفاً یک نام دلخواه برای این سرویس وارد کنید (مثلاً: گوشی شخصی).\nبرای استفاده از نام پیش‌فرض، دستور /skip را ارسال کنید.", reply_markup=None); return GET_CUSTOM_NAME
-async def get_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE): custom_name = update.message.text;
-    if len(custom_name) > 50: await update.message.reply_text("نام وارد شده بیش از حد طولانی است."); return GET_CUSTOM_NAME
-    context.user_data['custom_name'] = custom_name; await create_service_after_name(update, context); return ConversationHandler.END
-async def skip_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE): context.user_data['custom_name'] = ""; await create_service_after_name(update, context); return ConversationHandler.END
+
+async def get_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    custom_name = update.message.text
+    if len(custom_name) > 50:
+        await update.message.reply_text("نام وارد شده بیش از حد طولانی است.")
+        return GET_CUSTOM_NAME
+    context.user_data['custom_name'] = custom_name
+    await create_service_after_name(update, context)
+    return ConversationHandler.END
+
+async def skip_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['custom_name'] = ""
+    await create_service_after_name(update, context)
+    return ConversationHandler.END
+
+async def create_service_after_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message_entity = update.message; user_id = message_entity.chat_id
+    plan_id = context.user_data.get('plan_to_buy')
+    custom_name = context.user_data.get('custom_name', "") or f"سرویس {plan_id}"
+    if not plan_id: await message_entity.reply_text("خطای داخلی رخ داده است. لطفا مجددا تلاش کنید.", reply_markup=get_main_menu_keyboard(user_id)); context.user_data.clear(); return ConversationHandler.END
+    plan = db.get_plan(plan_id)
+    msg = await message_entity.reply_text("در حال ساخت سرویس شما... ⏳")
+    result = hiddify_api.create_hiddify_user(plan['days'], plan['gb'], user_id, custom_name=custom_name)
+    if result and result.get('uuid'):
+        db.update_balance(user_id, -plan['price'])
+        db.add_active_service(user_id, custom_name, result['uuid'], result['full_link'], plan['plan_id'])
+        db.log_sale(user_id, plan['plan_id'], plan['price'])
+        await show_link_options_menu(msg, result['uuid'], is_edit=True)
+    else: await msg.edit_text("❌ متاسفانه در ساخت سرویس مشکلی پیش آمد. لطفا به پشتیبانی اطلاع دهید.")
+    context.user_data.clear()
+
 async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; await query.answer(); user_id = query.from_user.id
     if user_id != ADMIN_ID: return
@@ -289,6 +311,7 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         restore_path = context.user_data.get('restore_path')
         if restore_path and os.path.exists(restore_path): os.remove(restore_path)
         await query.edit_message_text("عملیات بازیابی لغو شد."); context.user_data.clear()
+
 async def show_link_options_menu(message_entity, user_uuid, is_edit=True):
     keyboard = [[InlineKeyboardButton("🔗 لینک هوشمند (Auto)", callback_data=f"getlink_auto_{user_uuid}")], [InlineKeyboardButton("📱 لینک SingBox", callback_data=f"getlink_singbox_{user_uuid}")], [InlineKeyboardButton("💻 لینک استاندارد (V2ray)", callback_data=f"getlink_sub_{user_uuid}")]]
     text = "لطفاً نوع لینک اشتراک مورد نظر خود را انتخاب کنید:"
@@ -297,6 +320,7 @@ async def show_link_options_menu(message_entity, user_uuid, is_edit=True):
         else: await message_entity.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     except BadRequest as e:
         if "message is not modified" not in str(e): logger.error(f"Error in show_link_options_menu: {e}")
+
 async def send_qr_and_link(chat_id, user_uuid, link_type, context):
     sub_path = SUB_PATH or ADMIN_PATH; sub_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN; base_link = f"https://{sub_domain}/{sub_path}/{user_uuid}"
     user_info = hiddify_api.get_user_info(user_uuid); config_name = user_info.get('name', 'config') if user_info else 'config'
@@ -304,6 +328,7 @@ async def send_qr_and_link(chat_id, user_uuid, link_type, context):
     qr_image = qrcode.make(final_link); bio = io.BytesIO(); bio.name = 'qrcode.png'; qr_image.save(bio, 'PNG'); bio.seek(0)
     caption = (f"نام کانفیگ: **{config_name}**\n\nمی‌توانید با اسکن QR کد زیر یا با استفاده از لینک اشتراک، به سرویس متصل شوید.\n\nلینک اشتراک شما:\n`{final_link}`")
     await context.bot.send_photo(chat_id=chat_id, photo=bio, caption=caption, parse_mode=ParseMode.MARKDOWN)
+
 async def admin_entry(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("👑 به پنل ادمین خوش آمدید.", reply_markup=get_admin_menu_keyboard()); return ADMIN_MENU
 async def exit_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("شما از پنل ادمین خارج شدید.", reply_markup=get_main_menu_keyboard(update.effective_user.id)); return ConversationHandler.END
 async def back_to_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("به منوی اصلی ادمین بازگشتید.", reply_markup=get_admin_menu_keyboard()); return ADMIN_MENU
