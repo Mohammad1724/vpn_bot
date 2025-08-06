@@ -233,6 +233,7 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     data = query.data.split('_'); action = data[0]
     if action == "admin" and data[1] == "delete" and data[2] == "plan":
         db.delete_plan(int(data[3])); await query.message.delete()
+        await list_plans_admin(update, context)
     elif action == "admin" and data[1] == "toggle" and data[2] == "plan":
         db.toggle_plan_visibility(int(data[3])); await query.message.delete(); await list_plans_admin(update, context)
     elif action == "admin" and data[1] == "confirm" and data[2] == "charge":
