@@ -1,10 +1,4 @@
-import logging
-import os
-import shutil
-import asyncio
-import random
-import sqlite3
-import io
+import logging, os, shutil, asyncio, random, sqlite3, io
 from datetime import datetime, timedelta, time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, InputFile
 from telegram.ext import (Application, CommandHandler, CallbackQueryHandler, MessageHandler, 
@@ -16,7 +10,6 @@ import database as db
 import hiddify_api
 from config import (BOT_TOKEN, ADMIN_ID, SUPPORT_USERNAME, SUB_DOMAINS, ADMIN_PATH, 
                     PANEL_DOMAIN, SUB_PATH, TRIAL_ENABLED, TRIAL_DAYS, TRIAL_GB)
-
 import qrcode
 
 os.makedirs('backups', exist_ok=True)
@@ -57,18 +50,14 @@ async def check_expiring_services(context: ContextTypes.DEFAULT_TYPE):
         except (Forbidden, BadRequest): logger.warning(f"Could not send expiry notification to user {service['user_id']}.")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_info = db.get_or_create_user(user_id)
-    if user_info and user_info.get('is_banned'):
-        await update.message.reply_text("شما از استفاده از این ربات منع شده‌اید."); return ConversationHandler.END
+    user_id = update.effective_user.id; user_info = db.get_or_create_user(user_id)
+    if user_info and user_info.get('is_banned'): await update.message.reply_text("شما از استفاده از این ربات منع شده‌اید."); return ConversationHandler.END
     await update.message.reply_text("👋 به ربات فروش VPN خوش آمدید!", reply_markup=get_main_menu_keyboard(user_id))
     return ConversationHandler.END
 
 async def show_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = db.get_or_create_user(update.effective_user.id)
-    keyboard = [[InlineKeyboardButton("💳 شارژ حساب", callback_data="start_charge")]]
+    user = db.get_or_create_user(update.effective_user.id); keyboard = [[InlineKeyboardButton("💳 شارژ حساب", callback_data="start_charge")]]
     await update.message.reply_text(f"💰 موجودی فعلی شما: **{user['balance']:.0f}** تومان", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
-
 async def show_support(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text(f"جهت ارتباط با پشتیبانی به آیدی زیر پیام ارسال کنید:\n@{SUPPORT_USERNAME}")
 async def show_guide(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("راهنمای اتصال به سرویس‌ها:\n\n(اینجا می‌توانید آموزش‌های لازم را قرار دهید)")
 
@@ -79,15 +68,13 @@ async def buy_service_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("لطفا سرویس مورد نظر خود را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_info = db.get_or_create_user(user_id)
+    user_id = update.effective_user.id; user_info = db.get_or_create_user(user_id)
     if not TRIAL_ENABLED: await update.message.reply_text("در حال حاضر سرویس تست فعال نمی‌باشد."); return
     if user_info.get('has_used_trial'): await update.message.reply_text("شما قبلاً از سرویس تست رایگان استفاده کرده‌اید."); return
     msg_loading = await update.message.reply_text("در حال ساخت سرویس تست شما... ⏳")
     result = hiddify_api.create_hiddify_user(TRIAL_DAYS, TRIAL_GB, user_id, custom_name="سرویس تست")
     if result and result.get('uuid'):
-        db.set_user_trial_used(user_id)
-        db.add_active_service(user_id, result['uuid'], result['full_link'], 0, TRIAL_DAYS)
+        db.set_user_trial_used(user_id); db.add_active_service(user_id, result['uuid'], result['full_link'], 0, TRIAL_DAYS)
         await show_link_options_with_qr(msg_loading, result['uuid'], result['config_name'], context, is_edit=True)
     else: await msg_loading.edit_text("❌ متاسفانه در ساخت سرویس تست مشکلی پیش آمد. لطفا بعداً تلاش کنید.")
 
@@ -113,8 +100,7 @@ async def charge_amount_received(update: Update, context: ContextTypes.DEFAULT_T
     try:
         amount = int(update.message.text)
         if amount <= 1000: raise ValueError
-        context.user_data['charge_amount'] = amount
-        card_number, card_holder = db.get_setting('card_number'), db.get_setting('card_holder')
+        context.user_data['charge_amount'] = amount; card_number, card_holder = db.get_setting('card_number'), db.get_setting('card_holder')
         await update.message.reply_text(f"لطفاً مبلغ **{amount:,} تومان** را به شماره کارت زیر واریز نمایید:\n\n`{card_number}`\nبه نام: {card_holder}\n\nسپس از رسید واریزی خود عکس گرفته و آن را ارسال کنید.", parse_mode=ParseMode.MARKDOWN); return CHARGE_RECEIPT
     except ValueError: await update.message.reply_text("لطفا یک عدد صحیح و بیشتر از 1000 تومان وارد کنید."); return CHARGE_AMOUNT
 async def charge_receipt_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -132,18 +118,13 @@ async def buy_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not plan: await query.edit_message_text("❌ این پلن دیگر موجود نیست."); return ConversationHandler.END
     if user['balance'] < plan['price']: await query.edit_message_text(f"موجودی شما کافی نیست!\nموجودی: {user['balance']:.0f} تومان\nقیمت پلن: {plan['price']:.0f} تومان"); return ConversationHandler.END
     context.user_data['plan_to_buy'] = plan_id
-    await query.edit_message_text("✅ پلن شما انتخاب شد.\n\nلطفاً یک نام دلخواه برای این سرویس وارد کنید (مثلاً: گوشی شخصی).\nبرای استفاده از نام پیش‌فرض، دستور /skip را ارسال کنید.", reply_markup=None)
-    return GET_CUSTOM_NAME
+    await query.edit_message_text("✅ پلن شما انتخاب شد.\n\nلطفاً یک نام دلخواه برای این سرویس وارد کنید (مثلاً: گوشی شخصی).\nبرای استفاده از نام پیش‌فرض، دستور /skip را ارسال کنید.", reply_markup=None); return GET_CUSTOM_NAME
 async def get_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     custom_name = update.message.text
     if len(custom_name) > 50: await update.message.reply_text("نام وارد شده بیش از حد طولانی است."); return GET_CUSTOM_NAME
-    context.user_data['custom_name'] = custom_name
-    await create_service_after_name(update, context)
-    return ConversationHandler.END
+    context.user_data['custom_name'] = custom_name; await create_service_after_name(update, context); return ConversationHandler.END
 async def skip_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['custom_name'] = ""
-    await create_service_after_name(update, context)
-    return ConversationHandler.END
+    context.user_data['custom_name'] = ""; await create_service_after_name(update, context); return ConversationHandler.END
 async def create_service_after_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_entity = update.message; user_id = message_entity.chat_id
     plan_id = context.user_data['plan_to_buy']; custom_name = context.user_data.get('custom_name', "")
@@ -159,14 +140,12 @@ async def create_service_after_name(update: Update, context: ContextTypes.DEFAUL
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; await query.answer()
     user_id, data = query.from_user.id, query.data.split('_'); action = data[0]
-    
     if action == "refresh":
         service_id = int(data[1]); service = db.get_service(service_id)
         if service and service['user_id'] == user_id:
             await query.edit_message_text("در حال به‌روزرسانی اطلاعات...", reply_markup=None)
             await send_service_details(context, user_id, service, original_message=query.message)
         else: await query.answer("خطا: این سرویس متعلق به شما نیست.", show_alert=True)
-
     elif action == "showlinks": await show_link_options_with_qr(query.message, data[1], context, is_edit=False)
     elif action == "renew":
         service_id, plan_id = int(data[1]), int(data[2])
@@ -207,8 +186,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if restore_path and os.path.exists(restore_path): os.remove(restore_path)
         await query.edit_message_text("عملیات بازیابی لغو شد."); context.user_data.clear()
 
-async def show_link_options_with_qr(query_or_update, user_uuid, config_name, context, is_edit=True):
-    message_entity = query_or_update.message if hasattr(query_or_update, 'message') else query_or_update
+async def show_link_options_with_qr(message_entity, user_uuid, config_name, context, is_edit=True):
     sub_path = SUB_PATH or ADMIN_PATH; sub_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
     base_link = f"https://{sub_domain}/{sub_path}/{user_uuid}"
     final_link = f"{base_link}/sub/?asn=unknown#{config_name}"
@@ -350,9 +328,11 @@ def main():
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     job_queue = application.job_queue; job_queue.run_daily(check_expiring_services, time=time(hour=10, minute=0, second=0))
     admin_filter, user_filter = filters.User(user_id=ADMIN_ID), ~filters.User(user_id=ADMIN_ID)
+    
     buy_handler = ConversationHandler(entry_points=[CallbackQueryHandler(buy_start, pattern='^buy_')], states={GET_CUSTOM_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_custom_name), CommandHandler('skip', skip_custom_name)]}, fallbacks=[CommandHandler('cancel', user_generic_cancel)])
     gift_handler = ConversationHandler(entry_points=[MessageHandler(filters.Regex('^🎁 کد هدیه$') & user_filter, gift_code_entry)], states={REDEEM_GIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, redeem_gift_code)]}, fallbacks=[CommandHandler('cancel', user_generic_cancel)])
     charge_handler = ConversationHandler(entry_points=[CallbackQueryHandler(charge_start, pattern='^start_charge$')], states={CHARGE_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, charge_amount_received)], CHARGE_RECEIPT: [MessageHandler(filters.PHOTO, charge_receipt_received)]}, fallbacks=[CommandHandler('cancel', user_generic_cancel)])
+    
     admin_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^👑 ورود به پنل ادمین$') & admin_filter, admin_entry)],
         states={
