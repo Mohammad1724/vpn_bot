@@ -17,7 +17,10 @@ api_session.headers.update({
 def _get_base_url():
     return f"https://{PANEL_DOMAIN}/{ADMIN_PATH}/api/v2/admin/"
 
-def create_hiddify_user(plan_days, plan_gb, user_telegram_id=None, custom_name=""):
+def create_hiddify_user(plan_days, plan_gb, user_telegram_id=None, custom_name="", existing_uuid=None):
+    """
+    Creates a new user. Can also recreate a user if an existing_uuid is provided.
+    """
     if custom_name:
         user_name = custom_name.replace(" ", "-")
     else:
@@ -32,6 +35,10 @@ def create_hiddify_user(plan_days, plan_gb, user_telegram_id=None, custom_name="
         "comment": comment
     }
     
+    # If we are recreating a user, we specify their original UUID.
+    if existing_uuid:
+        payload['uuid'] = existing_uuid
+    
     endpoint = _get_base_url() + "user/"
     
     try:
@@ -41,14 +48,14 @@ def create_hiddify_user(plan_days, plan_gb, user_telegram_id=None, custom_name="
         user_uuid = user_data.get('uuid')
         
         if not user_uuid:
-            logger.error("Hiddify API created a user but did not return a UUID.")
+            logger.error("Hiddify API create_hiddify_user did not return a UUID.")
             return None
             
         sub_path = SUB_PATH or ADMIN_PATH
         sub_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
         full_link = f"https://{sub_domain}/{sub_path}/{user_uuid}/"
         
-        logger.info(f"Successfully created Hiddify user '{user_name}' with UUID {user_uuid}")
+        logger.info(f"Successfully created/recreated Hiddify user '{user_name}' with UUID {user_uuid}")
         
         return {"full_link": full_link, "uuid": user_uuid}
         
@@ -72,47 +79,61 @@ def get_user_info(user_uuid):
         logger.error(f"An unexpected error occurred in get_user_info: {e}")
         return None
 
+def delete_user(user_uuid):
+    """Deletes a user from Hiddify panel."""
+    endpoint = f"{_get_base_url()}user/{user_uuid}/"
+    try:
+        response = api_session.delete(endpoint, timeout=15)
+        response.raise_for_status()
+        logger.info(f"Successfully deleted user {user_uuid} as part of renewal.")
+        return True
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to delete user {user_uuid} during renewal process: {e}")
+        return False
+
 def renew_user_subscription(user_uuid, plan_days, plan_gb):
     """
-    Renews a user's subscription using a robust, two-step process.
-    1. Update the plan details (days, gb).
-    2. Reset the user's traffic and start_date.
+    Final Strategy: "Nuke and Recreate"
+    Since PUT/POST for update fails, we will delete and recreate the user with the same UUID.
+    This is a robust way to handle non-standard APIs.
     """
-    endpoint_update = f"{_get_base_url()}user/{user_uuid}/"
-    endpoint_reset = f"{_get_base_url()}user/{user_uuid}/reset/"
-    
-    payload_update = {
-        "package_days": int(plan_days),
-        "usage_limit_GB": int(plan_gb),
-    }
-    
     try:
-        # Step 1: Update the user's package details.
-        response_update = api_session.put(endpoint_update, json=payload_update, timeout=15)
-        response_update.raise_for_status()
-        logger.info(f"Step 1/2 SUCCESS: Updated package for user {user_uuid}.")
-
-        # Step 2: Reset the user's traffic and start_date to today.
-        response_reset = api_session.post(endpoint_reset, timeout=15)
-        response_reset.raise_for_status()
-        logger.info(f"Step 2/2 SUCCESS: Reset traffic for user {user_uuid}.")
+        # Step 1: Get current user info to preserve their name.
+        current_info = get_user_info(user_uuid)
+        if not current_info:
+            logger.error(f"Renewal failed: Cannot get current info for user {user_uuid}.")
+            return None
         
-        # Step 3: Fetch the final, authoritative user info.
+        user_name = current_info.get("name", f"user-{user_uuid[:8]}")
+        user_tg_id = current_info.get("comment", "").replace("TG ID: ", "")
+
+        # Step 2: Delete the user.
+        if not delete_user(user_uuid):
+            # If deletion fails, we stop the process.
+            return None
+
+        # Step 3: Recreate the user with the same UUID and name, but new package details.
+        recreation_result = create_hiddify_user(
+            plan_days=plan_days,
+            plan_gb=plan_gb,
+            user_telegram_id=user_tg_id,
+            custom_name=user_name,
+            existing_uuid=user_uuid  # This is the most important part!
+        )
+
+        if not recreation_result:
+            logger.critical(f"CRITICAL: Deleted user {user_uuid} but FAILED to recreate them. Manual intervention required!")
+            return None
+
+        # Step 4: Fetch the final, authoritative user info to confirm success.
         new_info = get_user_info(user_uuid)
         if new_info:
-            logger.info(f"Successfully fetched new info for {user_uuid} after full renewal.")
+            logger.info(f"Successfully renewed user {user_uuid} using Nuke and Recreate strategy.")
             return new_info
         else:
-            # This is a critical state: renewal was sent but we can't confirm it.
-            logger.error(f"CRITICAL: Renewal for {user_uuid} was sent, but failed to fetch updated info!")
+            logger.error(f"CRITICAL: Recreated user {user_uuid} but could not fetch final info.")
             return None
-            
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Hiddify API renewal failed for UUID {user_uuid}: {e}")
-        # Log if the first step succeeded but the second failed.
-        if 'response_update' in locals() and response_update.ok and 'response_reset' not in locals():
-            logger.critical(f"CRITICAL: User {user_uuid} package was updated BUT FAILED TO RESET. Manual intervention required!")
-        return None
+
     except Exception as e:
-        logger.error(f"An unexpected error occurred in renew_user_subscription: {e}")
+        logger.error(f"An unexpected error occurred in the renew_user_subscription (Nuke & Recreate) process: {e}")
         return None
