@@ -1,10 +1,4 @@
-import logging
-import os
-import shutil
-import asyncio
-import random
-import sqlite3
-import io
+import logging, os, shutil, asyncio, random, sqlite3, io
 from datetime import datetime, timedelta, time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (Application, CommandHandler, CallbackQueryHandler, MessageHandler, 
@@ -22,22 +16,18 @@ os.makedirs('backups', exist_ok=True)
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- Conversation States ---
-(
-    ADMIN_MENU, PLAN_MENU, SETTINGS_MENU, BACKUP_MENU, GIFT_MENU, BROADCAST_MENU, USER_MANAGEMENT_MENU,
-    PLAN_NAME, PLAN_PRICE, PLAN_DAYS, PLAN_GB,
-    SET_CARD_NUMBER, SET_CARD_HOLDER,
-    CHARGE_AMOUNT, CHARGE_RECEIPT,
-    REDEEM_GIFT,
-    RESTORE_UPLOAD, RESTORE_CONFIRM,
-    BROADCAST_MESSAGE, BROADCAST_CONFIRM,
-    GIFT_AMOUNT, GIFT_COUNT,
-    MANAGE_USER_ID, MANAGE_USER_ACTION, MANAGE_USER_AMOUNT,
-    BROADCAST_TO_USER_ID, BROADCAST_TO_USER_MESSAGE,
-    GET_CUSTOM_NAME
-) = range(28)
+(ADMIN_MENU, PLAN_MENU, SETTINGS_MENU, BACKUP_MENU, GIFT_MENU, BROADCAST_MENU, USER_MANAGEMENT_MENU,
+ PLAN_NAME, PLAN_PRICE, PLAN_DAYS, PLAN_GB,
+ SET_CARD_NUMBER, SET_CARD_HOLDER,
+ CHARGE_AMOUNT, CHARGE_RECEIPT,
+ REDEEM_GIFT,
+ RESTORE_UPLOAD, RESTORE_CONFIRM,
+ BROADCAST_MESSAGE, BROADCAST_CONFIRM,
+ GIFT_AMOUNT, GIFT_COUNT,
+ MANAGE_USER_ID, MANAGE_USER_ACTION, MANAGE_USER_AMOUNT,
+ BROADCAST_TO_USER_ID, BROADCAST_TO_USER_MESSAGE,
+ GET_CUSTOM_NAME) = range(28)
 
-# --- KEYBOARDS ---
 def get_main_menu_keyboard(user_id):
     user_info = db.get_or_create_user(user_id)
     keyboard = [["🛍️ خرید سرویس", "📋 سرویس‌های من"], ["💰 موجودی و شارژ", "🎁 کد هدیه"]]
@@ -46,12 +36,10 @@ def get_main_menu_keyboard(user_id):
     keyboard.append(["📞 پشتیبانی", " راهنمای اتصال 📚"])
     if user_id == ADMIN_ID: keyboard.append(["👑 ورود به پنل ادمین"])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-
 def get_admin_menu_keyboard():
     keyboard = [["➕ مدیریت پلن‌ها", "📊 آمار ربات"], ["⚙️ تنظیمات", "🎁 مدیریت کد هدیه"], ["📩 ارسال پیام", "💾 پشتیبان‌گیری"], ["👥 مدیریت کاربران"], ["🛑 خاموش کردن ربات", "↩️ خروج از پنل"]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# --- JOB QUEUE ---
 async def check_expiring_services(context: ContextTypes.DEFAULT_TYPE):
     logger.info("Running daily check for expiring services...")
     expiring_services = db.get_services_expiring_soon(days=3)
@@ -61,7 +49,6 @@ async def check_expiring_services(context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(0.1)
         except (Forbidden, BadRequest): logger.warning(f"Could not send expiry notification to user {service['user_id']}.")
 
-# --- USER HANDLERS & CONVERSATIONS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id; user_info = db.get_or_create_user(user_id)
     if user_info and user_info.get('is_banned'): await update.message.reply_text("شما از استفاده از این ربات منع شده‌اید."); return ConversationHandler.END
@@ -379,9 +366,8 @@ def main():
     job_queue = application.job_queue; job_queue.run_daily(check_expiring_services, time=time(hour=10, minute=0, second=0))
     admin_filter, user_filter = filters.User(user_id=ADMIN_ID), ~filters.User(user_id=ADMIN_ID)
     
-    # Separate handlers for user and admin callbacks to prevent conflicts
-    user_callbacks = CallbackQueryHandler(user_button_handler, pattern="^(showlinks|getlink|renew|refresh|user_buy|user_start_charge)")
     admin_callbacks = CallbackQueryHandler(admin_button_handler, pattern="^admin_")
+    user_callbacks = CallbackQueryHandler(user_button_handler, pattern="^(showlinks|getlink|renew|refresh)")
 
     buy_handler = ConversationHandler(entry_points=[CallbackQueryHandler(buy_start, pattern='^user_buy_')], states={GET_CUSTOM_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_custom_name), CommandHandler('skip', skip_custom_name)]}, fallbacks=[CommandHandler('cancel', user_generic_cancel)])
     gift_handler = ConversationHandler(entry_points=[MessageHandler(filters.Regex('^🎁 کد هدیه$') & user_filter, gift_code_entry)], states={REDEEM_GIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, redeem_gift_code)]}, fallbacks=[CommandHandler('cancel', user_generic_cancel)])
