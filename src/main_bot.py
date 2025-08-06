@@ -1,10 +1,4 @@
-import logging
-import os
-import shutil
-import asyncio
-import random
-import sqlite3
-import io
+import logging, os, shutil, asyncio, random, sqlite3, io
 from datetime import datetime, timedelta, time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, InputFile
 from telegram.ext import (Application, CommandHandler, CallbackQueryHandler, MessageHandler, 
@@ -23,22 +17,18 @@ os.makedirs('backups', exist_ok=True)
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- Conversation States ---
-(
-    ADMIN_MENU, PLAN_MENU, SETTINGS_MENU, BACKUP_MENU, GIFT_MENU, BROADCAST_MENU, USER_MANAGEMENT_MENU,
-    PLAN_NAME, PLAN_PRICE, PLAN_DAYS, PLAN_GB,
-    SET_CARD_NUMBER, SET_CARD_HOLDER,
-    CHARGE_AMOUNT, CHARGE_RECEIPT,
-    REDEEM_GIFT,
-    RESTORE_UPLOAD, RESTORE_CONFIRM,
-    BROADCAST_MESSAGE, BROADCAST_CONFIRM,
-    GIFT_AMOUNT, GIFT_COUNT,
-    MANAGE_USER_ID, MANAGE_USER_ACTION, MANAGE_USER_AMOUNT,
-    BROADCAST_TO_USER_ID, BROADCAST_TO_USER_MESSAGE,
-    GET_CUSTOM_NAME
-) = range(28)
+(ADMIN_MENU, PLAN_MENU, SETTINGS_MENU, BACKUP_MENU, GIFT_MENU, BROADCAST_MENU, USER_MANAGEMENT_MENU,
+ PLAN_NAME, PLAN_PRICE, PLAN_DAYS, PLAN_GB,
+ SET_CARD_NUMBER, SET_CARD_HOLDER,
+ CHARGE_AMOUNT, CHARGE_RECEIPT,
+ REDEEM_GIFT,
+ RESTORE_UPLOAD, RESTORE_CONFIRM,
+ BROADCAST_MESSAGE, BROADCAST_CONFIRM,
+ GIFT_AMOUNT, GIFT_COUNT,
+ MANAGE_USER_ID, MANAGE_USER_ACTION, MANAGE_USER_AMOUNT,
+ BROADCAST_TO_USER_ID, BROADCAST_TO_USER_MESSAGE,
+ GET_CUSTOM_NAME) = range(28)
 
-# --- KEYBOARDS ---
 def get_main_menu_keyboard(user_id):
     user_info = db.get_or_create_user(user_id)
     keyboard = [["🛍️ خرید سرویس", "📋 سرویس‌های من"], ["💰 موجودی و شارژ", "🎁 کد هدیه"]]
@@ -47,12 +37,10 @@ def get_main_menu_keyboard(user_id):
     keyboard.append(["📞 پشتیبانی", " راهنمای اتصال 📚"])
     if user_id == ADMIN_ID: keyboard.append(["👑 ورود به پنل ادمین"])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-
 def get_admin_menu_keyboard():
-    keyboard = [["➕ مدیریت پلن‌ها", "📊 آمار ربات"], ["⚙️ تنظیمات", "🎁 مدیریت کد هدیه"], ["📩 ارسال پیام", "💾 پشتیبان‌گیری و بازیابی"], ["👥 مدیریت کاربران"], ["🛑 خاموش کردن ربات", "↩️ خروج از پنل"]]
+    keyboard = [["➕ مدیریت پلن‌ها", "📊 آمار ربات"], ["⚙️ تنظیمات", "🎁 مدیریت کد هدیه"], ["📩 ارسال پیام", "💾 پشتیبان‌گیری"], ["👥 مدیریت کاربران"], ["🛑 خاموش کردن ربات", "↩️ خروج از پنل"]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# --- JOB QUEUE ---
 async def check_expiring_services(context: ContextTypes.DEFAULT_TYPE):
     logger.info("Running daily check for expiring services...")
     expiring_services = db.get_services_expiring_soon(days=3)
@@ -62,7 +50,6 @@ async def check_expiring_services(context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(0.1)
         except (Forbidden, BadRequest): logger.warning(f"Could not send expiry notification to user {service['user_id']}.")
 
-# --- USER HANDLERS & CONVERSATIONS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_info = db.get_or_create_user(user_id)
@@ -192,9 +179,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not service or not plan: await query.edit_message_text("❌ سرویس یا پلن تمدید نامعتبر است."); return
         if user['balance'] < plan['price']: await query.edit_message_text(f"موجودی برای تمدید کافی نیست! (نیاز به {plan['price']:.0f} تومان)"); return
         await query.edit_message_text("در حال تمدید سرویس... ⏳")
-        success = hiddify_api.reset_user_traffic(service['sub_uuid'], plan['days'])
+        success = hiddify_api.renew_user_subscription(service['sub_uuid'], plan['days'], plan['gb'])
         if success: db.update_balance(user_id, plan['price'], add=False); db.renew_service(service_id, plan['days']); db.log_sale(user_id, plan_id, plan['price']); await query.edit_message_text("✅ سرویس شما با موفقیت تمدید شد!")
-        else: await query.edit_message_text("❌ خطا در تمدید سرویس. لطفا به پشتیبانی اطلاع دهید.")
+        else: await query.edit_message_text("❌ خطا در تمدید سرویس. لطفا به پشتیبانی اطلاع دهید. (ممکن است پنل شما از این قابلیت پشتیبانی نکند)")
     elif action == "confirm" and data[1] == "charge" and user_id == ADMIN_ID:
         target_user_id, amount = int(data[2]), int(data[3]); db.update_balance(target_user_id, amount, add=True); user_message_sent = False
         try: await context.bot.send_message(chat_id=target_user_id, text=f"حساب شما با موفقیت به مبلغ **{amount:,} تومان** شارژ شد!", parse_mode=ParseMode.MARKDOWN); user_message_sent = True
@@ -368,11 +355,9 @@ def main():
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     job_queue = application.job_queue; job_queue.run_daily(check_expiring_services, time=time(hour=10, minute=0, second=0))
     admin_filter, user_filter = filters.User(user_id=ADMIN_ID), ~filters.User(user_id=ADMIN_ID)
-    
     buy_handler = ConversationHandler(entry_points=[CallbackQueryHandler(buy_start, pattern='^buy_')], states={GET_CUSTOM_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_custom_name), CommandHandler('skip', skip_custom_name)]}, fallbacks=[CommandHandler('cancel', user_generic_cancel)])
     gift_handler = ConversationHandler(entry_points=[MessageHandler(filters.Regex('^🎁 کد هدیه$') & user_filter, gift_code_entry)], states={REDEEM_GIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, redeem_gift_code)]}, fallbacks=[CommandHandler('cancel', user_generic_cancel)])
     charge_handler = ConversationHandler(entry_points=[CallbackQueryHandler(charge_start, pattern='^start_charge$')], states={CHARGE_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, charge_amount_received)], CHARGE_RECEIPT: [MessageHandler(filters.PHOTO, charge_receipt_received)]}, fallbacks=[CommandHandler('cancel', user_generic_cancel)])
-    
     admin_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^👑 ورود به پنل ادمین$') & admin_filter, admin_entry)],
         states={
