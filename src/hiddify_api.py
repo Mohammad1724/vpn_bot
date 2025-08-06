@@ -23,8 +23,10 @@ def create_hiddify_user(plan_days, plan_gb, user_telegram_id=None, custom_name="
             full_link = f"https://{sub_domain}/{sub_path}/{user_uuid}/"
             config_name_fragment = custom_name.replace(" ", "-") if custom_name else unique_name
             return {"full_link": full_link, "uuid": user_uuid, "config_name": config_name_fragment}
-        else: print(f"ERROR (Create User): {response.status_code} -> {response.text}"); return None
-    except Exception as e: print(f"ERROR (Create User Exception): {e}"); return None
+        else:
+            print(f"ERROR (Create User): {response.status_code} -> {response.text}"); return None
+    except Exception as e:
+        print(f"ERROR (Create User Exception): {e}"); return None
 
 def get_user_info(user_uuid):
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
@@ -32,22 +34,32 @@ def get_user_info(user_uuid):
         response = requests.get(endpoint, headers=_get_headers(), timeout=10)
         if response.status_code == 200: return response.json()
         else: print(f"ERROR (Get Info): {response.status_code} for UUID {user_uuid} -> {response.text}"); return None
-    except Exception as e: print(f"ERROR (Get Info Exception): {e}"); return None
+    except Exception as e:
+        print(f"ERROR (Get Info Exception): {e}"); return None
 
 def renew_user_subscription(user_uuid, plan_days, plan_gb):
     endpoint_update = f"{_get_base_url()}user/{user_uuid}/"
-    payload = {"package_days": int(plan_days), "usage_limit_GB": int(plan_gb)}
-    print(f"[DEBUG] Renewing user {user_uuid} with payload: {json.dumps(payload)}")
+    # For renewal, Hiddify needs package_days to be reset from today.
+    # The usage_limit_GB should also be part of the update.
+    payload = { "package_days": int(plan_days), "usage_limit_GB": int(plan_gb) }
+    print(f"--- [DEBUG] Attempting to RENEW user subscription for UUID: {user_uuid} ---")
+    print(f"[DEBUG] Endpoint: {endpoint_update}")
+    print(f"[DEBUG] Payload: {json.dumps(payload)}")
     try:
-        # Step 1: Update the user's package, which should reset the start date
+        # Hiddify uses PUT request to update an existing user.
         response_update = requests.put(endpoint_update, headers=_get_headers(), json=payload, timeout=15)
-        print(f"[DEBUG] Renew (PUT) Response: {response_update.status_code} -> {response_update.text}")
-        if response_update.status_code != 200:
+        print(f"[DEBUG] Renew User (PUT) - Response Status: {response_update.status_code}")
+        print(f"[DEBUG] Renew User (PUT) - Response Body: {response_update.text}")
+
+        if response_update.status_code == 200:
+            print(f"[SUCCESS] User {user_uuid} package renewed. Attempting to reset traffic.")
+            # Resetting traffic is a separate, crucial step after renewal.
+            endpoint_reset = f"{_get_base_url()}user/{user_uuid}/reset/"
+            response_reset = requests.post(endpoint_reset, headers=_get_headers(), timeout=15)
+            print(f"[DEBUG] Reset Traffic (POST) - Response Status: {response_reset.status_code}")
+            return True # Even if reset fails, renewal of date is the main success.
+        else:
+            print(f"[ERROR] Hiddify API returned an unsuccessful status for user renewal.")
             return False
-        # Step 2: Reset the traffic usage explicitly
-        endpoint_reset = f"{_get_base_url()}user/{user_uuid}/reset/"
-        response_reset = requests.post(endpoint_reset, headers=_get_headers(), timeout=15)
-        print(f"[DEBUG] Reset Traffic (POST) Response: {response_reset.status_code} -> {response_reset.text}")
-        return response_reset.status_code in [200, 201, 204]
     except Exception as e:
         print(f"ERROR (Renew Exception): {e}"); return False
