@@ -1,4 +1,10 @@
-import logging, os, shutil, asyncio, random, sqlite3, io
+import logging
+import os
+import shutil
+import asyncio
+import random
+import sqlite3
+import io
 from datetime import datetime, timedelta, time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, InputFile
 from telegram.ext import (Application, CommandHandler, CallbackQueryHandler, MessageHandler, 
@@ -12,23 +18,28 @@ from config import (BOT_TOKEN, ADMIN_ID, SUPPORT_USERNAME, SUB_DOMAINS, ADMIN_PA
                     PANEL_DOMAIN, SUB_PATH, TRIAL_ENABLED, TRIAL_DAYS, TRIAL_GB)
 
 import qrcode
+from PIL import Image
 
 os.makedirs('backups', exist_ok=True)
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-(ADMIN_MENU, PLAN_MENU, SETTINGS_MENU, BACKUP_MENU, GIFT_MENU, BROADCAST_MENU, USER_MANAGEMENT_MENU,
- PLAN_NAME, PLAN_PRICE, PLAN_DAYS, PLAN_GB,
- SET_CARD_NUMBER, SET_CARD_HOLDER,
- CHARGE_AMOUNT, CHARGE_RECEIPT,
- REDEEM_GIFT,
- RESTORE_UPLOAD, RESTORE_CONFIRM,
- BROADCAST_MESSAGE, BROADCAST_CONFIRM,
- GIFT_AMOUNT, GIFT_COUNT,
- MANAGE_USER_ID, MANAGE_USER_ACTION, MANAGE_USER_AMOUNT,
- BROADCAST_TO_USER_ID, BROADCAST_TO_USER_MESSAGE,
- GET_CUSTOM_NAME) = range(28)
+# --- Conversation States ---
+(
+    ADMIN_MENU, PLAN_MENU, SETTINGS_MENU, BACKUP_MENU, GIFT_MENU, BROADCAST_MENU, USER_MANAGEMENT_MENU,
+    PLAN_NAME, PLAN_PRICE, PLAN_DAYS, PLAN_GB,
+    SET_CARD_NUMBER, SET_CARD_HOLDER,
+    CHARGE_AMOUNT, CHARGE_RECEIPT,
+    REDEEM_GIFT,
+    RESTORE_UPLOAD, RESTORE_CONFIRM,
+    BROADCAST_MESSAGE, BROADCAST_CONFIRM,
+    GIFT_AMOUNT, GIFT_COUNT,
+    MANAGE_USER_ID, MANAGE_USER_ACTION, MANAGE_USER_AMOUNT,
+    BROADCAST_TO_USER_ID, BROADCAST_TO_USER_MESSAGE,
+    GET_CUSTOM_NAME
+) = range(28)
 
+# --- KEYBOARDS ---
 def get_main_menu_keyboard(user_id):
     user_info = db.get_or_create_user(user_id)
     keyboard = [["🛍️ خرید سرویس", "📋 سرویس‌های من"], ["💰 موجودی و شارژ", "🎁 کد هدیه"]]
@@ -41,6 +52,7 @@ def get_admin_menu_keyboard():
     keyboard = [["➕ مدیریت پلن‌ها", "📊 آمار ربات"], ["⚙️ تنظیمات", "🎁 مدیریت کد هدیه"], ["📩 ارسال پیام", "💾 پشتیبان‌گیری"], ["👥 مدیریت کاربران"], ["🛑 خاموش کردن ربات", "↩️ خروج از پنل"]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
+# --- JOB QUEUE ---
 async def check_expiring_services(context: ContextTypes.DEFAULT_TYPE):
     logger.info("Running daily check for expiring services...")
     expiring_services = db.get_services_expiring_soon(days=3)
@@ -50,6 +62,7 @@ async def check_expiring_services(context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(0.1)
         except (Forbidden, BadRequest): logger.warning(f"Could not send expiry notification to user {service['user_id']}.")
 
+# --- USER HANDLERS & CONVERSATIONS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_info = db.get_or_create_user(user_id)
@@ -169,10 +182,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; await query.answer()
     user_id, data = query.from_user.id, query.data.split('_'); action = data[0]
     if action == "showlinks": await show_link_options_with_qr(query.message, data[1], context, is_edit=False)
-    elif action == "getlink":
-        link_type, user_uuid = data[1], data[2]
-        await query.message.delete()
-        await show_link_options_with_qr(query.message, user_uuid, context, is_edit=False, link_type=link_type)
     elif action == "renew":
         service_id, plan_id = int(data[1]), int(data[2])
         service, plan, user = db.get_service(service_id), db.get_plan(plan_id), db.get_or_create_user(user_id)
@@ -308,7 +317,6 @@ async def manage_user_id_received(update: Update, context: ContextTypes.DEFAULT_
     except ValueError: await update.message.reply_text("لطفا یک آیدی عددی معتبر وارد کنید."); return MANAGE_USER_ID
 async def manage_user_action_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = update.message.text
-    if action == "بازگشت به منوی ادمین": return await back_to_admin_menu(update, context)
     target_user_id = context.user_data.get('target_user_id')
     if not target_user_id: await update.message.reply_text("خطا: کاربر هدف مشخص نیست."); return await back_to_admin_menu(update, context)
     if action == "افزایش موجودی" or action == "کاهش موجودی":
@@ -375,7 +383,7 @@ def main():
             BROADCAST_TO_USER_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_to_user_id_received)],
             BROADCAST_TO_USER_MESSAGE: [MessageHandler(filters.ALL & ~filters.COMMAND, broadcast_to_user_message_received)],
             MANAGE_USER_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, manage_user_id_received)],
-            MANAGE_USER_ACTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, manage_user_action_handler)],
+            MANAGE_USER_ACTION: [MessageHandler(filters.Regex('^بازگشت به منوی ادمین$'), back_to_admin_menu), MessageHandler(filters.TEXT & ~filters.COMMAND, manage_user_action_handler)],
             MANAGE_USER_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, manage_user_amount_received)],
         }, fallbacks=[MessageHandler(filters.Regex('^↩️ خروج از پنل$'), exit_admin_panel), CommandHandler('cancel', admin_generic_cancel)]
     )
