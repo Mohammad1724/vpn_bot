@@ -324,6 +324,7 @@ async def broadcast_to_user_message_received(update: Update, context: ContextTyp
     try: await message_to_send.copy(chat_id=target_id); await update.message.reply_text("✅ پیام با موفقیت به کاربر ارسال شد.", reply_markup=get_admin_menu_keyboard())
     except (Forbidden, BadRequest): await update.message.reply_text("❌ ارسال پیام ناموفق بود. احتمالا کاربر ربات را بلاک کرده یا آیدی اشتباه است.", reply_markup=get_admin_menu_keyboard())
     context.user_data.clear(); return ADMIN_MENU
+async def user_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("لطفا آیدی عددی یا یوزرنیم تلگرام (با یا بدون @) کاربری که می‌خواهید مدیریت کنید را وارد نمایید:", reply_markup=ReplyKeyboardMarkup([["بازگشت به منوی ادمین"]], resize_keyboard=True)); return MANAGE_USER_ID
 async def manage_user_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_input = update.message.text; user_info = None
     if user_input.isdigit(): user_info = db.get_user(int(user_input))
