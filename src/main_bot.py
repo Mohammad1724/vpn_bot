@@ -1,6 +1,6 @@
 import logging, os, shutil, asyncio, random, sqlite3, io
 from datetime import datetime, timedelta, time
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, InputFile
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (Application, CommandHandler, CallbackQueryHandler, MessageHandler, 
                           filters, ContextTypes, ConversationHandler, ApplicationBuilder)
 from telegram.constants import ParseMode
@@ -106,7 +106,7 @@ async def charge_amount_received(update: Update, context: ContextTypes.DEFAULT_T
 async def charge_receipt_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user, amount = update.effective_user, context.user_data['charge_amount']; receipt_photo = update.message.photo[-1]
     caption = (f"درخواست شارژ جدید 🔔\n\nکاربر: {user.full_name} (@{user.username})\nآیدی عددی: `{user.id}`\nمبلغ درخواستی: **{amount:,} تومان**")
-    keyboard = [[InlineKeyboardButton("✅ تایید شارژ", callback_data=f"confirm_charge_{user.id}_{amount}"), InlineKeyboardButton("❌ رد درخواست", callback_data=f"reject_charge_{user.id}")]]
+    keyboard = [[InlineKeyboardButton("✅ تایید شارژ", callback_data=f"admin_confirm_charge_{user.id}_{amount}"), InlineKeyboardButton("❌ رد درخواست", callback_data=f"admin_reject_charge_{user.id}")]]
     await context.bot.send_photo(chat_id=ADMIN_ID, photo=receipt_photo.file_id, caption=caption, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
     await update.message.reply_text("✅ رسید شما برای ادمین ارسال شد. لطفاً تا زمان بررسی منتظر بمانید.", reply_markup=get_main_menu_keyboard(user.id))
     context.user_data.clear(); return ConversationHandler.END
@@ -118,7 +118,8 @@ async def buy_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not plan: await query.edit_message_text("❌ این پلن دیگر موجود نیست."); return ConversationHandler.END
     if user['balance'] < plan['price']: await query.edit_message_text(f"موجودی شما کافی نیست!\nموجودی: {user['balance']:.0f} تومان\nقیمت پلن: {plan['price']:.0f} تومان"); return ConversationHandler.END
     context.user_data['plan_to_buy'] = plan_id
-    await query.edit_message_text("✅ پلن شما انتخاب شد.\n\nلطفاً یک نام دلخواه برای این سرویس وارد کنید (مثلاً: گوشی شخصی).\nبرای استفاده از نام پیش‌فرض، دستور /skip را ارسال کنید.", reply_markup=None); return GET_CUSTOM_NAME
+    await query.edit_message_text("✅ پلن شما انتخاب شد.\n\nلطفاً یک نام دلخواه برای این سرویس وارد کنید (مثلاً: گوشی شخصی).\nبرای استفاده از نام پیش‌فرض، دستور /skip را ارسال کنید.", reply_markup=None)
+    return GET_CUSTOM_NAME
 async def get_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     custom_name = update.message.text
     if len(custom_name) > 50: await update.message.reply_text("نام وارد شده بیش از حد طولانی است."); return GET_CUSTOM_NAME
@@ -133,20 +134,17 @@ async def create_service_after_name(update: Update, context: ContextTypes.DEFAUL
     result = hiddify_api.create_hiddify_user(plan['days'], plan['gb'], user_id, custom_name=custom_name)
     if result and result.get('uuid'):
         db.update_balance(user_id, plan['price'], add=False); db.add_active_service(user_id, result['uuid'], result['full_link'], plan['plan_id'], plan['days']); db.log_sale(user_id, plan['plan_id'], plan['price'])
-        await show_link_options_with_qr(msg, result['uuid'], result['config_name'], context, is_edit=True)
+        await show_link_options_menu(msg, result['uuid'], is_edit=True)
     else: await msg.edit_text("❌ متاسفانه در ساخت سرویس مشکلی پیش آمد. لطفا به پشتیبانی اطلاع دهید.")
     context.user_data.clear()
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; await query.answer()
     user_id, data = query.from_user.id, query.data.split('_'); action = data[0]
-    if action == "refresh":
-        service_id = int(data[1]); service = db.get_service(service_id)
-        if service and service['user_id'] == user_id:
-            await query.edit_message_text("در حال به‌روزرسانی اطلاعات...", reply_markup=None)
-            await send_service_details(context, user_id, service, original_message=query.message)
-        else: await query.answer("خطا: این سرویس متعلق به شما نیست.", show_alert=True)
-    elif action == "showlinks": await show_link_options_with_qr(query.message, data[1], context, is_edit=False)
+    if action == "showlinks": await show_link_options_menu(query.message, data[1], is_edit=True)
+    elif action == "getlink":
+        await query.message.delete()
+        await send_qr_and_link(query.message, data[2], data[1], context)
     elif action == "renew":
         service_id, plan_id = int(data[1]), int(data[2])
         service, plan, user = db.get_service(service_id), db.get_plan(plan_id), db.get_or_create_user(user_id)
@@ -155,44 +153,84 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("در حال تمدید سرویس... ⏳")
         success = hiddify_api.renew_user_subscription(service['sub_uuid'], plan['days'], plan['gb'])
         if success: db.update_balance(user_id, plan['price'], add=False); db.renew_service(service_id, plan['days']); db.log_sale(user_id, plan_id, plan['price']); await query.edit_message_text("✅ سرویس شما با موفقیت تمدید شد!")
-        else: await query.edit_message_text("❌ خطا در تمدید سرویس. لطفا به پشتیبانی اطلاع دهید.")
-    elif action == "confirm" and data[1] == "charge" and user_id == ADMIN_ID:
-        target_user_id, amount = int(data[2]), int(data[3]); db.update_balance(target_user_id, amount, add=True); user_message_sent = False
+        else: await query.edit_message_text("❌ خطا در تمدید سرویس.")
+    elif action == "refresh":
+        service_id = int(data[1]); service = db.get_service(service_id)
+        if service and service['user_id'] == user_id:
+            await query.edit_message_text("در حال به‌روزرسانی اطلاعات...", reply_markup=None)
+            await send_service_details(context, user_id, service, original_message=query.message)
+        else: await query.answer("خطا: این سرویس متعلق به شما نیست.", show_alert=True)
+
+async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query; await query.answer(); user_id = query.from_user.id
+    if user_id != ADMIN_ID: return
+    data = query.data.split('_'); action = data[0]
+    if action == "admin" and data[1] == "confirm" and data[2] == "charge":
+        target_user_id, amount = int(data[3]), int(data[4]); db.update_balance(target_user_id, amount, add=True); user_message_sent = False
         try: await context.bot.send_message(chat_id=target_user_id, text=f"حساب شما با موفقیت به مبلغ **{amount:,} تومان** شارژ شد!", parse_mode=ParseMode.MARKDOWN); user_message_sent = True
         except (Forbidden, BadRequest): pass
         admin_feedback = f"✅ با موفقیت مبلغ {amount:,} تومان به حساب کاربر {target_user_id} اضافه شد."
         if not user_message_sent: admin_feedback += "\n\n⚠️ **اخطار:** کاربر ربات را بلاک کرده."
         await query.edit_message_caption(caption=admin_feedback, reply_markup=None, parse_mode=ParseMode.MARKDOWN)
-    elif action == "reject" and data[1] == "charge" and user_id == ADMIN_ID:
-        target_user_id = int(data[2]); user_message_sent = False
+    elif action == "admin" and data[1] == "reject" and data[2] == "charge":
+        target_user_id = int(data[3]); user_message_sent = False
         try: await context.bot.send_message(chat_id=target_user_id, text="متاسفانه درخواست شارژ حساب شما توسط ادمین رد شد."); user_message_sent = True
         except (Forbidden, BadRequest): pass
         admin_feedback = f"❌ درخواست شارژ کاربر {target_user_id} رد شد."
         if not user_message_sent: admin_feedback += "\n\n⚠️ **اخطار:** کاربر ربات را بلاک کرده."
         await query.edit_message_caption(caption=admin_feedback, reply_markup=None, parse_mode=ParseMode.MARKDOWN)
-    elif action == "delete" and data[1] == "plan" and user_id == ADMIN_ID: db.delete_plan(int(data[2])); await query.edit_message_text("پلن با موفقیت حذف شد.")
-    elif action == "edit" and user_id == ADMIN_ID:
+    elif action == "admin" and data[1] == "delete" and data[2] == "plan":
+        db.delete_plan(int(data[3])); await query.edit_message_text("پلن با موفقیت حذف شد.")
+    elif action == "admin" and data[1] == "edit":
         context.user_data['query_message_id'] = query.message.message_id
-        if data[1] == "card" and data[2] == "number": await query.message.reply_text(f"شماره کارت فعلی: {db.get_setting('card_number')}\nشماره کارت جدید را وارد کنید:"); context.user_data['next_state'] = SET_CARD_NUMBER
-        elif data[1] == "card" and data[2] == "holder": await query.message.reply_text(f"نام صاحب حساب فعلی: {db.get_setting('card_holder')}\nنام جدید را وارد کنید:"); context.user_data['next_state'] = SET_CARD_HOLDER
-    elif action == "confirm" and data[1] == "restore" and user_id == ADMIN_ID:
+        if data[2] == "card" and data[3] == "number": await query.message.reply_text(f"شماره کارت فعلی: {db.get_setting('card_number')}\nشماره کارت جدید را وارد کنید:"); context.user_data['next_state'] = SET_CARD_NUMBER
+        elif data[2] == "card" and data[3] == "holder": await query.message.reply_text(f"نام صاحب حساب فعلی: {db.get_setting('card_holder')}\nنام جدید را وارد کنید:"); context.user_data['next_state'] = SET_CARD_HOLDER
+    elif action == "admin" and data[1] == "confirm" and data[2] == "restore":
         restore_path = context.user_data.get('restore_path')
         if not restore_path or not os.path.exists(restore_path): await query.edit_message_text("خطا: فایل پشتیبان یافت نشد."); return
         try: shutil.move(restore_path, db.DB_NAME); await query.edit_message_text("✅ دیتابیس با موفقیت بازیابی شد.\n\n**مهم:** برای اعمال کامل تغییرات، لطفاً سرویس ربات را با دستور زیر ری‌استارت کنید:\n`sudo systemctl restart vpn_bot`", parse_mode=ParseMode.MARKDOWN)
         except Exception as e: await query.edit_message_text(f"خطا در هنگام جایگزینی فایل دیتابیس: {e}")
         context.user_data.clear()
-    elif action == "cancel" and data[1] == "restore" and user_id == ADMIN_ID:
+    elif action == "admin" and data[1] == "cancel" and data[2] == "restore":
         restore_path = context.user_data.get('restore_path')
         if restore_path and os.path.exists(restore_path): os.remove(restore_path)
         await query.edit_message_text("عملیات بازیابی لغو شد."); context.user_data.clear()
 
-async def show_link_options_with_qr(message_entity, user_uuid, config_name, context, is_edit=True):
+async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int, service: dict, original_message=None):
+    info = hiddify_api.get_user_info(service['sub_uuid'])
+    if info:
+        start_date_str, package_days = info.get('start_date'), info.get('package_days', 0)
+        expiry_date_display, is_expired = "N/A", True
+        if package_days > 0:
+            try:
+                start_date_obj = datetime.now().date() if not start_date_str else datetime.strptime(start_date_str, "%Y-%m-%d").date()
+                expiry_date_obj = start_date_obj + timedelta(days=package_days)
+                expiry_date_display, is_expired = expiry_date_obj.strftime("%Y-%m-%d"), expiry_date_obj < datetime.now().date()
+            except (ValueError, TypeError): logger.error(f"Could not parse start_date: {start_date_str}"); is_expired = True
+        status, renewal_plan = "🔴 منقضی شده" if is_expired else "🟢 فعال", db.get_plan(service['plan_id'])
+        message = (f"🔗 لینک پروفایل: `{service['sub_link']}`\n🗓️ تاریخ انقضا: {expiry_date_display}\n📊 حجم مصرفی: {info.get('current_usage_GB', 0):.2f} / {info.get('usage_limit_GB', 0):.0f} گیگ\n🚦 وضعیت: {status}")
+        keyboard = [[InlineKeyboardButton("📋 دریافت لینک‌های اشتراک", callback_data=f"showlinks_{service['sub_uuid']}")], [InlineKeyboardButton("🔄 به‌روزرسانی اطلاعات", callback_data=f"refresh_{service['service_id']}")]]
+        if renewal_plan and not is_expired: keyboard.append([InlineKeyboardButton(f"⏳ تمدید سرویس ({renewal_plan['price']:.0f} تومان)", callback_data=f"renew_{service['service_id']}_{renewal_plan['plan_id']}")])
+        if original_message: await original_message.edit_text(message, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
+        else: await context.bot.send_message(chat_id=chat_id, text=message, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(keyboard))
+    else:
+        error_text = f"خطا در دریافت اطلاعات برای لینک:\n`{service['sub_link']}`"
+        if original_message: await original_message.edit_text(error_text, parse_mode=ParseMode.MARKDOWN)
+        else: await context.bot.send_message(chat_id=chat_id, text=error_text, parse_mode=ParseMode.MARKDOWN)
+
+async def show_link_options_menu(query_or_update, user_uuid, is_edit=True):
+    keyboard = [[InlineKeyboardButton("🔗 لینک هوشمند (Auto)", callback_data=f"getlink_auto_{user_uuid}")], [InlineKeyboardButton("📱 لینک SingBox", callback_data=f"getlink_singbox_{user_uuid}")], [InlineKeyboardButton("💻 لینک استاندارد (Sub)", callback_data=f"getlink_sub_{user_uuid}")]]
+    text = "✅ سرویس شما با موفقیت ساخته شد! لطفاً نوع لینک اشتراک مورد نظر خود را انتخاب کنید:"
+    if is_edit: await query_or_update.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    else: await query_or_update.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+async def send_qr_and_link(message_entity, user_uuid, link_type, context):
     sub_path = SUB_PATH or ADMIN_PATH; sub_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
     base_link = f"https://{sub_domain}/{sub_path}/{user_uuid}"
-    final_link = f"{base_link}/sub/?asn=unknown#{config_name}"
+    user_info, config_name = hiddify_api.get_user_info(user_uuid), 'config'
+    if user_info: config_name = user_info.get('name', 'config')
+    final_link = f"{base_link}/{link_type}/?asn=unknown#{config_name}"
     qr_image = qrcode.make(final_link); bio = io.BytesIO(); bio.name = 'qrcode.png'; qr_image.save(bio, 'PNG'); bio.seek(0)
-    caption = (f"✅ سرویس شما با موفقیت ساخته شد!\n\nنام کانفیگ: **{config_name.replace('-', ' ')}**\n\nمی‌توانید با اسکن QR کد زیر یا با استفاده از لینک اشتراک، به سرویس متصل شوید.\n\nلینک اشتراک استاندارد شما:\n`{final_link}`")
-    if is_edit: await message_entity.delete()
+    caption = (f"نام کانفیگ: **{config_name.replace('-', ' ')}**\n\nمی‌توانید با اسکن QR کد زیر یا با استفاده از لینک اشتراک، به سرویس متصل شوید.\n\nلینک اشتراک شما:\n`{final_link}`")
     await context.bot.send_photo(chat_id=message_entity.chat_id, photo=bio, caption=caption, parse_mode=ParseMode.MARKDOWN)
 
 async def admin_entry(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("👑 به پنل ادمین خوش آمدید.", reply_markup=get_admin_menu_keyboard()); return ADMIN_MENU
@@ -221,11 +259,11 @@ async def list_plans_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not plans: await update.message.reply_text("هیچ پلنی تعریف نشده."); return
     for p in plans:
         text = f"🔹 **{p['name']}** (ID: `{p['plan_id']}`)\n   - قیمت: {p['price']:.0f} تومان\n   - مشخصات: {p['days']} روزه / {p['gb']} گیگ"
-        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑️ حذف", callback_data=f"delete_plan_{p['plan_id']}")]]) , parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑️ حذف", callback_data=f"admin_delete_plan_{p['plan_id']}")]]) , parse_mode=ParseMode.MARKDOWN)
 async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     card_number, card_holder = db.get_setting('card_number'), db.get_setting('card_holder')
     text = (f"⚙️ **تنظیمات ربات**\n\nشماره کارت فعلی: `{card_number}`\nصاحب حساب فعلی: `{card_holder}`")
-    keyboard = [[InlineKeyboardButton("ویرایش شماره کارت", callback_data="edit_card_number"), InlineKeyboardButton("ویرایش نام صاحب حساب", callback_data="edit_card_holder")]]
+    keyboard = [[InlineKeyboardButton("ویرایش شماره کارت", callback_data="admin_edit_card_number"), InlineKeyboardButton("ویرایش نام صاحب حساب", callback_data="admin_edit_card_holder")]]
     await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN); return SETTINGS_MENU
 async def handle_settings_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     next_state = context.user_data.get('next_state')
@@ -317,7 +355,7 @@ async def restore_receive_file(update: Update, context: ContextTypes.DEFAULT_TYP
     file = await document.get_file(); temp_path = os.path.join("backups", f"restore_temp.db"); await file.download_to_drive(temp_path)
     if not is_valid_sqlite(temp_path): await update.message.reply_text("❌ فایل ارسالی یک دیتابیس SQLite معتبر نیست."); os.remove(temp_path); return BACKUP_MENU
     context.user_data['restore_path'] = temp_path
-    keyboard = [[InlineKeyboardButton("✅ بله، مطمئنم", callback_data="confirm_restore"), InlineKeyboardButton("❌ خیر، لغو کن", callback_data="cancel_restore")]]
+    keyboard = [[InlineKeyboardButton("✅ بله، مطمئنم", callback_data="admin_confirm_restore"), InlineKeyboardButton("❌ خیر، لغو کن", callback_data="admin_cancel_restore")]]
     await update.message.reply_text("**آیا از جایگزینی دیتابیس فعلی کاملاً مطمئن هستید؟ این عمل غیرقابل بازگشت است.**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
 async def shutdown_bot(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("ربات در حال خاموش شدن است..."); asyncio.create_task(context.application.shutdown())
 async def admin_generic_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("عملیات لغو شد.", reply_markup=get_admin_menu_keyboard()); context.user_data.clear(); return ADMIN_MENU
@@ -329,6 +367,9 @@ def main():
     job_queue = application.job_queue; job_queue.run_daily(check_expiring_services, time=time(hour=10, minute=0, second=0))
     admin_filter, user_filter = filters.User(user_id=ADMIN_ID), ~filters.User(user_id=ADMIN_ID)
     
+    admin_callbacks = CallbackQueryHandler(admin_button_handler, pattern="^admin_")
+    user_callbacks = CallbackQueryHandler(button_handler, pattern="^(buy|showlinks|getlink|renew|refresh)")
+
     buy_handler = ConversationHandler(entry_points=[CallbackQueryHandler(buy_start, pattern='^buy_')], states={GET_CUSTOM_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_custom_name), CommandHandler('skip', skip_custom_name)]}, fallbacks=[CommandHandler('cancel', user_generic_cancel)])
     gift_handler = ConversationHandler(entry_points=[MessageHandler(filters.Regex('^🎁 کد هدیه$') & user_filter, gift_code_entry)], states={REDEEM_GIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, redeem_gift_code)]}, fallbacks=[CommandHandler('cancel', user_generic_cancel)])
     charge_handler = ConversationHandler(entry_points=[CallbackQueryHandler(charge_start, pattern='^start_charge$')], states={CHARGE_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, charge_amount_received)], CHARGE_RECEIPT: [MessageHandler(filters.PHOTO, charge_receipt_received)]}, fallbacks=[CommandHandler('cancel', user_generic_cancel)])
@@ -338,13 +379,13 @@ def main():
         states={
             ADMIN_MENU: [MessageHandler(filters.Regex('^➕ مدیریت پلن‌ها$'), plan_management_menu), MessageHandler(filters.Regex('^📊 آمار ربات$'), show_stats), MessageHandler(filters.Regex('^⚙️ تنظیمات$'), settings_menu), MessageHandler(filters.Regex('^💾 پشتیبان‌گیری و بازیابی$'), backup_restore_menu), MessageHandler(filters.Regex('^📩 ارسال پیام$'), broadcast_menu), MessageHandler(filters.Regex('^👥 مدیریت کاربران$'), user_management_menu), MessageHandler(filters.Regex('^🛑 خاموش کردن ربات$'), shutdown_bot)],
             PLAN_MENU: [MessageHandler(filters.Regex('^➕ افزودن پلن جدید$'), add_plan_start), MessageHandler(filters.Regex('^📋 لیست پلن‌ها$'), list_plans_admin), MessageHandler(filters.Regex('^بازگشت به منوی ادمین$'), back_to_admin_menu)],
-            SETTINGS_MENU: [CallbackQueryHandler(button_handler), MessageHandler(filters.TEXT & ~filters.COMMAND, handle_settings_text), MessageHandler(filters.Regex('^بازگشت به منوی ادمین$'), back_to_admin_menu)],
+            SETTINGS_MENU: [CallbackQueryHandler(admin_button_handler, pattern="^admin_edit"), MessageHandler(filters.TEXT & ~filters.COMMAND, handle_settings_text), MessageHandler(filters.Regex('^بازگشت به منوی ادمین$'), back_to_admin_menu)],
             BACKUP_MENU: [MessageHandler(filters.Regex('^📥 دریافت فایل پشتیبان$'), send_backup_file), MessageHandler(filters.Regex('^📤 بارگذاری فایل پشتیبان$'), restore_start), MessageHandler(filters.Regex('^بازگشت به منوی ادمین$'), back_to_admin_menu)],
             BROADCAST_MENU: [MessageHandler(filters.Regex('^ارسال به همه کاربران$'), broadcast_to_all_start), MessageHandler(filters.Regex('^ارسال به کاربر خاص$'), broadcast_to_user_start), MessageHandler(filters.Regex('^بازگشت به منوی ادمین$'), back_to_admin_menu)],
             USER_MANAGEMENT_MENU: [MessageHandler(filters.Regex('^بازگشت به منوی ادمین$'), back_to_admin_menu), MessageHandler(filters.TEXT & ~filters.COMMAND, manage_user_id_received)],
             PLAN_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_name_received)], PLAN_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_price_received)],
             PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_days_received)], PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_gb_received)],
-            RESTORE_UPLOAD: [MessageHandler(filters.Document.FileExtension("db"), restore_receive_file)], RESTORE_CONFIRM: [CallbackQueryHandler(button_handler)],
+            RESTORE_UPLOAD: [MessageHandler(filters.Document.FileExtension("db"), restore_receive_file)], RESTORE_CONFIRM: [CallbackQueryHandler(admin_button_handler, pattern="^admin_confirm_restore|admin_cancel_restore")],
             BROADCAST_MESSAGE: [MessageHandler(filters.ALL & ~filters.COMMAND, broadcast_to_all_confirm)],
             BROADCAST_CONFIRM: [MessageHandler(filters.Regex('^بله، ارسال کن$'), broadcast_to_all_send), MessageHandler(filters.Regex('^خیر، لغو کن$'), back_to_admin_menu)],
             BROADCAST_TO_USER_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_to_user_id_received)],
@@ -355,7 +396,8 @@ def main():
         }, fallbacks=[MessageHandler(filters.Regex('^↩️ خروج از پنل$'), exit_admin_panel), CommandHandler('cancel', admin_generic_cancel)]
     )
     application.add_handler(admin_conv); application.add_handler(gift_handler); application.add_handler(charge_handler); application.add_handler(buy_handler)
-    application.add_handler(CommandHandler("start", start)); application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(CommandHandler("start", start)); 
+    application.add_handler(user_callbacks); application.add_handler(admin_callbacks) # Separate handlers
     application.add_handler(MessageHandler(filters.Regex('^🛍️ خرید سرویس$') & user_filter, buy_service_list))
     application.add_handler(MessageHandler(filters.Regex('^📋 سرویس‌های من$') & user_filter, list_my_services))
     application.add_handler(MessageHandler(filters.Regex('^💰 موجودی و شارژ$') & user_filter, show_balance))
