@@ -29,7 +29,6 @@ logger = logging.getLogger(__name__)
 USAGE_ALERT_THRESHOLD = 0.8
 
 # --- Conversation States ---
-# <<< FINAL FIX: The number in range() must match the number of variables
 (ADMIN_MENU, PLAN_MENU, REPORTS_MENU, USER_MANAGEMENT_MENU,
  PLAN_NAME, PLAN_PRICE, PLAN_DAYS, PLAN_GB, 
  EDIT_PLAN_NAME, EDIT_PLAN_PRICE, EDIT_PLAN_DAYS, EDIT_PLAN_GB,
@@ -37,7 +36,7 @@ USAGE_ALERT_THRESHOLD = 0.8
  GET_CUSTOM_NAME, REDEEM_GIFT, CHARGE_AMOUNT, CHARGE_RECEIPT,
  SETTINGS_MENU, BACKUP_MENU, BROADCAST_MENU,
  BROADCAST_MESSAGE, BROADCAST_CONFIRM, BROADCAST_TO_USER_ID, BROADCAST_TO_USER_MESSAGE,
- RESTORE_UPLOAD) = range(27) # 27 variables in total
+ RESTORE_UPLOAD) = range(27)
 
 # --- Keyboards ---
 def get_main_menu_keyboard(user_id):
@@ -141,6 +140,8 @@ async def cancel_renewal_handler(update: Update, context: ContextTypes.DEFAULT_T
     await query.edit_message_text("عملیات تمدید لغو شد. در حال بازگشت به منوی سرویس...")
     if service: await send_service_details(context, query.from_user.id, service, original_message=query.message)
     else: await query.edit_message_text("سرویس مورد نظر یافت نشد.")
+
+# --- CallbackQuery Handlers ---
 async def user_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; await query.answer()
     user_id, data = query.from_user.id, query.data.split('_'); action = data[0]
@@ -162,6 +163,8 @@ async def user_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         service_id = int(data[1]); service = db.get_service(service_id)
         if service and service['user_id'] == user_id: await query.edit_message_text("در حال به‌روزرسانی اطلاعات...", reply_markup=None); await send_service_details(context, user_id, service, original_message=query.message)
         else: await query.answer("خطا: این سرویس متعلق به شما نیست.", show_alert=True)
+
+# --- Service Creation & Other Conversations ---
 async def show_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = db.get_or_create_user(update.effective_user.id, update.effective_user.username); keyboard = [[InlineKeyboardButton("💳 شارژ حساب", callback_data="user_start_charge")]]; await update.message.reply_text(f"💰 موجودی فعلی شما: **{user['balance']:.0f}** تومان", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
 async def show_support(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text(f"جهت ارتباط با پشتیبانی به آیدی زیر پیام ارسال کنید:\n@{SUPPORT_USERNAME}")
@@ -274,7 +277,6 @@ async def send_qr_and_link(chat_id, user_uuid, link_type, context):
 async def admin_entry(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("👑 به پنل ادمین خوش آمدید.", reply_markup=get_admin_menu_keyboard()); return ADMIN_MENU
 async def exit_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("شما از پنل ادمین خارج شدید.", reply_markup=get_main_menu_keyboard(update.effective_user.id)); return ConversationHandler.END
 async def back_to_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("به منوی اصلی ادمین بازگشتید.", reply_markup=get_admin_menu_keyboard()); return ADMIN_MENU
-async def plan_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE): keyboard = [["➕ افزودن پلن جدید", "📋 لیست پلن‌ها"], ["بازگشت به منوی ادمین"]]; await update.message.reply_text("بخش مدیریت پلن‌ها", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)); return PLAN_MENU
 async def add_plan_start(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("لطفا نام پلن را وارد کنید:", reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)); return PLAN_NAME
 async def plan_name_received(update: Update, context: ContextTypes.DEFAULT_TYPE): context.user_data['plan_name'] = update.message.text; await update.message.reply_text("نام ثبت شد. قیمت را به تومان وارد کنید:"); return PLAN_PRICE
 async def plan_price_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -322,7 +324,6 @@ async def broadcast_to_user_message_received(update: Update, context: ContextTyp
     try: await message_to_send.copy(chat_id=target_id); await update.message.reply_text("✅ پیام با موفقیت به کاربر ارسال شد.", reply_markup=get_admin_menu_keyboard())
     except (Forbidden, BadRequest): await update.message.reply_text("❌ ارسال پیام ناموفق بود. احتمالا کاربر ربات را بلاک کرده یا آیدی اشتباه است.", reply_markup=get_admin_menu_keyboard())
     context.user_data.clear(); return ADMIN_MENU
-async def user_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("لطفا آیدی عددی یا یوزرنیم تلگرام (با یا بدون @) کاربری که می‌خواهید مدیریت کنید را وارد نمایید:", reply_markup=ReplyKeyboardMarkup([["بازگشت به منوی ادمین"]], resize_keyboard=True)); return MANAGE_USER_ID
 async def manage_user_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_input = update.message.text; user_info = None
     if user_input.isdigit(): user_info = db.get_user(int(user_input))
