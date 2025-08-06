@@ -19,8 +19,12 @@ def _execute(query, params=(), fetchone=False, fetchall=False, commit=False):
 def init_db():
     conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
     cursor.execute('''CREATE TABLE IF NOT EXISTS users (
-                        user_id INTEGER PRIMARY KEY, balance REAL DEFAULT 0.0, 
-                        join_date TEXT, is_banned INTEGER DEFAULT 0, has_used_trial INTEGER DEFAULT 0
+                        user_id INTEGER PRIMARY KEY, 
+                        username TEXT, -- <<< NEW COLUMN
+                        balance REAL DEFAULT 0.0, 
+                        join_date TEXT, 
+                        is_banned INTEGER DEFAULT 0, 
+                        has_used_trial INTEGER DEFAULT 0
                     )''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS plans (
                         plan_id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, 
@@ -28,14 +32,9 @@ def init_db():
                     )''')
     cursor.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)')
     cursor.execute('''CREATE TABLE IF NOT EXISTS active_services (
-                        service_id INTEGER PRIMARY KEY AUTOINCREMENT, 
-                        user_id INTEGER NOT NULL, 
-                        name TEXT, 
-                        sub_uuid TEXT NOT NULL, 
-                        sub_link TEXT NOT NULL, 
-                        last_api_update TEXT, 
-                        plan_id INTEGER,
-                        low_usage_alert_sent INTEGER DEFAULT 0 -- <<< NEW COLUMN
+                        service_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, 
+                        name TEXT, sub_uuid TEXT NOT NULL, sub_link TEXT NOT NULL, 
+                        last_api_update TEXT, plan_id INTEGER, low_usage_alert_sent INTEGER DEFAULT 0
                     )''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS sales (
                         sale_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, 
@@ -46,6 +45,8 @@ def init_db():
                         usage_limit INTEGER NOT NULL, used_count INTEGER DEFAULT 0
                     )''')
     
+    try: cursor.execute('ALTER TABLE users ADD COLUMN username TEXT;')
+    except sqlite3.OperationalError: pass
     try: cursor.execute('ALTER TABLE active_services ADD COLUMN name TEXT;')
     except sqlite3.OperationalError: pass
     try: cursor.execute('ALTER TABLE active_services ADD COLUMN low_usage_alert_sent INTEGER DEFAULT 0;')
@@ -57,39 +58,58 @@ def init_db():
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_number', '0000-0000-0000-0000'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_holder', 'نام صاحب حساب'))
     conn.commit(); conn.close()
+    
+def get_or_create_user(user_id, username=None):
+    # Now we also save/update the username
+    user = _execute("SELECT * FROM users WHERE user_id = ?", (user_id,), fetchone=True)
+    if not user:
+        join_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        _execute("INSERT INTO users (user_id, username, join_date) VALUES (?, ?, ?)", (user_id, username, join_date), commit=True)
+        return get_user(user_id)
+    else:
+        # Update username if it has changed or was null
+        if user['username'] != username:
+            _execute("UPDATE users SET username = ? WHERE user_id = ?", (username, user_id), commit=True)
+    return dict(user)
 
-def get_all_active_services():
-    """Fetches all active services that have not expired for the usage check job."""
-    services = _execute("SELECT * FROM active_services", fetchall=True)
-    return [dict(service) for service in services] if services else []
+def get_user_by_username(username):
+    """Finds a user by their Telegram username (case-insensitive)."""
+    # Remove '@' if present
+    if username.startswith('@'):
+        username = username[1:]
+    user = _execute("SELECT * FROM users WHERE username LIKE ?", (username,), fetchone=True)
+    return dict(user) if user else None
 
-def set_low_usage_alert_sent(service_id, status=True):
-    """Marks that a low usage alert has been sent for a service."""
-    _execute("UPDATE active_services SET low_usage_alert_sent = ? WHERE service_id = ?", (1 if status else 0, service_id), commit=True)
-
-def update_service_after_renewal(service_id, new_plan_id):
-    """Updates the service record after a successful renewal and resets the alert flag."""
-    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    return _execute("UPDATE active_services SET plan_id = ?, last_api_update = ?, low_usage_alert_sent = 0 WHERE service_id = ?", 
-                    (new_plan_id, now_str, service_id), commit=True)
+def get_user_sales_history(user_id):
+    """Gets the sales history for a specific user, joining with plans table to get plan names."""
+    query = """
+        SELECT s.sale_date, s.price, p.name as plan_name
+        FROM sales s
+        LEFT JOIN plans p ON s.plan_id = p.plan_id
+        WHERE s.user_id = ?
+        ORDER BY s.sale_id DESC
+    """
+    history = _execute(query, (user_id,), fetchall=True)
+    return [dict(row) for row in history] if history else []
 
 # --- All other functions from the previous final version remain unchanged ---
+# (Pasting them for completeness)
+def get_all_active_services():
+    services = _execute("SELECT * FROM active_services", fetchall=True)
+    return [dict(service) for service in services] if services else []
+def set_low_usage_alert_sent(service_id, status=True):
+    _execute("UPDATE active_services SET low_usage_alert_sent = ? WHERE service_id = ?", (1 if status else 0, service_id), commit=True)
+def update_service_after_renewal(service_id, new_plan_id):
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return _execute("UPDATE active_services SET plan_id = ?, last_api_update = ?, low_usage_alert_sent = 0 WHERE service_id = ?", (new_plan_id, now_str, service_id), commit=True)
 def add_active_service(user_id, name, sub_uuid, sub_link, plan_id):
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    _execute("INSERT INTO active_services (user_id, name, sub_uuid, sub_link, last_api_update, plan_id) VALUES (?, ?, ?, ?, ?, ?)",
-             (user_id, name, sub_uuid, sub_link, now_str, plan_id), commit=True)
+    _execute("INSERT INTO active_services (user_id, name, sub_uuid, sub_link, last_api_update, plan_id) VALUES (?, ?, ?, ?, ?, ?)", (user_id, name, sub_uuid, sub_link, now_str, plan_id), commit=True)
 def get_setting(key):
     result = _execute("SELECT value FROM settings WHERE key = ?", (key,), fetchone=True)
     return result['value'] if result else None
 def set_setting(key, value):
     _execute("REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value), commit=True)
-def get_or_create_user(user_id):
-    user = _execute("SELECT * FROM users WHERE user_id = ?", (user_id,), fetchone=True)
-    if not user:
-        join_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        _execute("INSERT INTO users (user_id, join_date) VALUES (?, ?)", (user_id, join_date), commit=True)
-        return get_user(user_id)
-    return dict(user)
 def get_user(user_id):
     user = _execute("SELECT * FROM users WHERE user_id = ?", (user_id,), fetchone=True)
     return dict(user) if user else None
@@ -123,8 +143,7 @@ def get_service(service_id):
     return dict(service) if service else None
 def log_sale(user_id, plan_id, price):
     sale_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    _execute("INSERT INTO sales (user_id, plan_id, price, sale_date) VALUES (?, ?, ?, ?)",
-             (user_id, plan_id, price, sale_date), commit=True)
+    _execute("INSERT INTO sales (user_id, plan_id, price, sale_date) VALUES (?, ?, ?, ?)", (user_id, plan_id, price, sale_date), commit=True)
 def get_stats():
     user_count_row = _execute("SELECT COUNT(user_id) as count FROM users", fetchone=True)
     sales_data_row = _execute("SELECT COUNT(sale_id) as count, SUM(price) as total FROM sales", fetchone=True)
