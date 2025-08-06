@@ -18,13 +18,12 @@ from config import (BOT_TOKEN, ADMIN_ID, SUPPORT_USERNAME, SUB_DOMAINS, ADMIN_PA
                     PANEL_DOMAIN, SUB_PATH, TRIAL_ENABLED, TRIAL_DAYS, TRIAL_GB)
 
 import qrcode
-from PIL import Image
 
 os.makedirs('backups', exist_ok=True)
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- Conversation States (Expanded for all features) ---
+# --- Conversation States ---
 (
     ADMIN_MENU, PLAN_MENU, SETTINGS_MENU, BACKUP_MENU, GIFT_MENU, BROADCAST_MENU, USER_MANAGEMENT_MENU,
     PLAN_NAME, PLAN_PRICE, PLAN_DAYS, PLAN_GB,
@@ -48,11 +47,12 @@ def get_main_menu_keyboard(user_id):
     keyboard.append(["📞 پشتیبانی", " راهنمای اتصال 📚"])
     if user_id == ADMIN_ID: keyboard.append(["👑 ورود به پنل ادمین"])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
 def get_admin_menu_keyboard():
-    keyboard = [["➕ مدیریت پلن‌ها", "📊 آمار ربات"], ["⚙️ تنظیمات", "🎁 مدیریت کد هدیه"], ["📩 ارسال پیام", "💾 پشتیبان‌گیری"], ["👥 مدیریت کاربران"], ["🛑 خاموش کردن ربات", "↩️ خروج از پنل"]]
+    keyboard = [["➕ مدیریت پلن‌ها", "📊 آمار ربات"], ["⚙️ تنظیمات", "🎁 مدیریت کد هدیه"], ["📩 ارسال پیام", "💾 پشتیبان‌گیری و بازیابی"], ["👥 مدیریت کاربران"], ["🛑 خاموش کردن ربات", "↩️ خروج از پنل"]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# --- USER HANDLERS & CONVERSATIONS ---
+# --- JOB QUEUE ---
 async def check_expiring_services(context: ContextTypes.DEFAULT_TYPE):
     logger.info("Running daily check for expiring services...")
     expiring_services = db.get_services_expiring_soon(days=3)
@@ -62,6 +62,7 @@ async def check_expiring_services(context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(0.1)
         except (Forbidden, BadRequest): logger.warning(f"Could not send expiry notification to user {service['user_id']}.")
 
+# --- USER HANDLERS & CONVERSATIONS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_info = db.get_or_create_user(user_id)
@@ -94,8 +95,7 @@ async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if result and result.get('uuid'):
         db.set_user_trial_used(user_id)
         db.add_active_service(user_id, result['uuid'], result['full_link'], 0, TRIAL_DAYS)
-        await msg_loading.delete()
-        await show_link_options_with_qr(update.message, result['uuid'], result['config_name'], context)
+        await show_link_options_with_qr(msg_loading, result['uuid'], result['config_name'], context, is_edit=True)
     else: await msg_loading.edit_text("❌ متاسفانه در ساخت سرویس تست مشکلی پیش آمد. لطفا بعداً تلاش کنید.")
 
 async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -170,18 +170,22 @@ async def create_service_after_name(update: Update, context: ContextTypes.DEFAUL
     message_entity = update.message; user_id = message_entity.chat_id
     plan_id = context.user_data['plan_to_buy']; custom_name = context.user_data.get('custom_name', "")
     plan = db.get_plan(plan_id)
-    await message_entity.reply_text("در حال ساخت سرویس شما... ⏳")
+    msg = await message_entity.reply_text("در حال ساخت سرویس شما... ⏳")
     result = hiddify_api.create_hiddify_user(plan['days'], plan['gb'], user_id, custom_name=custom_name)
     if result and result.get('uuid'):
         db.update_balance(user_id, plan['price'], add=False); db.add_active_service(user_id, result['uuid'], result['full_link'], plan['plan_id'], plan['days']); db.log_sale(user_id, plan['plan_id'], plan['price'])
-        await show_link_options_with_qr(message_entity, result['uuid'], result['config_name'], context)
-    else: await message_entity.reply_text("❌ متاسفانه در ساخت سرویس مشکلی پیش آمد. لطفا به پشتیبانی اطلاع دهید.")
+        await show_link_options_with_qr(msg, result['uuid'], result['config_name'], context, is_edit=True)
+    else: await msg.edit_text("❌ متاسفانه در ساخت سرویس مشکلی پیش آمد. لطفا به پشتیبانی اطلاع دهید.")
     context.user_data.clear()
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; await query.answer()
     user_id, data = query.from_user.id, query.data.split('_'); action = data[0]
-    if action == "showlinks": await show_link_options_with_qr(query, data[1], context, is_edit=False)
+    if action == "showlinks": await show_link_options_with_qr(query.message, data[1], context, is_edit=False)
+    elif action == "getlink":
+        link_type, user_uuid = data[1], data[2]
+        await query.message.delete()
+        await show_link_options_with_qr(query.message, user_uuid, context, is_edit=False, link_type=link_type)
     elif action == "renew":
         service_id, plan_id = int(data[1]), int(data[2])
         service, plan, user = db.get_service(service_id), db.get_plan(plan_id), db.get_or_create_user(user_id)
@@ -221,15 +225,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if restore_path and os.path.exists(restore_path): os.remove(restore_path)
         await query.edit_message_text("عملیات بازیابی لغو شد."); context.user_data.clear()
 
-async def show_link_options_with_qr(query_or_update, user_uuid, context, is_edit=True):
+async def show_link_options_with_qr(query_or_update, user_uuid, config_name, context, is_edit=True):
+    message_entity = query_or_update.message if hasattr(query_or_update, 'message') else query_or_update
     sub_path = SUB_PATH or ADMIN_PATH; sub_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
     base_link = f"https://{sub_domain}/{sub_path}/{user_uuid}"
-    user_info, config_name = hiddify_api.get_user_info(user_uuid), 'config'
-    if user_info: config_name = user_info.get('name', 'config')
     final_link = f"{base_link}/sub/?asn=unknown#{config_name}"
     qr_image = qrcode.make(final_link); bio = io.BytesIO(); bio.name = 'qrcode.png'; qr_image.save(bio, 'PNG'); bio.seek(0)
-    caption = (f"✅ سرویس شما با موفقیت ساخته شد!\n\nمی‌توانید با اسکن QR کد زیر یا با استفاده از لینک اشتراک، به سرویس متصل شوید.\n\nلینک اشتراک استاندارد شما:\n`{final_link}`")
-    message_entity = query_or_update.message if hasattr(query_or_update, 'message') else query_or_update
+    caption = (f"✅ سرویس شما با موفقیت ساخته شد!\n\nنام کانفیگ: **{config_name.replace('-', ' ')}**\n\nمی‌توانید با اسکن QR کد زیر یا با استفاده از لینک اشتراک، به سرویس متصل شوید.\n\nلینک اشتراک استاندارد شما:\n`{final_link}`")
     if is_edit: await message_entity.delete()
     await context.bot.send_photo(chat_id=message_entity.chat_id, photo=bio, caption=caption, parse_mode=ParseMode.MARKDOWN)
 
@@ -388,7 +390,7 @@ def main():
             BROADCAST_TO_USER_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_to_user_id_received)],
             BROADCAST_TO_USER_MESSAGE: [MessageHandler(filters.ALL & ~filters.COMMAND, broadcast_to_user_message_received)],
             MANAGE_USER_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, manage_user_id_received)],
-            MANAGE_USER_ACTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, manage_user_action_handler), MessageHandler(filters.Regex('^بازگشت به منوی ادمین$'), back_to_admin_menu)],
+            MANAGE_USER_ACTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, manage_user_action_handler)],
             MANAGE_USER_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, manage_user_amount_received)],
         }, fallbacks=[MessageHandler(filters.Regex('^↩️ خروج از پنل$'), exit_admin_panel), CommandHandler('cancel', admin_generic_cancel)]
     )
