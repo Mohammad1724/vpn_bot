@@ -6,11 +6,8 @@ import logging
 
 from config import PANEL_DOMAIN, ADMIN_PATH, API_KEY, SUB_DOMAINS, SUB_PATH
 
-# Get the logger instance (configured in bot.py)
 logger = logging.getLogger(__name__)
 
-# --- API Session for Performance ---
-# Use a single session to reuse TCP connections (Keep-Alive)
 api_session = requests.Session()
 api_session.headers.update({
     "Hiddify-API-Key": API_KEY,
@@ -18,15 +15,12 @@ api_session.headers.update({
 })
 
 def _get_base_url():
-    """Constructs the base URL for the Hiddify Admin API."""
     return f"https://{PANEL_DOMAIN}/{ADMIN_PATH}/api/v2/admin/"
 
 def create_hiddify_user(plan_days, plan_gb, user_telegram_id=None, custom_name=""):
-    """Creates a new user in Hiddify panel."""
     if custom_name:
         user_name = custom_name.replace(" ", "-")
     else:
-        # Generate a unique name if no custom name is provided
         user_name = f"tg-{user_telegram_id}-{uuid.uuid4().hex[:4]}"
     
     comment = f"TG ID: {user_telegram_id}" if user_telegram_id else ""
@@ -42,8 +36,7 @@ def create_hiddify_user(plan_days, plan_gb, user_telegram_id=None, custom_name="
     
     try:
         response = api_session.post(endpoint, json=payload, timeout=20)
-        response.raise_for_status()  # This will raise an HTTPError for 4xx/5xx responses
-        
+        response.raise_for_status()
         user_data = response.json()
         user_uuid = user_data.get('uuid')
         
@@ -57,7 +50,6 @@ def create_hiddify_user(plan_days, plan_gb, user_telegram_id=None, custom_name="
         
         logger.info(f"Successfully created Hiddify user '{user_name}' with UUID {user_uuid}")
         
-        # Return only the necessary data
         return {"full_link": full_link, "uuid": user_uuid}
         
     except requests.exceptions.RequestException as e:
@@ -68,9 +60,7 @@ def create_hiddify_user(plan_days, plan_gb, user_telegram_id=None, custom_name="
         return None
 
 def get_user_info(user_uuid):
-    """Retrieves information for a specific user from Hiddify."""
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
-    
     try:
         response = api_session.get(endpoint, timeout=10)
         response.raise_for_status()
@@ -84,37 +74,45 @@ def get_user_info(user_uuid):
 
 def renew_user_subscription(user_uuid, plan_days, plan_gb):
     """
-    Renews a user's subscription by updating their plan and resetting their usage.
-    This is now a transactional-like operation.
+    Renews a user's subscription using a robust, two-step process.
+    1. Update the plan details (days, gb).
+    2. Reset the user's traffic and start_date.
     """
     endpoint_update = f"{_get_base_url()}user/{user_uuid}/"
-    payload = {
+    endpoint_reset = f"{_get_base_url()}user/{user_uuid}/reset/"
+    
+    payload_update = {
         "package_days": int(plan_days),
-        "usage_limit_GB": int(plan_gb)
+        "usage_limit_GB": int(plan_gb),
     }
     
     try:
-        # Step 1: Update the user's package
-        response_update = api_session.put(endpoint_update, json=payload, timeout=15)
+        # Step 1: Update the user's package details.
+        response_update = api_session.put(endpoint_update, json=payload_update, timeout=15)
         response_update.raise_for_status()
-        logger.info(f"Successfully updated package for user {user_uuid}.")
+        logger.info(f"Step 1/2 SUCCESS: Updated package for user {user_uuid}.")
 
-        # Step 2: Reset the user's traffic
-        endpoint_reset = f"{_get_base_url()}user/{user_uuid}/reset/"
+        # Step 2: Reset the user's traffic and start_date to today.
         response_reset = api_session.post(endpoint_reset, timeout=15)
         response_reset.raise_for_status()
-        logger.info(f"Successfully reset traffic for user {user_uuid}.")
+        logger.info(f"Step 2/2 SUCCESS: Reset traffic for user {user_uuid}.")
         
-        # Only return True if both steps were successful
-        return True
-        
+        # Step 3: Fetch the final, authoritative user info.
+        new_info = get_user_info(user_uuid)
+        if new_info:
+            logger.info(f"Successfully fetched new info for {user_uuid} after full renewal.")
+            return new_info
+        else:
+            # This is a critical state: renewal was sent but we can't confirm it.
+            logger.error(f"CRITICAL: Renewal for {user_uuid} was sent, but failed to fetch updated info!")
+            return None
+            
     except requests.exceptions.RequestException as e:
-        # The whole renewal process failed.
         logger.error(f"Hiddify API renewal failed for UUID {user_uuid}: {e}")
-        # If the first step succeeded but the second failed, we should log a critical error.
-        if 'response_update' in locals() and response_update.ok:
-            logger.critical(f"CRITICAL: User {user_uuid} was renewed BUT FAILED TO RESET. Manual intervention required!")
-        return False
+        # Log if the first step succeeded but the second failed.
+        if 'response_update' in locals() and response_update.ok and 'response_reset' not in locals():
+            logger.critical(f"CRITICAL: User {user_uuid} package was updated BUT FAILED TO RESET. Manual intervention required!")
+        return None
     except Exception as e:
         logger.error(f"An unexpected error occurred in renew_user_subscription: {e}")
-        return False
+        return None
