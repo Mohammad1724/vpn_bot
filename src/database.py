@@ -1,12 +1,9 @@
-import sqlite3
-import datetime
-import uuid
+import sqlite3, datetime, uuid
 
 DB_NAME = "vpn_bot.db"
 
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
+    conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
     cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, balance REAL DEFAULT 0.0, join_date TEXT, is_banned INTEGER DEFAULT 0, has_used_trial INTEGER DEFAULT 0)')
     cursor.execute('CREATE TABLE IF NOT EXISTS plans (plan_id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, price REAL NOT NULL, days INTEGER NOT NULL, gb INTEGER NOT NULL)')
     cursor.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)')
@@ -16,8 +13,7 @@ def init_db():
     conn.commit()
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_number', '0000-0000-0000-0000'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_holder', 'نام صاحب حساب'))
-    conn.commit()
-    conn.close()
+    conn.commit(); conn.close()
 
 def get_setting(key):
     conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
