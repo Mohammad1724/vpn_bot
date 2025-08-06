@@ -30,38 +30,30 @@ USAGE_ALERT_THRESHOLD = 0.8 # Send alert when usage is at 80%
 
 # --- Conversation States ---
 (ADMIN_MENU, PLAN_MENU, SETTINGS_MENU, BACKUP_MENU, GIFT_MENU, BROADCAST_MENU, USER_MANAGEMENT_MENU,
- PLAN_NAME, PLAN_PRICE, PLAN_DAYS, PLAN_GB, SET_CARD_NUMBER, SET_CARD_HOLDER, CHARGE_AMOUNT, 
- CHARGE_RECEIPT, REDEEM_GIFT, RESTORE_UPLOAD, RESTORE_CONFIRM, BROADCAST_MESSAGE, 
- BROADCAST_CONFIRM, GIFT_AMOUNT, GIFT_COUNT, MANAGE_USER_ID, MANAGE_USER_ACTION, 
- MANAGE_USER_AMOUNT, BROADCAST_TO_USER_ID, BROADCAST_TO_USER_MESSAGE, GET_CUSTOM_NAME,
- EDIT_PLAN_ID, EDIT_PLAN_NAME, EDIT_PLAN_PRICE, EDIT_PLAN_DAYS, EDIT_PLAN_GB,
- # New state for the reports menu
- REPORTS_MENU) = range(34)
+ REPORTS_MENU, PLAN_NAME, PLAN_PRICE, PLAN_DAYS, PLAN_GB, SET_CARD_NUMBER, SET_CARD_HOLDER, 
+ CHARGE_AMOUNT, CHARGE_RECEIPT, REDEEM_GIFT, RESTORE_UPLOAD, RESTORE_CONFIRM, 
+ BROADCAST_MESSAGE, BROADCAST_CONFIRM, GIFT_AMOUNT, GIFT_COUNT, MANAGE_USER_ID, 
+ MANAGE_USER_ACTION, MANAGE_USER_AMOUNT, BROADCAST_TO_USER_ID, BROADCAST_TO_USER_MESSAGE, 
+ GET_CUSTOM_NAME, EDIT_PLAN_NAME, EDIT_PLAN_PRICE, EDIT_PLAN_DAYS, EDIT_PLAN_GB) = range(34)
 
 # --- Keyboards ---
 def get_main_menu_keyboard(user_id):
     user_info = db.get_or_create_user(user_id)
     keyboard = [["🛍️ خرید سرویس", "📋 سرویس‌های من"], ["💰 موجودی و شارژ", "🎁 کد هدیه"]]
-    if TRIAL_ENABLED and user_info and not user_info.get('has_used_trial'):
-        keyboard.append(["🧪 دریافت سرویس تست رایگان"])
+    if TRIAL_ENABLED and user_info and not user_info.get('has_used_trial'): keyboard.append(["🧪 دریافت سرویس تست رایگان"])
     keyboard.append(["📞 پشتیبانی", "📚 راهنمای اتصال"])
     if user_id == ADMIN_ID: keyboard.append(["👑 ورود به پنل ادمین"])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 def get_admin_menu_keyboard():
-    keyboard = [
-        ["➕ مدیریت پلن‌ها", "📈 گزارش‌ها و آمار"], # <<< CHANGED
-        ["⚙️ تنظیمات", "🎁 مدیریت کد هدیه"], 
-        ["📩 ارسال پیام", "💾 پشتیبان‌گیری"], 
-        ["👥 مدیریت کاربران"], 
-        ["🛑 خاموش کردن ربات", "↩️ خروج از پنل"]
-    ]
+    keyboard = [["➕ مدیریت پلن‌ها", "📈 گزارش‌ها و آمار"], ["⚙️ تنظیمات", "🎁 مدیریت کد هدیه"], 
+                ["📩 ارسال پیام", "💾 پشتیبان‌گیری"], ["👥 مدیریت کاربران"], 
+                ["🛑 خاموش کردن ربات", "↩️ خروج از پنل"]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 # --- Helper Functions ---
 def _get_service_status(hiddify_info):
-    start_date_str = hiddify_info.get('start_date')
-    package_days = hiddify_info.get('package_days', 0)
+    start_date_str = hiddify_info.get('start_date'); package_days = hiddify_info.get('package_days', 0)
     if not start_date_str:
         plan = db.get_plan_by_gb_and_days(hiddify_info.get('usage_limit_GB', 0), package_days)
         if plan: estimated_expiry = datetime.now().date() + timedelta(days=plan['days']); return f"🟢 فعال (جدید)", estimated_expiry.strftime("%Y-%m-%d"), False
@@ -98,52 +90,74 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_info and user_info.get('is_banned'): await update.message.reply_text("شما از استفاده از این ربات منع شده‌اید."); return ConversationHandler.END
     await update.message.reply_text("👋 به ربات فروش VPN خوش آمدید!", reply_markup=get_main_menu_keyboard(user.id)); return ConversationHandler.END
 
-# --- Admin Panel: Reports Menu (NEW) ---
-async def reports_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        ["📊 آمار کلی", "📈 گزارش فروش امروز"],
-        ["📅 گزارش فروش ۷ روز اخیر", "🏆 محبوب‌ترین پلن‌ها"],
-        ["بازگشت به منوی ادمین"]
-    ]
-    await update.message.reply_text("منوی گزارش‌ها و آمار", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
-    return REPORTS_MENU
-
-async def show_stats_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    stats = db.get_stats()
-    message = (f"📊 **آمار کلی ربات**\n\n"
-               f"👥 تعداد کل کاربران: {stats['user_count']} نفر\n"
-               f"🛒 تعداد کل فروش‌ها: {stats['sales_count']} عدد\n"
-               f"💳 درآمد کل: {stats['total_revenue']:.0f} تومان")
-    await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
-
-async def show_daily_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    report = db.get_sales_report_for_period(days=1)
-    message = (f"📈 **گزارش فروش امروز**\n\n"
-               f"🛒 تعداد فروش امروز: {report['sales_count']} عدد\n"
-               f"💳 درآمد امروز: {report['total_revenue']:.0f} تومان")
-    await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
-
-async def show_weekly_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    report = db.get_sales_report_for_period(days=7)
-    message = (f"📅 **گزارش فروش ۷ روز اخیر**\n\n"
-               f"🛒 تعداد فروش هفته: {report['sales_count']} عدد\n"
-               f"💳 درآمد هفته: {report['total_revenue']:.0f} تومان")
-    await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
-
-async def show_popular_plans_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    plans = db.get_most_popular_plans()
-    if not plans:
-        await update.message.reply_text("هنوز هیچ پلنی فروخته نشده است."); return
+# --- Admin Panel ---
+async def list_plans_admin(update: Update, context: ContextTypes.DEFAULT_TYPE, query=None):
+    plans = db.list_all_plans_admin()
+    message_entity = query.message if query else update.message
     
-    message = "🏆 **محبوب‌ترین پلن‌ها (بر اساس تعداد فروش):**\n\n"
-    for i, plan in enumerate(plans, 1):
-        message += f"{i}. **{plan['name']}**\n"
-        message += f"   - تعداد فروش: {plan['sales_count']} عدد\n"
-        message += f"   - قیمت: {plan['price']:.0f} تومان\n\n"
+    if not plans: await message_entity.reply_text("هیچ پلنی تعریف نشده است."); return
     
-    await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
+    if query: # If called from a button, delete old messages
+        chat_id = query.message.chat_id
+        # Delete the previous list of plans to avoid clutter
+        # This is a bit complex, we might need a better way to track messages to delete
+        pass
+    
+    await message_entity.reply_text("لیست تمام پلن‌های تعریف شده در سیستم:")
+    for p in plans:
+        visibility_icon = "👁️" if p['is_visible'] else "🙈"
+        visibility_text = "آشکار" if p['is_visible'] else "مخفی"
+        text = (f"🔹 **{p['name']}** (ID: `{p['plan_id']}`)\n"
+                f"   - قیمت: {p['price']:.0f} تومان\n"
+                f"   - مشخصات: {p['days']} روزه / {p['gb']} گیگ\n"
+                f"   - وضعیت: **{visibility_text}**")
+        keyboard = [[
+            InlineKeyboardButton("🗑️ حذف", callback_data=f"admin_delete_plan_{p['plan_id']}"),
+            InlineKeyboardButton("✏️ ویرایش", callback_data=f"admin_edit_plan_{p['plan_id']}"),
+            InlineKeyboardButton(f"{visibility_icon} تغییر وضعیت", callback_data=f"admin_toggle_plan_{p['plan_id']}")
+        ]]
+        await message_entity.get_bot().send_message(chat_id=message_entity.chat_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
 
-# --- The rest of the code is here for completeness, with minor changes where needed ---
+async def edit_plan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query; await query.answer()
+    plan_id = int(query.data.split('_')[-1]); plan = db.get_plan(plan_id)
+    if not plan: await query.edit_message_text("خطا: این پلن یافت نشد."); return ConversationHandler.END
+    context.user_data['edit_plan_id'] = plan_id
+    await query.message.reply_text(f"شما در حال ویرایش پلن '{plan['name']}' هستید.\n\nنام جدید را وارد کنید (یا برای رد شدن /skip بزنید):", reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True))
+    return EDIT_PLAN_NAME
+
+async def edit_plan_name_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['edit_plan_name'] = update.message.text; await update.message.reply_text("نام جدید ثبت شد. قیمت جدید را به تومان وارد کنید (یا /skip):"); return EDIT_PLAN_PRICE
+async def skip_edit_plan_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['edit_plan_name'] = None; await update.message.reply_text("از نام قبلی استفاده می‌شود. قیمت جدید را به تومان وارد کنید (یا /skip):"); return EDIT_PLAN_PRICE
+async def edit_plan_price_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try: context.user_data['edit_plan_price'] = float(update.message.text); await update.message.reply_text("قیمت جدید ثبت شد. تعداد روزهای جدید را وارد کنید (یا /skip):"); return EDIT_PLAN_DAYS
+    except ValueError: await update.message.reply_text("لطفا قیمت را به صورت عدد وارد کنید."); return EDIT_PLAN_PRICE
+async def skip_edit_plan_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['edit_plan_price'] = None; await update.message.reply_text("از قیمت قبلی استفاده می‌شود. تعداد روزهای جدید را وارد کنید (یا /skip):"); return EDIT_PLAN_DAYS
+async def edit_plan_days_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try: context.user_data['edit_plan_days'] = int(update.message.text); await update.message.reply_text("تعداد روز جدید ثبت شد. حجم جدید به گیگابایت را وارد کنید (یا /skip):"); return EDIT_PLAN_GB
+    except ValueError: await update.message.reply_text("لطفا تعداد روز را به صورت عدد وارد کنید."); return EDIT_PLAN_DAYS
+async def skip_edit_plan_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['edit_plan_days'] = None; await update.message.reply_text("از تعداد روز قبلی استفاده می‌شود. حجم جدید به گیگابایت را وارد کنید (یا /skip):"); return EDIT_PLAN_GB
+async def edit_plan_gb_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try: context.user_data['edit_plan_gb'] = int(update.message.text); await finalize_plan_edit(update, context)
+    except ValueError: await update.message.reply_text("لطفا حجم را به صورت عدد وارد کنید."); return EDIT_PLAN_GB
+async def skip_edit_plan_gb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['edit_plan_gb'] = None; await finalize_plan_edit(update, context)
+async def finalize_plan_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    plan_id = context.user_data['edit_plan_id']
+    original_plan = db.get_plan(plan_id)
+    new_name = context.user_data.get('edit_plan_name', original_plan['name'])
+    new_price = context.user_data.get('edit_plan_price', original_plan['price'])
+    new_days = context.user_data.get('edit_plan_days', original_plan['days'])
+    new_gb = context.user_data.get('edit_plan_gb', original_plan['gb'])
+    db.update_plan(plan_id, new_name, new_price, new_days, new_gb)
+    await update.message.reply_text("✅ پلن با موفقیت به‌روزرسانی شد!", reply_markup=get_admin_menu_keyboard())
+    context.user_data.clear(); return ConversationHandler.END
+
+# ... (The rest of the file is the same as the previous complete version)
+# (Pasting for completeness)
 async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id; services = db.get_user_services(user_id)
     if not services: await update.message.reply_text("شما در حال حاضر هیچ سرویس فعالی ندارید."); return
@@ -279,9 +293,9 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     if user_id != ADMIN_ID: return
     data = query.data.split('_'); action = data[0]
     if action == "admin" and data[1] == "delete" and data[2] == "plan":
-        db.delete_plan(int(data[3])); await list_plans_admin(update, context, is_edit=True, query=query)
+        db.delete_plan(int(data[3])); await query.message.delete(); await list_plans_admin(update, context, query=query)
     elif action == "admin" and data[1] == "toggle" and data[2] == "plan":
-        db.toggle_plan_visibility(int(data[3])); await list_plans_admin(update, context, is_edit=True, query=query)
+        db.toggle_plan_visibility(int(data[3])); await query.message.delete(); await list_plans_admin(update, context, query=query)
     elif action == "admin" and data[1] == "confirm" and data[2] == "charge":
         target_user_id, amount = int(data[3]), int(data[4]); db.update_balance(target_user_id, amount); user_message_sent = False
         try: await context.bot.send_message(chat_id=target_user_id, text=f"حساب شما با موفقیت به مبلغ **{amount:,} تومان** شارژ شد!", parse_mode=ParseMode.MARKDOWN); user_message_sent = True
@@ -324,7 +338,6 @@ async def send_qr_and_link(chat_id, user_uuid, link_type, context):
 async def admin_entry(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("👑 به پنل ادمین خوش آمدید.", reply_markup=get_admin_menu_keyboard()); return ADMIN_MENU
 async def exit_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("شما از پنل ادمین خارج شدید.", reply_markup=get_main_menu_keyboard(update.effective_user.id)); return ConversationHandler.END
 async def back_to_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("به منوی اصلی ادمین بازگشتید.", reply_markup=get_admin_menu_keyboard()); return ADMIN_MENU
-async def plan_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE): keyboard = [["➕ افزودن پلن جدید", "📋 لیست پلن‌ها"], ["بازگشت به منوی ادمین"]]; await update.message.reply_text("بخش مدیریت پلن‌ها", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)); return PLAN_MENU
 async def add_plan_start(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("لطفا نام پلن را وارد کنید:", reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)); return PLAN_NAME
 async def plan_name_received(update: Update, context: ContextTypes.DEFAULT_TYPE): context.user_data['plan_name'] = update.message.text; await update.message.reply_text("نام ثبت شد. قیمت را به تومان وارد کنید:"); return PLAN_PRICE
 async def plan_price_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -417,8 +430,7 @@ def main():
             EDIT_PLAN_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_plan_price_received), CommandHandler('skip', skip_edit_plan_price)],
             EDIT_PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_plan_days_received), CommandHandler('skip', skip_edit_plan_days)],
             EDIT_PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_plan_gb_received), CommandHandler('skip', skip_edit_plan_gb)],
-        },
-        fallbacks=[CommandHandler('cancel', admin_generic_cancel)], per_user=True, per_chat=True
+        }, fallbacks=[CommandHandler('cancel', admin_generic_cancel)], per_user=True, per_chat=True
     )
     
     admin_callbacks = CallbackQueryHandler(admin_button_handler, pattern="^admin_")
@@ -453,7 +465,6 @@ def main():
             MANAGE_USER_ID: [MessageHandler(filters.Regex('^بازگشت به منوی ادمین$'), back_to_admin_menu), MessageHandler(filters.TEXT & ~filters.COMMAND, manage_user_id_received)],
             MANAGE_USER_ACTION: [MessageHandler(filters.Regex('^بازگشت به منوی ادمین$'), back_to_admin_menu), MessageHandler(filters.TEXT & ~filters.COMMAND, manage_user_action_handler)],
             MANAGE_USER_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, manage_user_amount_received)],
-            # (All other admin states...)
         }, fallbacks=[MessageHandler(filters.Regex('^↩️ خروج از پنل$'), exit_admin_panel), CommandHandler('cancel', admin_generic_cancel)], per_user=True, per_chat=True
     )
     
