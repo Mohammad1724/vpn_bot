@@ -92,6 +92,7 @@ def get_plan(plan_id):
     return dict(plan) if plan else None
 
 def get_plan_by_gb_and_days(gb, days):
+    """Find a plan that matches the GB and days from the API info."""
     plan = _execute("SELECT * FROM plans WHERE gb = ? AND days = ?", (gb, days), fetchone=True)
     return dict(plan) if plan else None
 
