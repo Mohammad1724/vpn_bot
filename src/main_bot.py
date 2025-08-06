@@ -36,6 +36,7 @@ def get_main_menu_keyboard(user_id):
     keyboard.append(["📞 پشتیبانی", " راهنمای اتصال 📚"])
     if user_id == ADMIN_ID: keyboard.append(["👑 ورود به پنل ادمین"])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
 def get_admin_menu_keyboard():
     keyboard = [["➕ مدیریت پلن‌ها", "📊 آمار ربات"], ["⚙️ تنظیمات", "🎁 مدیریت کد هدیه"], ["📩 ارسال پیام", "💾 پشتیبان‌گیری"], ["👥 مدیریت کاربران"], ["🛑 خاموش کردن ربات", "↩️ خروج از پنل"]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -56,7 +57,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def show_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = db.get_or_create_user(update.effective_user.id); keyboard = [[InlineKeyboardButton("💳 شارژ حساب", callback_data="start_charge")]]
+    user = db.get_or_create_user(update.effective_user.id); keyboard = [[InlineKeyboardButton("💳 شارژ حساب", callback_data="user_start_charge")]]
     await update.message.reply_text(f"💰 موجودی فعلی شما: **{user['balance']:.0f}** تومان", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
 async def show_support(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text(f"جهت ارتباط با پشتیبانی به آیدی زیر پیام ارسال کنید:\n@{SUPPORT_USERNAME}")
 async def show_guide(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("راهنمای اتصال به سرویس‌ها:\n\n(اینجا می‌توانید آموزش‌های لازم را قرار دهید)")
@@ -64,7 +65,7 @@ async def show_guide(update: Update, context: ContextTypes.DEFAULT_TYPE): await 
 async def buy_service_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     plans = db.list_plans()
     if not plans: await update.message.reply_text("متاسفانه در حال حاضر هیچ پلنی برای فروش موجود نیست."); return
-    keyboard = [[InlineKeyboardButton(f"{p['name']} - {p['days']} روزه {p['gb']} گیگ - {p['price']:.0f} تومان", callback_data=f"buy_{p['plan_id']}")] for p in plans]
+    keyboard = [[InlineKeyboardButton(f"{p['name']} - {p['days']} روزه {p['gb']} گیگ - {p['price']:.0f} تومان", callback_data=f"user_buy_{p['plan_id']}")] for p in plans]
     await update.message.reply_text("لطفا سرویس مورد نظر خود را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -75,7 +76,7 @@ async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result = hiddify_api.create_hiddify_user(TRIAL_DAYS, TRIAL_GB, user_id, custom_name="سرویس تست")
     if result and result.get('uuid'):
         db.set_user_trial_used(user_id); db.add_active_service(user_id, result['uuid'], result['full_link'], 0, TRIAL_DAYS)
-        await show_link_options_with_qr(msg_loading, result['uuid'], result['config_name'], context, is_edit=True)
+        await show_link_options_menu(msg_loading, result['uuid'], is_edit=True)
     else: await msg_loading.edit_text("❌ متاسفانه در ساخت سرویس تست مشکلی پیش آمد. لطفا بعداً تلاش کنید.")
 
 async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -138,7 +139,7 @@ async def create_service_after_name(update: Update, context: ContextTypes.DEFAUL
     else: await msg.edit_text("❌ متاسفانه در ساخت سرویس مشکلی پیش آمد. لطفا به پشتیبانی اطلاع دهید.")
     context.user_data.clear()
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def user_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; await query.answer()
     user_id, data = query.from_user.id, query.data.split('_'); action = data[0]
     if action == "showlinks": await show_link_options_menu(query.message, data[1], is_edit=True)
@@ -179,8 +180,7 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         admin_feedback = f"❌ درخواست شارژ کاربر {target_user_id} رد شد."
         if not user_message_sent: admin_feedback += "\n\n⚠️ **اخطار:** کاربر ربات را بلاک کرده."
         await query.edit_message_caption(caption=admin_feedback, reply_markup=None, parse_mode=ParseMode.MARKDOWN)
-    elif action == "admin" and data[1] == "delete" and data[2] == "plan":
-        db.delete_plan(int(data[3])); await query.edit_message_text("پلن با موفقیت حذف شد.")
+    elif action == "admin" and data[1] == "delete" and data[2] == "plan": db.delete_plan(int(data[3])); await query.edit_message_text("پلن با موفقیت حذف شد.")
     elif action == "admin" and data[1] == "edit":
         context.user_data['query_message_id'] = query.message.message_id
         if data[2] == "card" and data[3] == "number": await query.message.reply_text(f"شماره کارت فعلی: {db.get_setting('card_number')}\nشماره کارت جدید را وارد کنید:"); context.user_data['next_state'] = SET_CARD_NUMBER
@@ -367,19 +367,16 @@ def main():
     job_queue = application.job_queue; job_queue.run_daily(check_expiring_services, time=time(hour=10, minute=0, second=0))
     admin_filter, user_filter = filters.User(user_id=ADMIN_ID), ~filters.User(user_id=ADMIN_ID)
     
-    admin_callbacks = CallbackQueryHandler(admin_button_handler, pattern="^admin_")
-    user_callbacks = CallbackQueryHandler(button_handler, pattern="^(buy|showlinks|getlink|renew|refresh)")
-
     buy_handler = ConversationHandler(entry_points=[CallbackQueryHandler(buy_start, pattern='^buy_')], states={GET_CUSTOM_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_custom_name), CommandHandler('skip', skip_custom_name)]}, fallbacks=[CommandHandler('cancel', user_generic_cancel)])
     gift_handler = ConversationHandler(entry_points=[MessageHandler(filters.Regex('^🎁 کد هدیه$') & user_filter, gift_code_entry)], states={REDEEM_GIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, redeem_gift_code)]}, fallbacks=[CommandHandler('cancel', user_generic_cancel)])
-    charge_handler = ConversationHandler(entry_points=[CallbackQueryHandler(charge_start, pattern='^start_charge$')], states={CHARGE_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, charge_amount_received)], CHARGE_RECEIPT: [MessageHandler(filters.PHOTO, charge_receipt_received)]}, fallbacks=[CommandHandler('cancel', user_generic_cancel)])
+    charge_handler = ConversationHandler(entry_points=[CallbackQueryHandler(charge_start, pattern='^user_start_charge$')], states={CHARGE_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, charge_amount_received)], CHARGE_RECEIPT: [MessageHandler(filters.PHOTO, charge_receipt_received)]}, fallbacks=[CommandHandler('cancel', user_generic_cancel)])
     
     admin_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^👑 ورود به پنل ادمین$') & admin_filter, admin_entry)],
         states={
-            ADMIN_MENU: [MessageHandler(filters.Regex('^➕ مدیریت پلن‌ها$'), plan_management_menu), MessageHandler(filters.Regex('^📊 آمار ربات$'), show_stats), MessageHandler(filters.Regex('^⚙️ تنظیمات$'), settings_menu), MessageHandler(filters.Regex('^💾 پشتیبان‌گیری و بازیابی$'), backup_restore_menu), MessageHandler(filters.Regex('^📩 ارسال پیام$'), broadcast_menu), MessageHandler(filters.Regex('^👥 مدیریت کاربران$'), user_management_menu), MessageHandler(filters.Regex('^🛑 خاموش کردن ربات$'), shutdown_bot)],
-            PLAN_MENU: [MessageHandler(filters.Regex('^➕ افزودن پلن جدید$'), add_plan_start), MessageHandler(filters.Regex('^📋 لیست پلن‌ها$'), list_plans_admin), MessageHandler(filters.Regex('^بازگشت به منوی ادمین$'), back_to_admin_menu)],
-            SETTINGS_MENU: [CallbackQueryHandler(admin_button_handler, pattern="^admin_edit"), MessageHandler(filters.TEXT & ~filters.COMMAND, handle_settings_text), MessageHandler(filters.Regex('^بازگشت به منوی ادمین$'), back_to_admin_menu)],
+            ADMIN_MENU: [MessageHandler(filters.Regex('^➕ مدیریت پلن‌ها$') & admin_filter, plan_management_menu), MessageHandler(filters.Regex('^📊 آمار ربات$') & admin_filter, show_stats), MessageHandler(filters.Regex('^⚙️ تنظیمات$') & admin_filter, settings_menu), MessageHandler(filters.Regex('^💾 پشتیبان‌گیری و بازیابی$') & admin_filter, backup_restore_menu), MessageHandler(filters.Regex('^📩 ارسال پیام$') & admin_filter, broadcast_menu), MessageHandler(filters.Regex('^👥 مدیریت کاربران$') & admin_filter, user_management_menu), MessageHandler(filters.Regex('^🛑 خاموش کردن ربات$') & admin_filter, shutdown_bot)],
+            PLAN_MENU: [MessageHandler(filters.Regex('^➕ افزودن پلن جدید$') & admin_filter, add_plan_start), MessageHandler(filters.Regex('^📋 لیست پلن‌ها$') & admin_filter, list_plans_admin), MessageHandler(filters.Regex('^بازگشت به منوی ادمین$') & admin_filter, back_to_admin_menu)],
+            SETTINGS_MENU: [CallbackQueryHandler(admin_button_handler, pattern="^admin_edit"), MessageHandler(filters.TEXT & ~filters.COMMAND, handle_settings_text), MessageHandler(filters.Regex('^بازگشت به منوی ادمین$') & admin_filter, back_to_admin_menu)],
             BACKUP_MENU: [MessageHandler(filters.Regex('^📥 دریافت فایل پشتیبان$'), send_backup_file), MessageHandler(filters.Regex('^📤 بارگذاری فایل پشتیبان$'), restore_start), MessageHandler(filters.Regex('^بازگشت به منوی ادمین$'), back_to_admin_menu)],
             BROADCAST_MENU: [MessageHandler(filters.Regex('^ارسال به همه کاربران$'), broadcast_to_all_start), MessageHandler(filters.Regex('^ارسال به کاربر خاص$'), broadcast_to_user_start), MessageHandler(filters.Regex('^بازگشت به منوی ادمین$'), back_to_admin_menu)],
             USER_MANAGEMENT_MENU: [MessageHandler(filters.Regex('^بازگشت به منوی ادمین$'), back_to_admin_menu), MessageHandler(filters.TEXT & ~filters.COMMAND, manage_user_id_received)],
@@ -397,7 +394,8 @@ def main():
     )
     application.add_handler(admin_conv); application.add_handler(gift_handler); application.add_handler(charge_handler); application.add_handler(buy_handler)
     application.add_handler(CommandHandler("start", start)); 
-    application.add_handler(user_callbacks); application.add_handler(admin_callbacks) # Separate handlers
+    application.add_handler(user_callbacks)
+    application.add_handler(admin_callbacks)
     application.add_handler(MessageHandler(filters.Regex('^🛍️ خرید سرویس$') & user_filter, buy_service_list))
     application.add_handler(MessageHandler(filters.Regex('^📋 سرویس‌های من$') & user_filter, list_my_services))
     application.add_handler(MessageHandler(filters.Regex('^💰 موجودی و شارژ$') & user_filter, show_balance))
