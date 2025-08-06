@@ -16,7 +16,6 @@ import database as db
 import hiddify_api
 from config import (BOT_TOKEN, ADMIN_ID, SUPPORT_USERNAME, SUB_DOMAINS, ADMIN_PATH, 
                     PANEL_DOMAIN, SUB_PATH, TRIAL_ENABLED, TRIAL_DAYS, TRIAL_GB)
-
 import qrcode
 
 os.makedirs('backups', exist_ok=True)
@@ -47,6 +46,7 @@ def get_main_menu_keyboard(user_id):
     keyboard.append(["📞 پشتیبانی", " راهنمای اتصال 📚"])
     if user_id == ADMIN_ID: keyboard.append(["👑 ورود به پنل ادمین"])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
 def get_admin_menu_keyboard():
     keyboard = [["➕ مدیریت پلن‌ها", "📊 آمار ربات"], ["⚙️ تنظیمات", "🎁 مدیریت کد هدیه"], ["📩 ارسال پیام", "💾 پشتیبان‌گیری"], ["👥 مدیریت کاربران"], ["🛑 خاموش کردن ربات", "↩️ خروج از پنل"]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -232,7 +232,7 @@ async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
 
 async def show_link_options_menu(message_entity, user_uuid, is_edit=True):
     keyboard = [[InlineKeyboardButton("🔗 لینک هوشمند (Auto)", callback_data=f"getlink_auto_{user_uuid}")], [InlineKeyboardButton("📱 لینک SingBox", callback_data=f"getlink_singbox_{user_uuid}")], [InlineKeyboardButton("💻 لینک استاندارد (Sub)", callback_data=f"getlink_sub_{user_uuid}")]]
-    text = "✅ سرویس شما با موفقیت ساخته شد! لطفاً نوع لینک اشتراک مورد نظر خود را انتخاب کنید:"
+    text = "لطفاً نوع لینک اشتراک مورد نظر خود را انتخاب کنید:"
     if is_edit: await message_entity.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     else: await message_entity.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 async def send_qr_and_link(message_entity, user_uuid, link_type, context):
@@ -379,8 +379,9 @@ def main():
     job_queue = application.job_queue; job_queue.run_daily(check_expiring_services, time=time(hour=10, minute=0, second=0))
     admin_filter, user_filter = filters.User(user_id=ADMIN_ID), ~filters.User(user_id=ADMIN_ID)
     
+    # Separate handlers for user and admin callbacks to prevent conflicts
+    user_callbacks = CallbackQueryHandler(user_button_handler, pattern="^(showlinks|getlink|renew|refresh|user_buy|user_start_charge)")
     admin_callbacks = CallbackQueryHandler(admin_button_handler, pattern="^admin_")
-    user_callbacks = CallbackQueryHandler(user_button_handler, pattern="^(showlinks|getlink|renew|refresh)")
 
     buy_handler = ConversationHandler(entry_points=[CallbackQueryHandler(buy_start, pattern='^user_buy_')], states={GET_CUSTOM_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_custom_name), CommandHandler('skip', skip_custom_name)]}, fallbacks=[CommandHandler('cancel', user_generic_cancel)])
     gift_handler = ConversationHandler(entry_points=[MessageHandler(filters.Regex('^🎁 کد هدیه$') & user_filter, gift_code_entry)], states={REDEEM_GIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, redeem_gift_code)]}, fallbacks=[CommandHandler('cancel', user_generic_cancel)])
