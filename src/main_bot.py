@@ -71,60 +71,129 @@ def _get_service_status(hiddify_info):
         else: return "🟢 فعال", expiry_date_obj.strftime("%Y-%m-%d"), False
     except (ValueError, TypeError): logger.error(f"Could not parse start_date: {start_date_str}"); return "⚠️ وضعیت نامشخص", "N/A", True
 
-# --- NEW BACKGROUND JOB ---
+# --- Background Job (Unchanged) ---
 async def check_low_usage(context: ContextTypes.DEFAULT_TYPE):
     logger.info("Running job: Checking for low usage services...")
     all_services = db.get_all_active_services()
-    
     for service in all_services:
-        # Skip if an alert has already been sent
-        if service['low_usage_alert_sent']:
-            continue
-            
+        if service['low_usage_alert_sent']: continue
         info = hiddify_api.get_user_info(service['sub_uuid'])
-        if not info:
-            logger.warning(f"Could not get info for service {service['service_id']} during usage check.")
-            continue
-        
-        # Check if the service is expired; if so, no need to send a usage alert
+        if not info: logger.warning(f"Could not get info for service {service['service_id']} during usage check."); continue
         status, expiry_date, is_expired = _get_service_status(info)
-        if is_expired:
-            continue
-            
+        if is_expired: continue
         usage_limit = info.get('usage_limit_GB', 0)
         current_usage = info.get('current_usage_GB', 0)
-        
-        # Ensure there's a usage limit to check against
         if usage_limit > 0:
             usage_ratio = current_usage / usage_limit
             if usage_ratio >= USAGE_ALERT_THRESHOLD:
                 try:
-                    user_id = service['user_id']
-                    service_name = f"'{service['name']}'" if service['name'] else ""
-                    
-                    # Send a friendly notification to the user
-                    await context.bot.send_message(
-                        chat_id=user_id,
-                        text=(f"📢 هشدار اتمام حجم!\n\n"
-                              f"کاربر گرامی، بیش از {int(USAGE_ALERT_THRESHOLD * 100)}٪ از حجم سرویس شما {service_name} مصرف شده است.\n"
-                              f"({current_usage:.2f} گیگ از {usage_limit:.0f} گیگ)\n\n"
-                              "برای جلوگیری از قطعی، پیشنهاد می‌کنیم سرویس خود را تمدید نمایید.")
-                    )
-                    
-                    # Mark that the alert has been sent to avoid spamming the user
+                    user_id = service['user_id']; service_name = f"'{service['name']}'" if service['name'] else ""
+                    await context.bot.send_message(chat_id=user_id, text=(f"📢 هشدار اتمام حجم!\n\nکاربر گرامی، بیش از {int(USAGE_ALERT_THRESHOLD * 100)}٪ از حجم سرویس شما {service_name} مصرف شده است.\n({current_usage:.2f} گیگ از {usage_limit:.0f} گیگ)\n\nبرای جلوگیری از قطعی، پیشنهاد می‌کنیم سرویس خود را تمدید نمایید."))
                     db.set_low_usage_alert_sent(service['service_id'])
                     logger.info(f"Sent low usage alert to user {user_id} for service {service['service_id']}.")
-                    await asyncio.sleep(0.2) # Avoid hitting rate limits
-                except (Forbidden, BadRequest) as e:
-                    logger.warning(f"Failed to send low usage alert to user {user_id}: {e}")
-                except Exception as e:
-                    logger.error(f"An unexpected error occurred while sending low usage alert: {e}")
+                    await asyncio.sleep(0.2)
+                except (Forbidden, BadRequest) as e: logger.warning(f"Failed to send low usage alert to user {user_id}: {e}")
+                except Exception as e: logger.error(f"An unexpected error occurred while sending low usage alert: {e}")
 
-# --- Main User Handlers (Unchanged) ---
+# --- Main User Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id; user_info = db.get_or_create_user(user_id)
-    if user_info and user_info.get('is_banned'): await update.message.reply_text("شما از استفاده از این ربات منع شده‌اید."); return ConversationHandler.END
-    await update.message.reply_text("👋 به ربات فروش VPN خوش آمدید!", reply_markup=get_main_menu_keyboard(user_id)); return ConversationHandler.END
+    user = update.effective_user
+    # <<< CHANGE: Pass username to get_or_create_user to save/update it
+    user_info = db.get_or_create_user(user.id, user.username)
+    if user_info and user_info.get('is_banned'):
+        await update.message.reply_text("شما از استفاده از این ربات منع شده‌اید.")
+        return ConversationHandler.END
+    await update.message.reply_text("👋 به ربات فروش VPN خوش آمدید!", reply_markup=get_main_menu_keyboard(user.id))
+    return ConversationHandler.END
+
+# --- Admin Panel: User Management (Major Changes) ---
+async def user_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # <<< CHANGE: Updated prompt to include username search
+    await update.message.reply_text(
+        "لطفا آیدی عددی یا یوزرنیم تلگرام (با یا بدون @) کاربری که می‌خواهید مدیریت کنید را وارد نمایید:",
+        reply_markup=ReplyKeyboardMarkup([["بازگشت به منوی ادمین"]], resize_keyboard=True)
+    )
+    return MANAGE_USER_ID
+
+async def manage_user_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_input = update.message.text
+    user_info = None
+    
+    # <<< CHANGE: New logic to search by ID or username
+    if user_input.isdigit():
+        user_info = db.get_user(int(user_input))
+    elif user_input.isalnum() or (user_input.startswith('@') and user_input[1:].isalnum()):
+        user_info = db.get_user_by_username(user_input)
+    else:
+        await update.message.reply_text("ورودی نامعتبر است. لطفاً یک آیدی عددی یا یوزرنیم تلگرام وارد کنید.")
+        return MANAGE_USER_ID
+
+    if not user_info:
+        await update.message.reply_text("کاربری با این مشخصات یافت نشد.")
+        return MANAGE_USER_ID
+        
+    context.user_data['target_user_id'] = user_info['user_id']
+    ban_text = "آزاد کردن کاربر" if user_info['is_banned'] else "مسدود کردن کاربر"
+    
+    # <<< CHANGE: New keyboard with "Sales History" button
+    keyboard = [
+        ["افزایش موجودی", "کاهش موجودی"],
+        ["📜 سوابق خرید", ban_text],
+        ["بازگشت به منوی ادمین"]
+    ]
+    
+    info_text = (f"👤 مدیریت کاربر: `{user_info['user_id']}`\n"
+                 f"🔹 یوزرنیم: @{user_info['username']}\n"
+                 f"💰 موجودی: {user_info['balance']:.0f} تومان\n"
+                 f"🚦 وضعیت: {'مسدود' if user_info['is_banned'] else 'فعال'}")
+                 
+    await update.message.reply_text(info_text, reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True), parse_mode=ParseMode.MARKDOWN)
+    return MANAGE_USER_ACTION
+
+async def manage_user_action_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    action = update.message.text
+    target_user_id = context.user_data.get('target_user_id')
+    
+    if not target_user_id:
+        await update.message.reply_text("خطا: کاربر هدف مشخص نیست.")
+        return await back_to_admin_menu(update, context)
+        
+    if action in ["افزایش موجودی", "کاهش موجودی"]:
+        context.user_data['manage_action'] = action
+        await update.message.reply_text("لطفا مبلغ مورد نظر را به تومان وارد کنید:")
+        return MANAGE_USER_AMOUNT
+    
+    elif "مسدود" in action or "آزاد" in action:
+        user_info = db.get_user(target_user_id)
+        new_ban_status = not user_info['is_banned']
+        db.set_user_ban_status(target_user_id, new_ban_status)
+        await update.message.reply_text(f"✅ وضعیت کاربر با موفقیت به '{'مسدود' if new_ban_status else 'فعال'}' تغییر کرد.", reply_markup=get_admin_menu_keyboard())
+        context.user_data.clear()
+        return ADMIN_MENU
+
+    # <<< CHANGE: New logic for handling the "Sales History" button
+    elif action == "📜 سوابق خرید":
+        history = db.get_user_sales_history(target_user_id)
+        if not history:
+            await update.message.reply_text("این کاربر تاکنون خریدی نداشته است.")
+            return MANAGE_USER_ACTION # Stay in the same menu
+        
+        response_message = "📜 **سوابق خرید کاربر:**\n\n"
+        for sale in history:
+            sale_date = datetime.strptime(sale['sale_date'], '%Y-%m-%d %H:%M:%S').strftime('%Y/%m/%d - %H:%M')
+            response_message += f"🔹 **{sale['plan_name'] or 'پلن حذف شده'}**\n"
+            response_message += f"   - قیمت: {sale['price']:.0f} تومان\n"
+            response_message += f"   - تاریخ: {sale_date}\n\n"
+        
+        await update.message.reply_text(response_message, parse_mode=ParseMode.MARKDOWN)
+        return MANAGE_USER_ACTION # Stay in the same menu
+        
+    else:
+        await update.message.reply_text("دستور نامعتبر است. لطفاً از دکمه‌ها استفاده کنید.")
+        return MANAGE_USER_ACTION
+
+# --- All other handlers and functions remain the same as the final version ---
+# (Pasting them for completeness)
 async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id; services = db.get_user_services(user_id)
     if not services: await update.message.reply_text("شما در حال حاضر هیچ سرویس فعالی ندارید."); return
@@ -132,8 +201,6 @@ async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for service in services: await send_service_details(context, user_id, service); await asyncio.sleep(0.2)
     try: await msg.delete()
     except BadRequest: pass
-
-# --- All other handlers and functions remain the same as the final version ---
 async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int, service: dict, original_message=None):
     try:
         info = hiddify_api.get_user_info(service['sub_uuid'])
@@ -180,7 +247,7 @@ async def user_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     if action == "showlinks": await show_link_options_menu(query.message, data[1], is_edit=True)
     elif action == "getlink": await query.message.delete(); await send_qr_and_link(query.message.chat_id, data[2], data[1], context)
     elif action == "renew":
-        service_id, plan_id = int(data[1]), int(data[2]); service = db.get_service(service_id); plan = db.get_plan(plan_id); user = db.get_or_create_user(user_id)
+        service_id, plan_id = int(data[1]), int(data[2]); service = db.get_service(service_id); plan = db.get_plan(plan_id); user = db.get_or_create_user(user_id, update.effective_user.username)
         if not service or not plan: await query.edit_message_text("❌ سرویس یا پلن تمدید نامعتبر است."); return
         if user['balance'] < plan['price']: await query.edit_message_text(f"موجودی برای تمدید کافی نیست! (نیاز به {plan['price']:.0f} تومان)"); return
         await query.edit_message_text("در حال بررسی وضعیت سرویس... ⏳")
@@ -196,7 +263,7 @@ async def user_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         if service and service['user_id'] == user_id: await query.edit_message_text("در حال به‌روزرسانی اطلاعات...", reply_markup=None); await send_service_details(context, user_id, service, original_message=query.message)
         else: await query.answer("خطا: این سرویس متعلق به شما نیست.", show_alert=True)
 async def show_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = db.get_or_create_user(update.effective_user.id); keyboard = [[InlineKeyboardButton("💳 شارژ حساب", callback_data="user_start_charge")]]; await update.message.reply_text(f"💰 موجودی فعلی شما: **{user['balance']:.0f}** تومان", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+    user = db.get_or_create_user(update.effective_user.id, update.effective_user.username); keyboard = [[InlineKeyboardButton("💳 شارژ حساب", callback_data="user_start_charge")]]; await update.message.reply_text(f"💰 موجودی فعلی شما: **{user['balance']:.0f}** تومان", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
 async def show_support(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text(f"جهت ارتباط با پشتیبانی به آیدی زیر پیام ارسال کنید:\n@{SUPPORT_USERNAME}")
 async def show_guide(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("راهنمای اتصال به سرویس‌ها:\n\n(اینجا می‌توانید آموزش‌های لازم را قرار دهید)")
 async def buy_service_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -204,7 +271,7 @@ async def buy_service_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not plans: await update.message.reply_text("متاسفانه در حال حاضر هیچ پلنی برای فروش موجود نیست."); return
     keyboard = [[InlineKeyboardButton(f"{p['name']} - {p['days']} روزه {p['gb']} گیگ - {p['price']:.0f} تومان", callback_data=f"user_buy_{p['plan_id']}")] for p in plans]; await update.message.reply_text("لطفا سرویس مورد نظر خود را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
 async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id; user_info = db.get_or_create_user(user_id)
+    user_id = update.effective_user.id; user_info = db.get_or_create_user(user_id, update.effective_user.username)
     if not TRIAL_ENABLED: await update.message.reply_text("در حال حاضر سرویس تست فعال نمی‌باشد."); return
     if user_info.get('has_used_trial'): await update.message.reply_text("شما قبلاً از سرویس تست رایگان استفاده کرده‌اید."); return
     msg_loading = await update.message.reply_text("در حال ساخت سرویس تست شما... ⏳")
@@ -236,7 +303,7 @@ async def buy_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; await query.answer();
     try: plan_id_str = query.data.split('_')[-1]; plan_id = int(plan_id_str)
     except (ValueError, IndexError): await query.edit_message_text("❌ خطای داخلی: اطلاعات پلن نامعتبر است."); return ConversationHandler.END
-    user_id = query.from_user.id; plan, user = db.get_plan(plan_id), db.get_or_create_user(user_id)
+    user_id = query.from_user.id; plan, user = db.get_plan(plan_id), db.get_or_create_user(user_id, update.effective_user.username)
     if not plan: await query.edit_message_text("❌ این پلن دیگر موجود نیست."); return ConversationHandler.END
     if user['balance'] < plan['price']: await query.edit_message_text(f"موجودی شما کافی نیست!\nموجودی: {user['balance']:.0f} تومان\nقیمت پلن: {plan['price']:.0f} تومان"); return ConversationHandler.END
     context.user_data['plan_to_buy'] = plan_id; await query.edit_message_text("✅ پلن شما انتخاب شد.\n\nلطفاً یک نام دلخواه برای این سرویس وارد کنید (مثلاً: گوشی شخصی).\nبرای استفاده از نام پیش‌فرض، دستور /skip را ارسال کنید.", reply_markup=None); return GET_CUSTOM_NAME
@@ -364,24 +431,6 @@ async def broadcast_to_user_message_received(update: Update, context: ContextTyp
     try: await message_to_send.copy(chat_id=target_id); await update.message.reply_text("✅ پیام با موفقیت به کاربر ارسال شد.", reply_markup=get_admin_menu_keyboard())
     except (Forbidden, BadRequest): await update.message.reply_text("❌ ارسال پیام ناموفق بود. احتمالا کاربر ربات را بلاک کرده یا آیدی اشتباه است.", reply_markup=get_admin_menu_keyboard())
     context.user_data.clear(); return ADMIN_MENU
-async def user_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("لطفا آیدی عددی کاربری که می‌خواهید مدیریت کنید را وارد نمایید:", reply_markup=ReplyKeyboardMarkup([["بازگشت به منوی ادمین"]], resize_keyboard=True)); return MANAGE_USER_ID
-async def manage_user_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        target_user_id = int(update.message.text); user_info = db.get_user(target_user_id)
-        if not user_info: await update.message.reply_text("کاربری با این آیدی یافت نشد."); return MANAGE_USER_ID
-        context.user_data['target_user_id'] = target_user_id; ban_text = "آزاد کردن کاربر" if user_info['is_banned'] else "مسدود کردن کاربر"
-        keyboard = [["افزایش موجودی", "کاهش موجودی"], [ban_text], ["بازگشت به منوی ادمین"]]
-        info_text = f"مدیریت کاربر: `{target_user_id}`\nموجودی: {user_info['balance']:.0f} تومان\nوضعیت: {'مسدود' if user_info['is_banned'] else 'فعال'}"
-        await update.message.reply_text(info_text, reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True), parse_mode=ParseMode.MARKDOWN); return MANAGE_USER_ACTION
-    except ValueError: await update.message.reply_text("لطفا یک آیدی عددی معتبر وارد کنید."); return MANAGE_USER_ID
-async def manage_user_action_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    action = update.message.text; target_user_id = context.user_data.get('target_user_id')
-    if not target_user_id: await update.message.reply_text("خطا: کاربر هدف مشخص نیست."); return await back_to_admin_menu(update, context)
-    if action in ["افزایش موجودی", "کاهش موجودی"]: context.user_data['manage_action'] = action; await update.message.reply_text("لطفا مبلغ مورد نظر را به تومان وارد کنید:"); return MANAGE_USER_AMOUNT
-    elif "مسدود" in action or "آزاد" in action:
-        user_info = db.get_user(target_user_id); new_ban_status = not user_info['is_banned']
-        db.set_user_ban_status(target_user_id, new_ban_status); await update.message.reply_text(f"✅ وضعیت کاربر با موفقیت به '{'مسدود' if new_ban_status else 'فعال'}' تغییر کرد.", reply_markup=get_admin_menu_keyboard()); context.user_data.clear(); return ADMIN_MENU
-    else: await update.message.reply_text("دستور نامعتبر است. لطفاً از دکمه‌ها استفاده کنید."); return MANAGE_USER_ACTION
 async def manage_user_amount_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         amount = float(update.message.text); action, target_user_id = context.user_data['manage_action'], context.user_data['target_user_id']
@@ -417,9 +466,7 @@ def main():
     db.init_db()
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     job_queue = application.job_queue
-    # Schedule the new job to run every 6 hours
     job_queue.run_repeating(check_low_usage, interval=timedelta(hours=6), first=10)
-    
     admin_filter, user_filter = filters.User(user_id=ADMIN_ID), ~filters.User(user_id=ADMIN_ID)
     admin_callbacks = CallbackQueryHandler(admin_button_handler, pattern="^admin_")
     user_callbacks = CallbackQueryHandler(user_button_handler, pattern="^(showlinks|getlink|renew|refresh)")
