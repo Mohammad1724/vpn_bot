@@ -30,11 +30,12 @@ def init_db():
     cursor.execute('''CREATE TABLE IF NOT EXISTS active_services (
                         service_id INTEGER PRIMARY KEY AUTOINCREMENT, 
                         user_id INTEGER NOT NULL, 
-                        name TEXT, -- <<< NEW COLUMN
+                        name TEXT, 
                         sub_uuid TEXT NOT NULL, 
                         sub_link TEXT NOT NULL, 
                         last_api_update TEXT, 
-                        plan_id INTEGER
+                        plan_id INTEGER,
+                        low_usage_alert_sent INTEGER DEFAULT 0 -- <<< NEW COLUMN
                     )''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS sales (
                         sale_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, 
@@ -45,38 +46,43 @@ def init_db():
                         usage_limit INTEGER NOT NULL, used_count INTEGER DEFAULT 0
                     )''')
     
-    # Safely add the new 'name' column if it doesn't exist
-    try:
-        cursor.execute('ALTER TABLE active_services ADD COLUMN name TEXT;')
-    except sqlite3.OperationalError:
-        pass # Column already exists, which is fine.
-
-    try: 
-        cursor.execute('ALTER TABLE active_services RENAME COLUMN expiry_date TO last_api_update;')
-    except sqlite3.OperationalError: 
-        pass
+    try: cursor.execute('ALTER TABLE active_services ADD COLUMN name TEXT;')
+    except sqlite3.OperationalError: pass
+    try: cursor.execute('ALTER TABLE active_services ADD COLUMN low_usage_alert_sent INTEGER DEFAULT 0;')
+    except sqlite3.OperationalError: pass
+    try: cursor.execute('ALTER TABLE active_services RENAME COLUMN expiry_date TO last_api_update;')
+    except sqlite3.OperationalError: pass
     
     conn.commit()
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_number', '0000-0000-0000-0000'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_holder', 'نام صاحب حساب'))
     conn.commit(); conn.close()
 
-# ... (The rest of the functions are mostly the same, only add_active_service is changed) ...
+def get_all_active_services():
+    """Fetches all active services that have not expired for the usage check job."""
+    services = _execute("SELECT * FROM active_services", fetchall=True)
+    return [dict(service) for service in services] if services else []
 
+def set_low_usage_alert_sent(service_id, status=True):
+    """Marks that a low usage alert has been sent for a service."""
+    _execute("UPDATE active_services SET low_usage_alert_sent = ? WHERE service_id = ?", (1 if status else 0, service_id), commit=True)
+
+def update_service_after_renewal(service_id, new_plan_id):
+    """Updates the service record after a successful renewal and resets the alert flag."""
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return _execute("UPDATE active_services SET plan_id = ?, last_api_update = ?, low_usage_alert_sent = 0 WHERE service_id = ?", 
+                    (new_plan_id, now_str, service_id), commit=True)
+
+# --- All other functions from the previous final version remain unchanged ---
 def add_active_service(user_id, name, sub_uuid, sub_link, plan_id):
-    """Adds a new active service to the database, now including the custom name."""
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     _execute("INSERT INTO active_services (user_id, name, sub_uuid, sub_link, last_api_update, plan_id) VALUES (?, ?, ?, ?, ?, ?)",
              (user_id, name, sub_uuid, sub_link, now_str, plan_id), commit=True)
-
-# --- All other functions from the previous final version remain unchanged ---
 def get_setting(key):
     result = _execute("SELECT value FROM settings WHERE key = ?", (key,), fetchone=True)
     return result['value'] if result else None
-
 def set_setting(key, value):
     _execute("REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value), commit=True)
-
 def get_or_create_user(user_id):
     user = _execute("SELECT * FROM users WHERE user_id = ?", (user_id,), fetchone=True)
     if not user:
@@ -84,60 +90,41 @@ def get_or_create_user(user_id):
         _execute("INSERT INTO users (user_id, join_date) VALUES (?, ?)", (user_id, join_date), commit=True)
         return get_user(user_id)
     return dict(user)
-
 def get_user(user_id):
     user = _execute("SELECT * FROM users WHERE user_id = ?", (user_id,), fetchone=True)
     return dict(user) if user else None
-
 def get_all_user_ids():
     users = _execute("SELECT user_id FROM users WHERE is_banned = 0", fetchall=True)
     return [user['user_id'] for user in users] if users else []
-
 def set_user_ban_status(user_id, is_banned):
     _execute("UPDATE users SET is_banned = ? WHERE user_id = ?", (1 if is_banned else 0, user_id), commit=True)
-
 def update_balance(user_id, amount):
     _execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id), commit=True)
-
 def set_user_trial_used(user_id):
     _execute("UPDATE users SET has_used_trial = 1 WHERE user_id = ?", (user_id,), commit=True)
-
 def add_plan(name, price, days, gb):
     _execute("INSERT INTO plans (name, price, days, gb) VALUES (?, ?, ?, ?)", (name, price, days, gb), commit=True)
-
 def list_plans():
     plans = _execute("SELECT * FROM plans", fetchall=True)
     return [dict(plan) for plan in plans] if plans else []
-
 def get_plan(plan_id):
     plan = _execute("SELECT * FROM plans WHERE plan_id = ?", (plan_id,), fetchone=True)
     return dict(plan) if plan else None
-
 def get_plan_by_gb_and_days(gb, days):
     plan = _execute("SELECT * FROM plans WHERE gb = ? AND days = ?", (gb, days), fetchone=True)
     return dict(plan) if plan else None
-
 def delete_plan(plan_id):
     _execute("DELETE FROM plans WHERE plan_id = ?", (plan_id,), commit=True)
-
 def get_user_services(user_id):
     services = _execute("SELECT * FROM active_services WHERE user_id = ?", (user_id,), fetchall=True)
     return [dict(service) for service in services] if services else []
-
 def get_service(service_id):
     service = _execute("SELECT * FROM active_services WHERE service_id = ?", (service_id,), fetchone=True)
     return dict(service) if service else None
-
-def update_service_after_renewal(service_id, new_plan_id):
-    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    return _execute("UPDATE active_services SET plan_id = ?, last_api_update = ? WHERE service_id = ?", 
-                    (new_plan_id, now_str, service_id), commit=True)
-
 def log_sale(user_id, plan_id, price):
     sale_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     _execute("INSERT INTO sales (user_id, plan_id, price, sale_date) VALUES (?, ?, ?, ?)",
              (user_id, plan_id, price, sale_date), commit=True)
-
 def get_stats():
     user_count_row = _execute("SELECT COUNT(user_id) as count FROM users", fetchone=True)
     sales_data_row = _execute("SELECT COUNT(sale_id) as count, SUM(price) as total FROM sales", fetchone=True)
@@ -145,17 +132,14 @@ def get_stats():
     sales_count = sales_data_row['count'] or 0
     total_revenue = sales_data_row['total'] or 0.0
     return {"user_count": user_count, "sales_count": sales_count, "total_revenue": total_revenue}
-
 def get_buyers_list():
     buyers = _execute("SELECT DISTINCT user_id FROM sales", fetchall=True)
     return [buyer['user_id'] for buyer in buyers] if buyers else []
-
 def create_gift_code(amount, usage_limit):
     code = str(uuid.uuid4().hex[:10]).upper()
     if _execute("INSERT INTO gift_codes (code, amount, usage_limit) VALUES (?, ?, ?)", (code, amount, usage_limit), commit=True):
         return code
     return None
-
 def use_gift_code(code, user_id):
     gift = _execute("SELECT amount, usage_limit, used_count FROM gift_codes WHERE code = ?", (code,), fetchone=True)
     if gift and (gift['usage_limit'] == 0 or gift['used_count'] < gift['usage_limit']):
@@ -167,10 +151,8 @@ def use_gift_code(code, user_id):
             conn.commit()
         return amount
     return None
-
 def list_gift_codes():
     codes = _execute("SELECT * FROM gift_codes", fetchall=True)
     return [dict(code) for code in codes] if codes else []
-
 def delete_gift_code(code):
     _execute("DELETE FROM gift_codes WHERE code = ?", (code,), commit=True)
