@@ -12,38 +12,19 @@ def _get_headers():
 
 def create_hiddify_user(plan_days, plan_gb, user_telegram_id=None, custom_name=""):
     endpoint = _get_base_url() + "user/"
-    
-    # نام منحصر به فرد برای پنل (برای جلوگیری از تداخل)
     unique_name = f"tg-{user_telegram_id}-{uuid.uuid4().hex[:4]}"
-    # کامنت شامل نام دلخواه کاربر (برای نمایش در پنل ادمین)
     comment = f"Custom Name: {custom_name} | TG ID: {user_telegram_id}" if custom_name else f"Telegram user: {user_telegram_id}"
-    
-    payload = {
-        "name": unique_name,
-        "package_days": int(plan_days),
-        "usage_limit_GB": int(plan_gb),
-        "comment": comment
-    }
-    
+    payload = {"name": unique_name, "package_days": int(plan_days), "usage_limit_GB": int(plan_gb), "comment": comment}
     try:
         response = requests.post(endpoint, headers=_get_headers(), data=json.dumps(payload), timeout=20)
         if response.status_code in [200, 201]:
             user_data = response.json()
             user_uuid = user_data.get('uuid')
-
-            if not user_uuid:
-                print("ERROR (Create User): 'uuid' not found in Hiddify API response.")
-                return None
-
+            if not user_uuid: return None
             subscription_path = SUB_PATH if SUB_PATH else ADMIN_PATH
             subscription_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
             full_profile_url = f"https://{subscription_domain}/{subscription_path}/{user_uuid}/"
-            
-            # اگر کاربر نام دلخواه وارد کرده بود، آن را برای لینک استفاده می‌کنیم
-            # فاصله ها با خط تیره جایگزین می شوند تا در URL معتبر باشند
             config_name_fragment = custom_name.replace(" ", "-") if custom_name else unique_name
-
-            print(f"SUCCESS: User '{unique_name}' created successfully.")
             return {"full_link": full_profile_url, "uuid": user_uuid, "config_name": config_name_fragment}
         else:
             print(f"ERROR (Create User): Hiddify API returned {response.status_code} -> {response.text}")
@@ -66,14 +47,25 @@ def get_user_info(user_uuid):
 def reset_user_traffic(user_uuid, days):
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
     payload = {"package_days": int(days)}
+    
+    print(f"--- [DEBUG] Attempting to RENEW user for UUID: {user_uuid} ---")
+    print(f"[DEBUG] Endpoint: {endpoint}")
+    print(f"[DEBUG] Payload: {json.dumps(payload)}")
+
     try:
         response = requests.put(endpoint, headers=_get_headers(), json=payload, timeout=10)
+        print(f"[DEBUG] Renew User (PUT) - Response Status: {response.status_code}")
+        print(f"[DEBUG] Renew User (PUT) - Response Body: {response.text}")
+
         if response.status_code == 200:
+            print("[SUCCESS] User renewal successful, attempting to reset traffic.")
             reset_endpoint = f"{_get_base_url()}user/{user_uuid}/reset/"
-            requests.post(reset_endpoint, headers=_get_headers(), timeout=10)
+            reset_response = requests.post(reset_endpoint, headers=_get_headers(), timeout=10)
+            print(f"[DEBUG] Reset Traffic (POST) - Response Status: {reset_response.status_code}")
             return True
         else:
-            print(f"ERROR (Reset/Renew): Hiddify API returned {response.status_code} -> {response.text}")
+            print(f"[ERROR] Hiddify API returned an unsuccessful status for user renewal.")
             return False
     except Exception as e:
-        print(f"FATAL ERROR (Reset/Renew Exception): {e}"); return False
+        print(f"FATAL ERROR (Renew User Exception): {e}")
+        return False
