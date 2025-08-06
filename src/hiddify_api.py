@@ -18,9 +18,6 @@ def _get_base_url():
     return f"https://{PANEL_DOMAIN}/{ADMIN_PATH}/api/v2/admin/"
 
 def create_hiddify_user(plan_days, plan_gb, user_telegram_id=None, custom_name="", existing_uuid=None):
-    """
-    Creates a new user. Can also recreate a user if an existing_uuid is provided.
-    """
     if custom_name:
         user_name = custom_name.replace(" ", "-")
     else:
@@ -35,7 +32,6 @@ def create_hiddify_user(plan_days, plan_gb, user_telegram_id=None, custom_name="
         "comment": comment
     }
     
-    # If we are recreating a user, we specify their original UUID.
     if existing_uuid:
         payload['uuid'] = existing_uuid
     
@@ -80,7 +76,6 @@ def get_user_info(user_uuid):
         return None
 
 def delete_user(user_uuid):
-    """Deletes a user from Hiddify panel."""
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
     try:
         response = api_session.delete(endpoint, timeout=15)
@@ -92,13 +87,7 @@ def delete_user(user_uuid):
         return False
 
 def renew_user_subscription(user_uuid, plan_days, plan_gb):
-    """
-    Final Strategy: "Nuke and Recreate"
-    Since PUT/POST for update fails, we will delete and recreate the user with the same UUID.
-    This is a robust way to handle non-standard APIs.
-    """
     try:
-        # Step 1: Get current user info to preserve their name.
         current_info = get_user_info(user_uuid)
         if not current_info:
             logger.error(f"Renewal failed: Cannot get current info for user {user_uuid}.")
@@ -107,25 +96,21 @@ def renew_user_subscription(user_uuid, plan_days, plan_gb):
         user_name = current_info.get("name", f"user-{user_uuid[:8]}")
         user_tg_id = current_info.get("comment", "").replace("TG ID: ", "")
 
-        # Step 2: Delete the user.
         if not delete_user(user_uuid):
-            # If deletion fails, we stop the process.
             return None
 
-        # Step 3: Recreate the user with the same UUID and name, but new package details.
         recreation_result = create_hiddify_user(
             plan_days=plan_days,
             plan_gb=plan_gb,
             user_telegram_id=user_tg_id,
             custom_name=user_name,
-            existing_uuid=user_uuid  # This is the most important part!
+            existing_uuid=user_uuid
         )
 
         if not recreation_result:
             logger.critical(f"CRITICAL: Deleted user {user_uuid} but FAILED to recreate them. Manual intervention required!")
             return None
 
-        # Step 4: Fetch the final, authoritative user info to confirm success.
         new_info = get_user_info(user_uuid)
         if new_info:
             logger.info(f"Successfully renewed user {user_uuid} using Nuke and Recreate strategy.")
