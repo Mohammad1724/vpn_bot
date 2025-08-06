@@ -19,16 +19,13 @@ def _execute(query, params=(), fetchone=False, fetchall=False, commit=False):
 def init_db():
     conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
     cursor.execute('''CREATE TABLE IF NOT EXISTS users (
-                        user_id INTEGER PRIMARY KEY, 
-                        username TEXT, -- <<< NEW COLUMN
-                        balance REAL DEFAULT 0.0, 
-                        join_date TEXT, 
-                        is_banned INTEGER DEFAULT 0, 
-                        has_used_trial INTEGER DEFAULT 0
+                        user_id INTEGER PRIMARY KEY, username TEXT, balance REAL DEFAULT 0.0, 
+                        join_date TEXT, is_banned INTEGER DEFAULT 0, has_used_trial INTEGER DEFAULT 0
                     )''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS plans (
                         plan_id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, 
-                        price REAL NOT NULL, days INTEGER NOT NULL, gb INTEGER NOT NULL
+                        price REAL NOT NULL, days INTEGER NOT NULL, gb INTEGER NOT NULL,
+                        is_visible INTEGER DEFAULT 1 -- <<< NEW COLUMN
                     )''')
     cursor.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)')
     cursor.execute('''CREATE TABLE IF NOT EXISTS active_services (
@@ -47,6 +44,8 @@ def init_db():
     
     try: cursor.execute('ALTER TABLE users ADD COLUMN username TEXT;')
     except sqlite3.OperationalError: pass
+    try: cursor.execute('ALTER TABLE plans ADD COLUMN is_visible INTEGER DEFAULT 1;')
+    except sqlite3.OperationalError: pass
     try: cursor.execute('ALTER TABLE active_services ADD COLUMN name TEXT;')
     except sqlite3.OperationalError: pass
     try: cursor.execute('ALTER TABLE active_services ADD COLUMN low_usage_alert_sent INTEGER DEFAULT 0;')
@@ -59,41 +58,45 @@ def init_db():
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_holder', 'نام صاحب حساب'))
     conn.commit(); conn.close()
     
+# --- Plan Management (Major Changes) ---
+def list_plans():
+    """Lists only VISIBLE plans for regular users."""
+    plans = _execute("SELECT * FROM plans WHERE is_visible = 1", fetchall=True)
+    return [dict(plan) for plan in plans] if plans else []
+
+def list_all_plans_admin():
+    """Lists ALL plans (visible and hidden) for the admin panel."""
+    plans = _execute("SELECT * FROM plans", fetchall=True)
+    return [dict(plan) for plan in plans] if plans else []
+
+def update_plan(plan_id, name, price, days, gb):
+    """Updates the details of an existing plan."""
+    return _execute("UPDATE plans SET name = ?, price = ?, days = ?, gb = ? WHERE plan_id = ?",
+                    (name, price, days, gb, plan_id), commit=True)
+
+def toggle_plan_visibility(plan_id):
+    """Flips the visibility status of a plan."""
+    return _execute("UPDATE plans SET is_visible = 1 - is_visible WHERE plan_id = ?", (plan_id,), commit=True)
+
+# --- All other functions from the previous final version remain unchanged ---
 def get_or_create_user(user_id, username=None):
-    # Now we also save/update the username
     user = _execute("SELECT * FROM users WHERE user_id = ?", (user_id,), fetchone=True)
     if not user:
         join_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         _execute("INSERT INTO users (user_id, username, join_date) VALUES (?, ?, ?)", (user_id, username, join_date), commit=True)
         return get_user(user_id)
     else:
-        # Update username if it has changed or was null
         if user['username'] != username:
             _execute("UPDATE users SET username = ? WHERE user_id = ?", (username, user_id), commit=True)
     return dict(user)
-
 def get_user_by_username(username):
-    """Finds a user by their Telegram username (case-insensitive)."""
-    # Remove '@' if present
-    if username.startswith('@'):
-        username = username[1:]
+    if username.startswith('@'): username = username[1:]
     user = _execute("SELECT * FROM users WHERE username LIKE ?", (username,), fetchone=True)
     return dict(user) if user else None
-
 def get_user_sales_history(user_id):
-    """Gets the sales history for a specific user, joining with plans table to get plan names."""
-    query = """
-        SELECT s.sale_date, s.price, p.name as plan_name
-        FROM sales s
-        LEFT JOIN plans p ON s.plan_id = p.plan_id
-        WHERE s.user_id = ?
-        ORDER BY s.sale_id DESC
-    """
+    query = "SELECT s.sale_date, s.price, p.name as plan_name FROM sales s LEFT JOIN plans p ON s.plan_id = p.plan_id WHERE s.user_id = ? ORDER BY s.sale_id DESC"
     history = _execute(query, (user_id,), fetchall=True)
     return [dict(row) for row in history] if history else []
-
-# --- All other functions from the previous final version remain unchanged ---
-# (Pasting them for completeness)
 def get_all_active_services():
     services = _execute("SELECT * FROM active_services", fetchall=True)
     return [dict(service) for service in services] if services else []
@@ -124,9 +127,6 @@ def set_user_trial_used(user_id):
     _execute("UPDATE users SET has_used_trial = 1 WHERE user_id = ?", (user_id,), commit=True)
 def add_plan(name, price, days, gb):
     _execute("INSERT INTO plans (name, price, days, gb) VALUES (?, ?, ?, ?)", (name, price, days, gb), commit=True)
-def list_plans():
-    plans = _execute("SELECT * FROM plans", fetchall=True)
-    return [dict(plan) for plan in plans] if plans else []
 def get_plan(plan_id):
     plan = _execute("SELECT * FROM plans WHERE plan_id = ?", (plan_id,), fetchone=True)
     return dict(plan) if plan else None
@@ -156,8 +156,7 @@ def get_buyers_list():
     return [buyer['user_id'] for buyer in buyers] if buyers else []
 def create_gift_code(amount, usage_limit):
     code = str(uuid.uuid4().hex[:10]).upper()
-    if _execute("INSERT INTO gift_codes (code, amount, usage_limit) VALUES (?, ?, ?)", (code, amount, usage_limit), commit=True):
-        return code
+    if _execute("INSERT INTO gift_codes (code, amount, usage_limit) VALUES (?, ?, ?)", (code, amount, usage_limit), commit=True): return code
     return None
 def use_gift_code(code, user_id):
     gift = _execute("SELECT amount, usage_limit, used_count FROM gift_codes WHERE code = ?", (code,), fetchone=True)
