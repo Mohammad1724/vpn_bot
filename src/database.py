@@ -28,9 +28,13 @@ def init_db():
                     )''')
     cursor.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)')
     cursor.execute('''CREATE TABLE IF NOT EXISTS active_services (
-                        service_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, 
-                        sub_uuid TEXT NOT NULL, sub_link TEXT NOT NULL, 
-                        last_api_update TEXT, plan_id INTEGER
+                        service_id INTEGER PRIMARY KEY AUTOINCREMENT, 
+                        user_id INTEGER NOT NULL, 
+                        name TEXT, -- <<< NEW COLUMN
+                        sub_uuid TEXT NOT NULL, 
+                        sub_link TEXT NOT NULL, 
+                        last_api_update TEXT, 
+                        plan_id INTEGER
                     )''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS sales (
                         sale_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, 
@@ -40,14 +44,32 @@ def init_db():
                         code TEXT PRIMARY KEY, amount REAL NOT NULL, 
                         usage_limit INTEGER NOT NULL, used_count INTEGER DEFAULT 0
                     )''')
-    try: cursor.execute('ALTER TABLE active_services RENAME COLUMN expiry_date TO last_api_update;')
-    except sqlite3.OperationalError: pass
+    
+    # Safely add the new 'name' column if it doesn't exist
+    try:
+        cursor.execute('ALTER TABLE active_services ADD COLUMN name TEXT;')
+    except sqlite3.OperationalError:
+        pass # Column already exists, which is fine.
+
+    try: 
+        cursor.execute('ALTER TABLE active_services RENAME COLUMN expiry_date TO last_api_update;')
+    except sqlite3.OperationalError: 
+        pass
     
     conn.commit()
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_number', '0000-0000-0000-0000'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_holder', 'نام صاحب حساب'))
     conn.commit(); conn.close()
 
+# ... (The rest of the functions are mostly the same, only add_active_service is changed) ...
+
+def add_active_service(user_id, name, sub_uuid, sub_link, plan_id):
+    """Adds a new active service to the database, now including the custom name."""
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    _execute("INSERT INTO active_services (user_id, name, sub_uuid, sub_link, last_api_update, plan_id) VALUES (?, ?, ?, ?, ?, ?)",
+             (user_id, name, sub_uuid, sub_link, now_str, plan_id), commit=True)
+
+# --- All other functions from the previous final version remain unchanged ---
 def get_setting(key):
     result = _execute("SELECT value FROM settings WHERE key = ?", (key,), fetchone=True)
     return result['value'] if result else None
@@ -92,17 +114,11 @@ def get_plan(plan_id):
     return dict(plan) if plan else None
 
 def get_plan_by_gb_and_days(gb, days):
-    """Find a plan that matches the GB and days from the API info."""
     plan = _execute("SELECT * FROM plans WHERE gb = ? AND days = ?", (gb, days), fetchone=True)
     return dict(plan) if plan else None
 
 def delete_plan(plan_id):
     _execute("DELETE FROM plans WHERE plan_id = ?", (plan_id,), commit=True)
-
-def add_active_service(user_id, sub_uuid, sub_link, plan_id, days):
-    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    _execute("INSERT INTO active_services (user_id, sub_uuid, sub_link, last_api_update, plan_id) VALUES (?, ?, ?, ?, ?)",
-             (user_id, sub_uuid, sub_link, now_str, plan_id), commit=True)
 
 def get_user_services(user_id):
     services = _execute("SELECT * FROM active_services WHERE user_id = ?", (user_id,), fetchall=True)
