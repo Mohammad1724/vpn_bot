@@ -103,6 +103,12 @@ def get_stats():
     cursor.execute("SELECT COUNT(sale_id), SUM(price) FROM sales"); sales_data = cursor.fetchone()
     sales_count, total_revenue = (sales_data[0] or 0, sales_data[1] or 0)
     conn.close(); return {"user_count": user_count, "sales_count": sales_count, "total_revenue": total_revenue}
+# --- New Function ---
+def get_buyers_list():
+    conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
+    cursor.execute("SELECT DISTINCT user_id FROM sales")
+    buyers = [item[0] for item in cursor.fetchall()]
+    conn.close(); return buyers
 
 def create_gift_code(amount, usage_limit):
     conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
