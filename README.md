@@ -1,7 +1,7 @@
 # ربات فروش VPN برای پنل Hiddify
 
 <div align="center">
-  <img src="https://raw.githubusercontent.com/hiddify/Hiddify-Manager/main/hiddify-panel/src/static/images/logo.png" alt="Hiddify Logo" width="150"/>
+  
   <h1>ربات فروش VPN برای پنل Hiddify</h1>
   <p>
     یک ربات تلگرامی کامل و قدرتمند برای فروش اکانت‌های VPN متصل به پنل Hiddify، با قابلیت مدیریت پلن‌ها، کیف پول کاربران و نصب آسان.
