@@ -7,7 +7,7 @@ import asyncio
 import random
 import sqlite3
 import io
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 import jdatetime
 from typing import Union
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
@@ -27,7 +27,8 @@ import database as db
 import hiddify_api
 from config import (
     BOT_TOKEN, ADMIN_ID, SUPPORT_USERNAME, SUB_DOMAINS, ADMIN_PATH,
-    PANEL_DOMAIN, SUB_PATH, TRIAL_ENABLED, TRIAL_DAYS, TRIAL_GB
+    PANEL_DOMAIN, SUB_PATH, TRIAL_ENABLED, TRIAL_DAYS, TRIAL_GB,
+    REFERRAL_BONUS_AMOUNT, EXPIRY_REMINDER_DAYS
 )
 import qrcode
 
@@ -66,10 +67,11 @@ def get_main_menu_keyboard(user_id):
     user_info = db.get_or_create_user(user_id)
     keyboard = [
         ["🛍️ خرید سرویس", "📋 سرویس‌های من"],
-        ["💰 موجودی و شارژ", "🎁 کد هدیه"]
+        ["💰 موجودی و شارژ", "🎁 کد هدیه"],
+        ["🎁 معرفی دوستان"]
     ]
     if TRIAL_ENABLED and user_info and not user_info.get('has_used_trial'):
-        keyboard.append(["🧪 دریافت سرویس تست رایگان"])
+        keyboard.insert(2, ["🧪 دریافت سرویس تست رایگان"])
     keyboard.append(["📞 پشتیبانی", "📚 راهنمای اتصال"])
     if user_id == ADMIN_ID:
         keyboard.append([BTN_ADMIN_PANEL])
@@ -133,7 +135,7 @@ def is_valid_sqlite(filepath):
     except sqlite3.DatabaseError:
         return False
 
-# --- Background Job ---
+# --- Background Jobs ---
 async def check_low_usage(context: ContextTypes.DEFAULT_TYPE):
     logger.info("Running job: Checking for low usage services...")
     all_services = db.get_all_active_services()
@@ -173,13 +175,62 @@ async def check_low_usage(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"An unexpected error in low usage job for service {service['service_id']}: {e}", exc_info=True)
 
+async def check_expiring_services(context: ContextTypes.DEFAULT_TYPE):
+    logger.info("Running job: Checking for expiring services...")
+    all_services = db.get_all_active_services()
+    for service in all_services:
+        try:
+            info = await hiddify_api.get_user_info(service['sub_uuid'])
+            if not info:
+                continue
+
+            _, expiry_date_str, is_expired = await _get_service_status(info)
+            if is_expired or expiry_date_str == "N/A":
+                continue
+            
+            parts = expiry_date_str.split('/')
+            jalali_date = jdatetime.date(int(parts[0]), int(parts[1]), int(parts[2]))
+            gregorian_expiry_date = jalali_date.togregorian()
+            
+            days_left = (gregorian_expiry_date - datetime.now().date()).days
+
+            if days_left == EXPIRY_REMINDER_DAYS:
+                user_id = service['user_id']
+                service_name = f"'{service['name']}'" if service['name'] else ""
+                
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=(
+                        f"⏳ **یادآوری انقضای سرویس**\n\n"
+                        f"کاربر گرامی، تنها **{days_left} روز** تا پایان اعتبار سرویس شما {service_name} باقی مانده است.\n\n"
+                        f"برای جلوگیری از قطعی، لطفاً سرویس خود را تمدید نمایید."
+                    )
+                )
+                logger.info(f"Sent expiry reminder to user {user_id} for service {service['service_id']}.")
+                await asyncio.sleep(0.2)
+        except (Forbidden, BadRequest) as e:
+            logger.warning(f"Failed to send expiry reminder to user {service['user_id']}: {e}")
+        except Exception as e:
+            logger.error(f"An unexpected error in expiry reminder job for service {service['service_id']}: {e}", exc_info=True)
+            
 # --- Generic Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    user_info = db.get_or_create_user(user.id, user.username)
+    db.get_or_create_user(user.id, user.username)
+    
+    if context.args and context.args[0].startswith('ref_'):
+        try:
+            referrer_id = int(context.args[0].split('_')[1])
+            if referrer_id != user.id:
+                db.set_referrer(user.id, referrer_id)
+        except (ValueError, IndexError):
+            logger.warning(f"Invalid referral link used: {context.args[0]}")
+
+    user_info = db.get_user(user.id)
     if user_info and user_info.get('is_banned'):
         await update.message.reply_text("شما از استفاده از این ربات منع شده‌اید.")
         return ConversationHandler.END
+        
     await update.message.reply_text("👋 به ربات فروش VPN خوش آمدید!", reply_markup=get_main_menu_keyboard(user.id))
     return ConversationHandler.END
 
@@ -200,7 +251,6 @@ async def user_generic_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 # --- User Service Management ---
 async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # This function can be called by a message or a callback query
     user_id = update.effective_user.id
     message = update.effective_message
     
@@ -216,12 +266,11 @@ async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
-    # If the original message is a callback query, edit it. Otherwise, send a new message.
+    
     if update.callback_query:
         await message.edit_text("لطفا سرویسی که می‌خواهید مدیریتش کنید را انتخاب نمایید:", reply_markup=reply_markup)
     else:
         await message.reply_text("لطفا سرویسی که می‌خواهید مدیریتش کنید را انتخاب نمایید:", reply_markup=reply_markup)
-
 
 async def view_service_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -401,6 +450,22 @@ async def show_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_guide(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("راهنمای اتصال به سرویس‌ها:\n\n(اینجا می‌توانید آموزش‌های لازم را قرار دهید)")
 
+async def show_referral_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    bot_username = (await context.bot.get_me()).username
+    referral_link = f"https://t.me/{bot_username}?start=ref_{user_id}"
+    
+    bonus = REFERRAL_BONUS_AMOUNT
+    
+    text = (
+        f"🎁 **دوستان خود را دعوت کنید و هدیه بگیرید!**\n\n"
+        f"با این لینک منحصر به فرد، دوستان خود را به ربات دعوت کنید.\n\n"
+        f"🔗 **لینک شما:**\n`{referral_link}`\n\n"
+        f"هر دوستی که با لینک شما وارد ربات شود و اولین خرید خود را انجام دهد, "
+        f"**{bonus:,.0f} تومان** هدیه به کیف پول شما و **{bonus:,.0f} تومان** به کیف پول دوستتان اضافه خواهد شد!"
+    )
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+
 async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_info = db.get_or_create_user(user_id, update.effective_user.username)
@@ -515,6 +580,14 @@ async def create_service_after_name(message: Update.message, context: ContextTyp
     if result and result.get('uuid'):
         db.finalize_purchase_transaction(transaction_id, result['uuid'], result['full_link'], custom_name)
         
+        referrer_id, bonus_amount = db.apply_referral_bonus(user_id)
+        if referrer_id:
+            try:
+                await context.bot.send_message(user_id, f"🎁 تبریک! مبلغ {bonus_amount:,.0f} تومان به عنوان هدیه اولین خرید به کیف پول شما اضافه شد.")
+                await context.bot.send_message(referrer_id, f"🎉 تبریک! یکی از دوستان شما خرید خود را تکمیل کرد و مبلغ {bonus_amount:,.0f} تومان به کیف پول شما اضافه شد.")
+            except (Forbidden, BadRequest):
+                logger.warning(f"Could not send referral bonus notification to {user_id} or {referrer_id}.")
+
         try:
             await msg_loading.delete()
         except BadRequest as e:
@@ -1029,7 +1102,10 @@ def main():
     db.init_db()
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     job_queue = application.job_queue
+    
     job_queue.run_repeating(check_low_usage, interval=timedelta(hours=4), first=10)
+    job_queue.run_daily(check_expiring_services, time=time(hour=9, minute=0))
+
     admin_filter = filters.User(user_id=ADMIN_ID)
     user_filter = ~admin_filter
     
@@ -1163,8 +1239,9 @@ def main():
     application.add_handler(MessageHandler(filters.Regex('^📞 پشتیبانی$'), show_support), group=3)
     application.add_handler(MessageHandler(filters.Regex('^📚 راهنمای اتصال$'), show_guide), group=3)
     application.add_handler(MessageHandler(filters.Regex('^🧪 دریافت سرویس تست رایگان$'), get_trial_service), group=3)
+    application.add_handler(MessageHandler(filters.Regex('^🎁 معرفی دوستان$'), show_referral_link), group=3)
 
-    print("Bot is running with all corrections. All features should be working correctly.")
+    print("Bot is running with final corrections. All features should work correctly.")
     application.run_polling()
 
 if __name__ == "__main__":
