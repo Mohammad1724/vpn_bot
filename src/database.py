@@ -1,4 +1,4 @@
-# database.py (نسخه اصلاح‌شده و کامل)
+# database.py (نسخه کامل با تغییرات برای سیستم معرفی)
 
 import sqlite3
 import logging
@@ -7,98 +7,6 @@ from datetime import datetime, timedelta
 # --- Setup ---
 DB_NAME = "vpn_bot.db"
 logger = logging.getLogger(__name__)
-
-# --- Initialization ---
-def init_db():
-    """
-    Initializes the database and creates all necessary tables and columns.
-    This function is safe to run multiple times.
-    """
-    with sqlite3.connect(DB_NAME) as conn:
-        cursor = conn.cursor()
-
-        # Create tables if they don't exist
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY, 
-                username TEXT, 
-                balance REAL DEFAULT 0.0, 
-                join_date TEXT NOT NULL, 
-                is_banned INTEGER DEFAULT 0, 
-                has_used_trial INTEGER DEFAULT 0
-            )''')
-
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS plans (
-                plan_id INTEGER PRIMARY KEY AUTOINCREMENT, 
-                name TEXT NOT NULL, 
-                price REAL NOT NULL, 
-                days INTEGER NOT NULL, 
-                gb INTEGER NOT NULL, 
-                is_visible INTEGER DEFAULT 1
-            )''')
-
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY, 
-                value TEXT
-            )''')
-
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS active_services (
-                service_id INTEGER PRIMARY KEY AUTOINCREMENT, 
-                user_id INTEGER NOT NULL, 
-                name TEXT, 
-                sub_uuid TEXT NOT NULL UNIQUE, 
-                sub_link TEXT NOT NULL, 
-                plan_id INTEGER, 
-                created_at TEXT NOT NULL,
-                low_usage_alert_sent INTEGER DEFAULT 0,
-                FOREIGN KEY(user_id) REFERENCES users(user_id),
-                FOREIGN KEY(plan_id) REFERENCES plans(plan_id)
-            )''')
-
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS sales_log (
-                sale_id INTEGER PRIMARY KEY AUTOINCREMENT, 
-                user_id INTEGER NOT NULL, 
-                plan_id INTEGER, 
-                price REAL NOT NULL, 
-                sale_date TEXT NOT NULL,
-                FOREIGN KEY(user_id) REFERENCES users(user_id)
-            )''')
-
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS gift_codes (
-                code TEXT PRIMARY KEY, 
-                amount REAL NOT NULL, 
-                is_used INTEGER DEFAULT 0,
-                used_by INTEGER,
-                used_date TEXT,
-                FOREIGN KEY(used_by) REFERENCES users(user_id)
-            )''')
-
-        # IMPORTANT: New table for safe transactions
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS transactions (
-                transaction_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                plan_id INTEGER,
-                service_id INTEGER,
-                type TEXT NOT NULL, -- 'purchase' or 'renewal'
-                amount REAL NOT NULL,
-                status TEXT NOT NULL DEFAULT 'pending', -- pending, completed, failed
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                FOREIGN KEY(user_id) REFERENCES users(user_id)
-            )''')
-
-        # Add default settings if they don't exist
-        cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_number', '0000-0000-0000-0000'))
-        cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_holder', 'نام صاحب حساب'))
-
-        conn.commit()
-    logger.info("Database initialized successfully.")
 
 # --- Helper for DB Connection ---
 _db_connection = None
@@ -118,9 +26,107 @@ def close_db():
         logger.info("Database connection closed.")
 
 def _connect_db():
-    # This function is now just a wrapper for getting the connection
     return _get_connection()
 
+# --- Initialization ---
+def init_db():
+    conn = _connect_db()
+    cursor = conn.cursor()
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY, 
+            username TEXT, 
+            balance REAL DEFAULT 0.0, 
+            join_date TEXT NOT NULL, 
+            is_banned INTEGER DEFAULT 0, 
+            has_used_trial INTEGER DEFAULT 0,
+            referred_by INTEGER,
+            has_received_referral_bonus INTEGER DEFAULT 0
+        )''')
+    
+    try:
+        cursor.execute("SELECT referred_by FROM users LIMIT 1")
+    except sqlite3.OperationalError:
+        logger.info("Adding 'referred_by' column to users table...")
+        cursor.execute("ALTER TABLE users ADD COLUMN referred_by INTEGER")
+
+    try:
+        cursor.execute("SELECT has_received_referral_bonus FROM users LIMIT 1")
+    except sqlite3.OperationalError:
+        logger.info("Adding 'has_received_referral_bonus' column to users table...")
+        cursor.execute("ALTER TABLE users ADD COLUMN has_received_referral_bonus INTEGER DEFAULT 0")
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS plans (
+            plan_id INTEGER PRIMARY KEY AUTOINCREMENT, 
+            name TEXT NOT NULL, 
+            price REAL NOT NULL, 
+            days INTEGER NOT NULL, 
+            gb INTEGER NOT NULL, 
+            is_visible INTEGER DEFAULT 1
+        )''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY, 
+            value TEXT
+        )''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS active_services (
+            service_id INTEGER PRIMARY KEY AUTOINCREMENT, 
+            user_id INTEGER NOT NULL, 
+            name TEXT, 
+            sub_uuid TEXT NOT NULL UNIQUE, 
+            sub_link TEXT NOT NULL, 
+            plan_id INTEGER, 
+            created_at TEXT NOT NULL,
+            low_usage_alert_sent INTEGER DEFAULT 0,
+            FOREIGN KEY(user_id) REFERENCES users(user_id),
+            FOREIGN KEY(plan_id) REFERENCES plans(plan_id)
+        )''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS sales_log (
+            sale_id INTEGER PRIMARY KEY AUTOINCREMENT, 
+            user_id INTEGER NOT NULL, 
+            plan_id INTEGER, 
+            price REAL NOT NULL, 
+            sale_date TEXT NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(user_id)
+        )''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS gift_codes (
+            code TEXT PRIMARY KEY, 
+            amount REAL NOT NULL, 
+            is_used INTEGER DEFAULT 0,
+            used_by INTEGER,
+            used_date TEXT,
+            FOREIGN KEY(used_by) REFERENCES users(user_id)
+        )''')
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS transactions (
+            transaction_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            plan_id INTEGER,
+            service_id INTEGER,
+            type TEXT NOT NULL,
+            amount REAL NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(user_id)
+        )''')
+
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_number', '0000-0000-0000-0000'))
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_holder', 'نام صاحب حساب'))
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('referral_bonus_amount', '5000'))
+    
+    conn.commit()
+    logger.info("Database initialized successfully.")
 
 # --- User Management ---
 def get_or_create_user(user_id: int, username: str = None) -> dict:
@@ -141,7 +147,6 @@ def get_or_create_user(user_id: int, username: str = None) -> dict:
 
     return dict(user) if user else None
 
-
 def get_user(user_id: int) -> dict:
     conn = _connect_db()
     cursor = conn.cursor()
@@ -156,9 +161,6 @@ def get_user_by_username(username: str) -> dict:
     user = cursor.fetchone()
     return dict(user) if user else None
 
-# ######################################
-# ##### THIS IS THE CORRECTED LINE #####
-# ######################################
 def update_balance(user_id: int, amount: float):
     conn = _connect_db()
     conn.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
@@ -179,6 +181,32 @@ def get_all_user_ids() -> list:
     cursor = conn.execute("SELECT user_id FROM users WHERE is_banned = 0")
     return [row['user_id'] for row in cursor.fetchall()]
 
+# --- Referral System Functions ---
+def set_referrer(user_id: int, referrer_id: int):
+    user = get_user(user_id)
+    if user and not user.get('referred_by'):
+        with _connect_db() as conn:
+            conn.execute("UPDATE users SET referred_by = ? WHERE user_id = ?", (referrer_id, user_id))
+            conn.commit()
+            logger.info(f"User {user_id} was referred by {referrer_id}.")
+
+def apply_referral_bonus(user_id: int):
+    user = get_user(user_id)
+    if user and user.get('referred_by') and not user.get('has_received_referral_bonus'):
+        referrer_id = user['referred_by']
+        bonus_amount_str = get_setting('referral_bonus_amount')
+        bonus_amount = float(bonus_amount_str) if bonus_amount_str else 0.0
+
+        if bonus_amount > 0:
+            with _connect_db() as conn:
+                conn.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (bonus_amount, user_id))
+                conn.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (bonus_amount, referrer_id))
+                conn.execute("UPDATE users SET has_received_referral_bonus = 1 WHERE user_id = ?", (user_id,))
+                conn.commit()
+                logger.info(f"Applied referral bonus of {bonus_amount} to user {user_id} and referrer {referrer_id}.")
+                return referrer_id, bonus_amount
+    return None, 0
+    
 # --- Plan Management ---
 def add_plan(name: str, price: float, days: int, gb: int):
     conn = _connect_db()
@@ -203,27 +231,21 @@ def list_plans(only_visible=False) -> list:
     return [dict(plan) for plan in plans]
 
 def update_plan(plan_id: int, data: dict):
-    # Dynamically build the UPDATE query
     fields = []
     params = []
     for key, value in data.items():
         if key in ['name', 'price', 'days', 'gb']:
             fields.append(f"{key} = ?")
             params.append(value)
-
-    if not fields: return # No valid fields to update
-
+    if not fields: return
     params.append(plan_id)
     query = f"UPDATE plans SET {', '.join(fields)} WHERE plan_id = ?"
-
     conn = _connect_db()
     conn.execute(query, tuple(params))
     conn.commit()
 
 def delete_plan(plan_id: int):
     conn = _connect_db()
-    # We don't actually delete to preserve sales history relations. We just hide it.
-    # Or you could set foreign key to ON DELETE SET NULL
     conn.execute("DELETE FROM plans WHERE plan_id = ?", (plan_id,))
     conn.commit()
 
@@ -238,7 +260,6 @@ def get_plan_by_gb_and_days(gb: int, days: int) -> dict:
     cursor.execute("SELECT * FROM plans WHERE gb = ? AND days = ?", (gb, days))
     plan = cursor.fetchone()
     return dict(plan) if plan else None
-
 
 # --- Service Management ---
 def add_active_service(user_id: int, name: str, sub_uuid: str, sub_link: str, plan_id: int):
@@ -282,7 +303,6 @@ def update_service_after_renewal(service_id: int, new_plan_id: int):
     )
     conn.commit()
 
-
 # --- Transactional Purchase & Renewal ---
 def initiate_purchase_transaction(user_id: int, plan_id: int) -> int:
     conn = _connect_db()
@@ -290,10 +310,7 @@ def initiate_purchase_transaction(user_id: int, plan_id: int) -> int:
     try:
         plan = get_plan(plan_id)
         user = get_user(user_id)
-
-        if not plan or not user: return None
-        if user['balance'] < plan['price']: return None
-
+        if not plan or not user or user['balance'] < plan['price']: return None
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute(
             "INSERT INTO transactions (user_id, plan_id, type, amount, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -312,31 +329,20 @@ def finalize_purchase_transaction(transaction_id: int, sub_uuid: str, sub_link: 
     cursor = conn.cursor()
     try:
         conn.execute("BEGIN TRANSACTION")
-        
-        # Get transaction details
         cursor.execute("SELECT * FROM transactions WHERE transaction_id = ? AND status = 'pending'", (transaction_id,))
         trans = cursor.fetchone()
         if not trans: raise ValueError("Transaction not found or not pending.")
-
-        # 1. Deduct balance
         cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (trans['amount'], trans['user_id']))
-
-        # 2. Add service
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute(
             "INSERT INTO active_services (user_id, name, sub_uuid, sub_link, plan_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
             (trans['user_id'], custom_name, sub_uuid, sub_link, trans['plan_id'], now_str)
         )
-
-        # 3. Log sale
         cursor.execute(
             "INSERT INTO sales_log (user_id, plan_id, price, sale_date) VALUES (?, ?, ?, ?)",
             (trans['user_id'], trans['plan_id'], trans['amount'], now_str)
         )
-
-        # 4. Update transaction status
         cursor.execute("UPDATE transactions SET status = 'completed', updated_at = ? WHERE transaction_id = ?", (now_str, transaction_id))
-
         conn.commit()
     except Exception as e:
         logger.error(f"Error finalizing purchase {transaction_id}: {e}")
@@ -348,7 +354,6 @@ def cancel_purchase_transaction(transaction_id: int):
     conn.execute("UPDATE transactions SET status = 'failed', updated_at = ? WHERE transaction_id = ?", (now_str, transaction_id))
     conn.commit()
 
-# --- Renewal Transaction Functions (Similar to Purchase) ---
 def initiate_renewal_transaction(user_id: int, service_id: int, plan_id: int) -> int:
     conn = _connect_db()
     cursor = conn.cursor()
@@ -356,9 +361,7 @@ def initiate_renewal_transaction(user_id: int, service_id: int, plan_id: int) ->
         plan = get_plan(plan_id)
         user = get_user(user_id)
         if not plan or not user or user['balance'] < plan['price']: return None
-
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
         cursor.execute(
             "INSERT INTO transactions (user_id, plan_id, service_id, type, amount, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (user_id, plan_id, service_id, 'renewal', plan['price'], 'pending', now_str, now_str)
@@ -376,21 +379,14 @@ def finalize_renewal_transaction(transaction_id: int, new_plan_id: int):
     cursor = conn.cursor()
     try:
         conn.execute("BEGIN TRANSACTION")
-        
         cursor.execute("SELECT * FROM transactions WHERE transaction_id = ? AND status = 'pending'", (transaction_id,))
         trans = cursor.fetchone()
         if not trans: raise ValueError("Renewal transaction not found or not pending.")
-
-        # 1. Deduct balance
         cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (trans['amount'], trans['user_id']))
-        # 2. Update service
         cursor.execute("UPDATE active_services SET plan_id = ?, low_usage_alert_sent = 0 WHERE service_id = ?", (new_plan_id, trans['service_id']))
-        # 3. Log sale
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute("INSERT INTO sales_log (user_id, plan_id, price, sale_date) VALUES (?, ?, ?, ?)", (trans['user_id'], trans['plan_id'], trans['amount'], now_str))
-        # 4. Update transaction status
         cursor.execute("UPDATE transactions SET status = 'completed', updated_at = ? WHERE transaction_id = ?", (now_str, transaction_id))
-
         conn.commit()
     except Exception as e:
         logger.error(f"Error finalizing renewal {transaction_id}: {e}")
@@ -402,29 +398,21 @@ def cancel_renewal_transaction(transaction_id: int):
     conn.execute("UPDATE transactions SET status = 'failed', updated_at = ? WHERE transaction_id = ?", (now_str, transaction_id))
     conn.commit()
 
-
 # --- Gift Codes ---
 def use_gift_code(code: str, user_id: int) -> float:
     conn = _connect_db()
     cursor = conn.cursor()
     try:
         conn.execute("BEGIN TRANSACTION")
-        
         cursor.execute("SELECT * FROM gift_codes WHERE code = ? AND is_used = 0", (code,))
         gift = cursor.fetchone()
-
         if not gift:
             conn.rollback()
             return None
-
         amount = gift['amount']
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        # 1. Update gift code status
         cursor.execute("UPDATE gift_codes SET is_used = 1, used_by = ?, used_date = ? WHERE code = ?", (user_id, now_str, code))
-        # 2. Update user balance
         cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
-
         conn.commit()
         return amount
     except sqlite3.Error as e:
@@ -443,7 +431,6 @@ def set_setting(key: str, value: str):
     conn = _connect_db()
     conn.execute("REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
     conn.commit()
-
 
 # --- Reports & Stats ---
 def get_stats() -> dict:
