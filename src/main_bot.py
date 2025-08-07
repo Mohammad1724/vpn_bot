@@ -251,32 +251,26 @@ async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TY
     await query.answer()
     service_id = int(query.data.split('_')[1])
     user_id = query.from_user.id
-
     service = db.get_service(service_id)
     if not service:
         await query.edit_message_text("❌ سرویس نامعتبر است.")
         return
-
     plan = db.get_plan(service['plan_id'])
     if not plan:
         await query.edit_message_text("❌ پلن تمدید برای این سرویس یافت نشد.")
         return
-
     user = db.get_or_create_user(user_id)
     if user['balance'] < plan['price']:
         await query.edit_message_text(f"موجودی برای تمدید کافی نیست! (نیاز به {plan['price']:.0f} تومان)")
         return
-
     await query.edit_message_text("در حال بررسی وضعیت سرویس... ⏳")
     hiddify_info = await hiddify_api.get_user_info(service['sub_uuid'])
     if not hiddify_info:
         await query.edit_message_text("❌ امکان دریافت اطلاعات سرویس از پنل وجود ندارد. لطفاً بعداً تلاش کنید.")
         return
-
     _, _, is_expired = await _get_service_status(hiddify_info)
     context.user_data['renewal_service_id'] = service_id
     context.user_data['renewal_plan_id'] = plan['plan_id']
-    
     if is_expired:
         await proceed_with_renewal(query, context)
     else:
@@ -303,17 +297,13 @@ async def proceed_with_renewal(query: Update.callback_query, context: ContextTyp
     if not all([service_id, plan_id]):
         await query.edit_message_text("❌ خطای داخلی: اطلاعات تمدید یافت نشد. لطفا دوباره تلاش کنید.")
         return
-
     await query.edit_message_text("در حال ارسال درخواست تمدید به پنل... ⏳")
-    
     transaction_id = db.initiate_renewal_transaction(query.from_user.id, service_id, plan_id)
     if not transaction_id:
         await query.edit_message_text("❌ مشکلی در شروع فرآیند تمدید پیش آمد (مثلا عدم موجودی).")
         return
-
     service = db.get_service(service_id)
     plan = db.get_plan(plan_id)
-    
     new_hiddify_info = await hiddify_api.renew_user_subscription(service['sub_uuid'], plan['days'], plan['gb'])
     if new_hiddify_info:
         db.finalize_renewal_transaction(transaction_id, plan_id)
@@ -578,8 +568,6 @@ async def admin_toggle_plan_visibility_callback(update: Update, context: Context
     plan_id = int(query.data.split('_')[-1])
     db.toggle_plan_visibility(plan_id)
     await query.answer("وضعیت نمایش پلن تغییر کرد.")
-    # This is a simple but not ideal way to refresh the list.
-    # A better way would be to store the plan list message_id and edit it.
     await query.message.delete()
     await query.from_user.send_message("لیست پلن‌ها به‌روز شد. لطفاً دوباره لیست را باز کنید.")
 
@@ -794,7 +782,7 @@ async def finish_plan_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.update_plan(plan_id, new_data)
         await update.message.reply_text("✅ پلن با موفقیت به‌روزرسانی شد!", reply_markup=get_admin_menu_keyboard())
     context.user_data.clear()
-    return ADMIN_MENU
+    return ConversationHandler.END
 
 # --- Reports (Admin) ---
 async def reports_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -855,20 +843,17 @@ async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     setting_key = query.data.split('admin_edit_setting_')[-1]
     context.user_data['setting_to_edit'] = setting_key
-    
     prompt_map = {'card_number': "لطفا شماره کارت جدید را وارد کنید:", 'card_holder': "لطفا نام جدید صاحب حساب را وارد کنید:"}
     prompt_text = prompt_map.get(setting_key)
     if not prompt_text:
         await query.message.edit_text("خطا: تنظیمات ناشناخته.")
         return ConversationHandler.END
-
     await query.message.reply_text(prompt_text, reply_markup=ReplyKeyboardMarkup([[CMD_CANCEL]], resize_keyboard=True))
     return AWAIT_SETTING_VALUE
 
 async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     setting_key = context.user_data.get('setting_to_edit')
     if not setting_key: return await admin_conv_cancel(update, context)
-
     db.set_setting(setting_key, update.message.text)
     await update.message.reply_text("✅ تنظیمات با موفقیت به‌روز شد.", reply_markup=get_admin_menu_keyboard())
     context.user_data.clear()
@@ -895,11 +880,9 @@ async def broadcast_to_all_send(update: Update, context: ContextTypes.DEFAULT_TY
     if not message_to_send:
         await update.message.reply_text("خطا: پیامی برای ارسال یافت نشد.", reply_markup=get_admin_menu_keyboard())
         return ADMIN_MENU
-
     user_ids = db.get_all_user_ids()
     sent_count, failed_count = 0, 0
     await update.message.reply_text(f"در حال ارسال پیام به {len(user_ids)} کاربر...", reply_markup=get_admin_menu_keyboard())
-    
     for user_id in user_ids:
         try:
             await message_to_send.copy(chat_id=user_id)
@@ -907,7 +890,6 @@ async def broadcast_to_all_send(update: Update, context: ContextTypes.DEFAULT_TY
             await asyncio.sleep(0.1)
         except (Forbidden, BadRequest):
             failed_count += 1
-            
     await update.message.reply_text(f"✅ پیام همگانی با موفقیت ارسال شد.\n\nتعداد ارسال موفق: {sent_count}\nتعداد ارسال ناموفق: {failed_count}")
     context.user_data.clear()
     return ADMIN_MENU
@@ -931,7 +913,6 @@ async def broadcast_to_user_message_received(update: Update, context: ContextTyp
     if not target_id:
         await update.message.reply_text("خطا: کاربر هدف مشخص نیست.", reply_markup=get_admin_menu_keyboard())
         return ADMIN_MENU
-
     message_to_send = update.message
     try:
         await message_to_send.copy(chat_id=target_id)
@@ -959,11 +940,9 @@ async def manage_user_id_received(update: Update, context: ContextTypes.DEFAULT_
     else:
         await update.message.reply_text("ورودی نامعتبر است. لطفاً یک آیدی عددی یا یوزرنیم تلگرام وارد کنید.")
         return MANAGE_USER_ID
-
     if not user_info:
         await update.message.reply_text("کاربری با این مشخصات یافت نشد.")
         return MANAGE_USER_ID
-
     context.user_data['target_user_id'] = user_info['user_id']
     ban_text = "آزاد کردن کاربر" if user_info['is_banned'] else "مسدود کردن کاربر"
     keyboard = [["افزایش موجودی", "کاهش موجودی"], ["📜 سوابق خرید", ban_text], [BTN_BACK_TO_ADMIN_MENU]]
@@ -982,12 +961,10 @@ async def manage_user_action_handler(update: Update, context: ContextTypes.DEFAU
     if not target_user_id:
         await update.message.reply_text("خطا: کاربر هدف مشخص نیست.")
         return await back_to_admin_menu(update, context)
-
     if action in ["افزایش موجودی", "کاهش موجودی"]:
         context.user_data['manage_action'] = action
         await update.message.reply_text("لطفا مبلغ مورد نظر را به تومان وارد کنید:", reply_markup=ReplyKeyboardMarkup([[CMD_CANCEL]], resize_keyboard=True))
         return MANAGE_USER_AMOUNT
-
     elif "مسدود" in action or "آزاد" in action:
         user_info = db.get_user(target_user_id)
         new_ban_status = not user_info['is_banned']
@@ -995,7 +972,6 @@ async def manage_user_action_handler(update: Update, context: ContextTypes.DEFAU
         await update.message.reply_text(f"✅ وضعیت کاربر با موفقیت به '{'مسدود' if new_ban_status else 'فعال'}' تغییر کرد.", reply_markup=get_admin_menu_keyboard())
         context.user_data.clear()
         return ADMIN_MENU
-    
     elif action == "📜 سوابق خرید":
         history = db.get_user_sales_history(target_user_id)
         if not history:
@@ -1038,16 +1014,11 @@ async def send_backup_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         shutil.copy(db.DB_NAME, backup_filename)
         await update.message.reply_text("در حال آماده‌سازی فایل پشتیبان...")
         with open(backup_filename, 'rb') as doc:
-            await context.bot.send_document(
-                chat_id=update.effective_user.id,
-                document=doc,
-                caption=f"پشتیبان دیتابیس - {timestamp}"
-            )
+            await context.bot.send_document(chat_id=update.effective_user.id, document=doc, caption=f"پشتیبان دیتابیس - {timestamp}")
     except Exception as e:
         await update.message.reply_text(f"خطا در ارسال فایل: {e}")
     finally:
-        if os.path.exists(backup_filename):
-            os.remove(backup_filename)
+        if os.path.exists(backup_filename): os.remove(backup_filename)
     return BACKUP_MENU
 
 async def restore_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1063,16 +1034,13 @@ async def restore_receive_file(update: Update, context: ContextTypes.DEFAULT_TYP
     if not document.file_name.endswith('.db'):
         await update.message.reply_text("فرمت فایل نامعتبر است. لطفاً یک فایل `.db` ارسال کنید.")
         return RESTORE_UPLOAD
-
     file = await document.get_file()
     temp_path = os.path.join("backups", f"restore_temp_{datetime.now().timestamp()}.db")
     await file.download_to_drive(temp_path)
-
     if not is_valid_sqlite(temp_path):
         await update.message.reply_text("❌ فایل ارسالی یک دیتابیس SQLite معتبر نیست.", reply_markup=get_admin_menu_keyboard())
         os.remove(temp_path)
         return ADMIN_MENU
-
     context.user_data['restore_path'] = temp_path
     keyboard = [[
         InlineKeyboardButton("✅ بله، مطمئنم", callback_data="admin_confirm_restore"),
@@ -1170,8 +1138,14 @@ def main():
             PLAN_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_price_received)],
             PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_days_received)],
             PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_gb_received)],
-            MANAGE_USER_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, manage_user_id_received)],
-            MANAGE_USER_ACTION: [MessageHandler(filters.Regex(f'^{BTN_BACK_TO_ADMIN_MENU}$'), back_to_admin_menu), MessageHandler(filters.TEXT & ~filters.COMMAND, manage_user_action_handler)],
+            MANAGE_USER_ID: [
+                MessageHandler(filters.Regex(f'^{BTN_BACK_TO_ADMIN_MENU}$'), back_to_admin_menu),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, manage_user_id_received)
+            ],
+            MANAGE_USER_ACTION: [
+                MessageHandler(filters.Regex(f'^{BTN_BACK_TO_ADMIN_MENU}$'), back_to_admin_menu),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, manage_user_action_handler)
+            ],
             MANAGE_USER_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, manage_user_amount_received)],
             BROADCAST_MENU: [
                 MessageHandler(filters.Regex('^ارسال به همه کاربران$'), broadcast_to_all_start),
