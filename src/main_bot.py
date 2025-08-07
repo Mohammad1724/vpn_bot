@@ -256,23 +256,40 @@ async def confirm_renewal_callback(update: Update, context: ContextTypes.DEFAULT
     await query.answer()
     await proceed_with_renewal(query, context)
 
+# <<<<<<<< CORRECTED FUNCTION FOR RENEWAL WITH LOGGING >>>>>>>>>
 async def proceed_with_renewal(query: Update.callback_query, context: ContextTypes.DEFAULT_TYPE):
     service_id = context.user_data.get('renewal_service_id')
     plan_id = context.user_data.get('renewal_plan_id')
-    if not all([service_id, plan_id]): await query.edit_message_text("❌ خطای داخلی: اطلاعات تمدید یافت نشد. لطفا دوباره تلاش کنید."); return
+    
+    if not all([service_id, plan_id]):
+        await query.edit_message_text("❌ خطای داخلی: اطلاعات تمدید یافت نشد. لطفا دوباره تلاش کنید.")
+        return
+
     await query.edit_message_text("در حال ارسال درخواست تمدید به پنل... ⏳")
+    
     transaction_id = db.initiate_renewal_transaction(query.from_user.id, service_id, plan_id)
-    if not transaction_id: await query.edit_message_text("❌ مشکلی در شروع فرآیند تمدید پیش آمد (مثلا عدم موجودی)."); return
+    if not transaction_id:
+        await query.edit_message_text("❌ مشکلی در شروع فرآیند تمدید پیش آمد (مثلا عدم موجودی).")
+        return
+
     service = db.get_service(service_id)
     plan = db.get_plan(plan_id)
+
+    logger.info(f"Attempting to renew service {service_id} for user {query.from_user.id} with UUID {service['sub_uuid']}")
+    logger.info(f"Renewal details: Plan ID {plan_id}, Days: {plan['days']}, GB: {plan['gb']}")
+
     new_hiddify_info = await hiddify_api.renew_user_subscription(service['sub_uuid'], plan['days'], plan['gb'])
+
+    logger.info(f"Hiddify renewal API returned: {new_hiddify_info}")
+
     if new_hiddify_info:
-        db.finalize_renewal_transaction(transaction_id, plan_id)
+        db.finalize_renewal_transaction(transaction_id, plan_id) 
         await query.edit_message_text("✅ سرویس با موفقیت تمدید شد! در حال دریافت اطلاعات جدید...")
         await send_service_details(context, query.from_user.id, service_id, original_message=query.message)
     else:
         db.cancel_renewal_transaction(transaction_id)
         await query.edit_message_text("❌ خطا در تمدید سرویس. مشکلی در ارتباط با پنل وجود دارد. لطفاً به پشتیبانی اطلاع دهید.")
+        
     context.user_data.clear()
 
 async def cancel_renewal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -306,7 +323,7 @@ async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if result and result.get('uuid'):
         db.set_user_trial_used(user_id)
         db.add_active_service(user_id, "سرویس تست", result['uuid'], result['full_link'], 0)
-        await show_link_options_menu(msg_loading, result['uuid'], is_edit=True)
+        await show_link_options_menu(update.message, result['uuid'], is_edit=False)
     else: await msg_loading.edit_text("❌ متاسفانه در ساخت سرویس تست مشکلی پیش آمد. لطفا بعداً تلاش کنید.")
 
 # --- Gift Code Conversation ---
@@ -390,6 +407,7 @@ async def skip_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await create_service_after_name(update.message, context)
     return ConversationHandler.END
 
+# <<<<<<<< CORRECTED FUNCTION FOR SERVICE CREATION >>>>>>>>>
 async def create_service_after_name(message: Update.message, context: ContextTypes.DEFAULT_TYPE):
     user_id = message.chat_id
     plan_id = context.user_data.get('plan_to_buy_id')
@@ -399,24 +417,37 @@ async def create_service_after_name(message: Update.message, context: ContextTyp
         await message.reply_text("خطای داخلی رخ داده است. لطفا مجددا تلاش کنید.", reply_markup=get_main_menu_keyboard(user_id))
         context.user_data.clear()
         return
+        
     plan = db.get_plan(plan_id)
     custom_name = custom_name_input if custom_name_input else f"سرویس {plan['gb']} گیگ"
-    msg = await message.reply_text("در حال ساخت سرویس شما... ⏳", reply_markup=get_main_menu_keyboard(user_id))
+    
+    msg_loading = await message.reply_text("در حال ساخت سرویس شما... ⏳", reply_markup=get_main_menu_keyboard(user_id))
+    
     result = await hiddify_api.create_hiddify_user(plan['days'], plan['gb'], user_id, custom_name=custom_name)
+
     if result and result.get('uuid'):
         db.finalize_purchase_transaction(transaction_id, result['uuid'], result['full_link'], custom_name)
-        await show_link_options_menu(msg, result['uuid'], is_edit=True)
+        
+        try:
+            await msg_loading.delete()
+        except BadRequest as e:
+            logger.warning(f"Could not delete 'loading' message: {e}")
+            
+        await show_link_options_menu(message, result['uuid'], is_edit=False) 
+        
     else:
         db.cancel_purchase_transaction(transaction_id)
-        await msg.edit_text("❌ متاسفانه در ساخت سرویس مشکلی پیش آمد. لطفا به پشتیبانی اطلاع دهید.")
+        await msg_loading.edit_text("❌ متاسفانه در ساخت سرویس مشکلی پیش آمد. لطفا به پشتیبانی اطلاع دهید.")
+        
     context.user_data.clear()
+    return ConversationHandler.END
 
 # --- Link & QR Code ---
 async def show_link_options_menu(message: Update.message, user_uuid: str, is_edit: bool = True):
     keyboard = [[InlineKeyboardButton("🔗 لینک هوشمند (Auto)", callback_data=f"getlink_auto_{user_uuid}")],
                 [InlineKeyboardButton("📱 لینک SingBox", callback_data=f"getlink_singbox_{user_uuid}")],
                 [InlineKeyboardButton("💻 لینک استاندارد (V2ray)", callback_data=f"getlink_sub_{user_uuid}")]]
-    text = "لطفاً نوع لینک اشتراک مورد نظر خود را انتخاب کنید:"
+    text = "سرویس شما با موفقیت ساخته شد. لطفاً نوع لینک اشتراک مورد نظر خود را انتخاب کنید:"
     try:
         if is_edit: await message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
         else: await message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
@@ -444,10 +475,10 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_photo(chat_id=query.message.chat_id, photo=bio, caption=caption, parse_mode=ParseMode.MARKDOWN)
 
 # ====================================================================
-# ADMIN SECTION
+# ADMIN SECTION ... (The rest of the file remains the same)
 # ====================================================================
 
-# --- Admin Entry & Navigation ---
+# ... (ALL THE ADMIN FUNCTIONS FROM BEFORE) ...
 async def admin_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👑 به پنل ادمین خوش آمدید.", reply_markup=get_admin_menu_keyboard())
     return ADMIN_MENU
@@ -461,7 +492,6 @@ async def back_to_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text("به منوی اصلی ادمین بازگشتید.", reply_markup=get_admin_menu_keyboard())
     return ADMIN_MENU
 
-# --- Admin Callback Handlers ---
 async def admin_delete_plan_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -577,7 +607,6 @@ async def admin_cancel_restore_callback(update: Update, context: ContextTypes.DE
     context.user_data.clear()
     return BACKUP_MENU
 
-# --- Plan Management (Admin) ---
 async def plan_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [["➕ افزودن پلن جدید", "📋 لیست پلن‌ها"], [BTN_BACK_TO_ADMIN_MENU]]
     await update.message.reply_text("بخش مدیریت پلن‌ها", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)); return PLAN_MENU
@@ -628,7 +657,6 @@ async def plan_gb_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("لطفا حجم را به صورت عدد وارد کنید."); 
         return PLAN_GB
 
-# --- Edit Plan Conversation ---
 async def edit_plan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; await query.answer()
     plan_id = int(query.data.split('_')[-1])
@@ -694,7 +722,6 @@ async def finish_plan_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return ADMIN_MENU
 
-# --- Reports (Admin) ---
 async def reports_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [["📊 آمار کلی", "📈 گزارش فروش امروز"], ["📅 گزارش فروش ۷ روز اخیر", "🏆 محبوب‌ترین پلن‌ها"], [BTN_BACK_TO_ADMIN_MENU]]
     await update.message.reply_text("بخش گزارش‌ها و آمار", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)); return REPORTS_MENU
@@ -721,7 +748,6 @@ async def show_popular_plans_report(update: Update, context: ContextTypes.DEFAUL
     text = "🏆 **محبوب‌ترین پلن‌ها**\n\n" + "\n".join([f"{i}. **{plan['name']}** - {plan['sales_count']} بار فروش" for i, plan in enumerate(plans, 1)])
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN); return REPORTS_MENU
 
-# --- Settings Management (Admin) ---
 async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     card_number = db.get_setting('card_number') or "تنظیم نشده"
     card_holder = db.get_setting('card_holder') or "تنظیم نشده"
@@ -745,7 +771,6 @@ async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_T
     await update.message.reply_text("✅ تنظیمات با موفقیت به‌روز شد.", reply_markup=get_admin_menu_keyboard())
     context.user_data.clear(); return ConversationHandler.END
 
-# --- Broadcast (Admin) ---
 async def broadcast_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [["ارسال به همه کاربران", "ارسال به کاربر خاص"], [BTN_BACK_TO_ADMIN_MENU]]
     await update.message.reply_text("بخش ارسال پیام", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)); return BROADCAST_MENU
@@ -794,7 +819,6 @@ async def broadcast_to_user_message_received(update: Update, context: ContextTyp
     except (Forbidden, BadRequest): await update.message.reply_text("❌ ارسال پیام ناموفق بود. احتمالا کاربر ربات را بلاک کرده یا آیدی اشتباه است.", reply_markup=get_admin_menu_keyboard())
     context.user_data.clear(); return ADMIN_MENU
 
-# --- User Management (Admin) ---
 async def user_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("لطفا آیدی عددی یا یوزرنیم تلگرام (با یا بدون @) کاربری که می‌خواهید مدیریت کنید را وارد نمایید:", reply_markup=ReplyKeyboardMarkup([[BTN_BACK_TO_ADMIN_MENU]], resize_keyboard=True)); return MANAGE_USER_ID
 
@@ -858,12 +882,10 @@ async def manage_user_amount_received(update: Update, context: ContextTypes.DEFA
         await update.message.reply_text(f"✅ مبلغ {amount:.0f} تومان به حساب کاربر {'اضافه' if is_add else 'کسر'} شد.")
         update.message.text = str(target_user_id)
         return await manage_user_id_received(update, context)
-
     except (ValueError, TypeError): 
         await update.message.reply_text("لطفا مبلغ را به صورت عدد وارد کنید."); 
         return MANAGE_USER_AMOUNT
 
-# --- Backup & Restore (Admin) ---
 async def backup_restore_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [["📥 دریافت فایل پشتیبان", "📤 بارگذاری فایل پشتیبان"], [BTN_BACK_TO_ADMIN_MENU]]
     await update.message.reply_text("بخش پشتیبان‌گیری و بازیابی.", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)); return BACKUP_MENU
@@ -872,9 +894,9 @@ async def send_backup_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
     backup_filename = f"backups/backup_{timestamp}.db"
     try:
-        db.close_db() # Close the connection to safely copy
+        db.close_db()
         shutil.copy(db.DB_NAME, backup_filename)
-        db.init_db() # Re-open the connection
+        db.init_db()
         await update.message.reply_text("در حال آماده‌سازی فایل پشتیبان...")
         await context.bot.send_document(chat_id=update.effective_user.id, document=open(backup_filename, 'rb'), caption=f"پشتیبان دیتابیس - {timestamp}")
     except Exception as e: 
@@ -904,10 +926,9 @@ async def restore_receive_file(update: Update, context: ContextTypes.DEFAULT_TYP
     keyboard = [[InlineKeyboardButton("✅ بله، مطمئنم", callback_data="admin_confirm_restore"), InlineKeyboardButton("❌ خیر، لغو کن", callback_data="admin_cancel_restore")]]
     await update.message.reply_text("**آیا از جایگزینی دیتابیس فعلی کاملاً مطمئن هستید؟ این عمل غیرقابل بازگشت است.**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN); return BACKUP_MENU
 
-# --- Shutdown ---
 async def shutdown_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("ربات در حال خاموش شدن است...")
-    db.close_db() # Gracefully close DB connection
+    db.close_db()
     asyncio.create_task(context.application.shutdown())
 
 def main():
@@ -919,7 +940,6 @@ def main():
     admin_filter = filters.User(user_id=ADMIN_ID)
     user_filter = ~admin_filter
     
-    # --- Conversation Handlers ---
     buy_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(buy_start, pattern='^user_buy_')],
         states={GET_CUSTOM_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_custom_name), CommandHandler('skip', skip_custom_name)]},
@@ -1025,8 +1045,6 @@ def main():
         per_user=True, per_chat=True, allow_reentry=True
     )
     
-    # --- Add Handlers to Application ---
-    # گروه ۱: مکالمات اصلی
     application.add_handler(charge_handler, group=1)
     application.add_handler(gift_handler, group=1)
     application.add_handler(buy_handler, group=1)
@@ -1034,11 +1052,9 @@ def main():
     application.add_handler(edit_plan_conv, group=1)
     application.add_handler(admin_conv, group=1)
     
-    # **بخش کلیدی: تعریف یک هندلر سراسری برای مواقعی که ادمین خارج از مکالمه است**
     application.add_handler(CallbackQueryHandler(admin_confirm_charge_callback, pattern="^admin_confirm_charge_"))
     application.add_handler(CallbackQueryHandler(admin_reject_charge_callback, pattern="^admin_reject_charge_"))
 
-    # گروه ۲: کال‌بک‌های مستقل کاربران
     application.add_handler(CallbackQueryHandler(show_link_options_menu, pattern="^showlinks_"), group=2)
     application.add_handler(CallbackQueryHandler(get_link_callback, pattern="^getlink_"), group=2)
     application.add_handler(CallbackQueryHandler(refresh_service_details, pattern="^refresh_"), group=2)
@@ -1046,17 +1062,15 @@ def main():
     application.add_handler(CallbackQueryHandler(confirm_renewal_callback, pattern="^confirmrenew$"), group=2)
     application.add_handler(CallbackQueryHandler(cancel_renewal_callback, pattern="^cancelrenew$"), group=2)
     
-    # گروه ۳: دستورات و پیام‌های عمومی
     application.add_handler(CommandHandler("start", start), group=3)
     application.add_handler(MessageHandler(filters.Regex('^🛍️ خرید سرویس$'), buy_service_list), group=3)
     application.add_handler(MessageHandler(filters.Regex('^📋 سرویس‌های من$'), list_my_services), group=3)
     application.add_handler(MessageHandler(filters.Regex('^💰 موجودی و شارژ$'), show_balance), group=3)
     application.add_handler(MessageHandler(filters.Regex('^📞 پشتیبانی$'), show_support), group=3)
-    # <<<<<<<< THIS LINE IS NOW CORRECTED >>>>>>>>>
     application.add_handler(MessageHandler(filters.Regex('^📚 راهنمای اتصال$'), show_guide), group=3)
     application.add_handler(MessageHandler(filters.Regex('^🧪 دریافت سرویس تست رایگان$'), get_trial_service), group=3)
 
-    print("Bot is running with all corrections applied. Everything should work perfectly now.")
+    print("Bot is running with all corrections applied. Awaiting renewal test.")
     application.run_polling()
 
 if __name__ == "__main__":
