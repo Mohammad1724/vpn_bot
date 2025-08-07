@@ -1,49 +1,74 @@
 #!/bin/bash
 
+# Exit immediately if a command exits with a non-zero status.
+set -e
+
 # Function to print colored messages
 print_color() {
     COLOR=$1
     TEXT=$2
+    # Standard color codes
     case $COLOR in
-        "red") echo -e "\e[31m${TEXT}\e[0m" ;;
-        "green") echo -e "\e[32m${TEXT}\e[0m" ;;
-        "yellow") echo -e "\e[33m${TEXT}\e[0m" ;;
+        "red") echo -e "\033[0;31m${TEXT}\033[0m" ;;
+        "green") echo -e "\033[0;32m${TEXT}\033[0m" ;;
+        "yellow") echo -e "\033[0;33m${TEXT}\033[0m" ;;
+        "blue") echo -e "\033[0;34m${TEXT}\033[0m" ;;
     esac
 }
 
-if [ "$(id -u)" != "0" ]; then
-   print_color "red" "This script must be run as root. Please use 'sudo'."
+# --- Main Script ---
+
+# 1. Check for root privileges
+if [ "$(id -u)" -ne "0" ]; then
+   print_color "red" "This script must be run as root. Please use 'sudo bash uninstall.sh'."
    exit 1
 fi
 
-print_color "yellow" "--- Hiddify Advanced Bot Uninstaller ---"
+print_color "blue" "--- Hiddify Advanced Bot Uninstaller ---"
 
+# --- Configuration ---
 SERVICE_NAME="vpn_bot"
 DEFAULT_INSTALL_DIR="/opt/vpn-bot"
-
-print_color "yellow" "Stopping and disabling the systemd service..."
-systemctl stop $SERVICE_NAME > /dev/null 2>&1
-systemctl disable $SERVICE_NAME > /dev/null 2>&1
-
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
-if [ -f "$SERVICE_FILE" ]; then
-    print_color "yellow" "Removing systemd service file..."
-    rm $SERVICE_FILE
-    systemctl daemon-reload
+
+# 2. Stop and disable the systemd service
+print_color "yellow" "Stopping and disabling the systemd service..."
+# Use `systemctl list-units` to check if the service exists before trying to stop it
+if systemctl list-units --type=service | grep -q "${SERVICE_NAME}.service"; then
+    systemctl stop "$SERVICE_NAME"
+    systemctl disable "$SERVICE_NAME"
+    print_color "green" "Service stopped and disabled."
+else
+    print_color "yellow" "Service '${SERVICE_NAME}' not found. Skipping."
 fi
 
-read -p "Enter the bot's installation directory [${DEFAULT_INSTALL_DIR}]: " INSTALL_DIR
+# 3. Remove the systemd service file
+if [ -f "$SERVICE_FILE" ]; then
+    print_color "yellow" "Removing systemd service file..."
+    rm "$SERVICE_FILE"
+    systemctl daemon-reload
+    print_color "green" "Service file removed."
+else
+    print_color "yellow" "Service file not found. Skipping."
+fi
+
+# 4. Ask for the installation directory and confirm removal
+read -p "Enter the bot's installation directory to remove [${DEFAULT_INSTALL_DIR}]: " INSTALL_DIR
 INSTALL_DIR=${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}
 
 if [ -d "$INSTALL_DIR" ]; then
-    read -p "Are you sure you want to permanently delete all bot files from ${INSTALL_DIR}? [y/N]: " CONFIRM
+    print_color "red" "WARNING: This will permanently delete all bot files and data from '${INSTALL_DIR}'."
+    read -p "Are you absolutely sure you want to proceed? [y/N]: " CONFIRM
+    
     if [[ "$CONFIRM" =~ ^[yY]$ ]]; then
-        print_color "yellow" "Removing installation directory..."
-        rm -rf $INSTALL_DIR
-        print_color "green" "Directory removed."
+        print_color "yellow" "Removing installation directory: ${INSTALL_DIR}..."
+        rm -rf "$INSTALL_DIR"
+        print_color "green" "Directory successfully removed."
     else
-        print_color "yellow" "Skipping directory removal."
+        print_color "yellow" "Directory removal cancelled by user."
     fi
+else
+    print_color "yellow" "Installation directory '${INSTALL_DIR}' not found. Nothing to remove."
 fi
 
-print_color "green" "--- Uninstallation Complete ---"
+print_color "blue" "--- Uninstallation Complete ---"
