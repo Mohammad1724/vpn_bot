@@ -200,10 +200,13 @@ async def user_generic_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 # --- User Service Management ---
 async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # This function can be called by a message or a callback query
     user_id = update.effective_user.id
+    message = update.effective_message
+    
     services = db.get_user_services(user_id)
     if not services:
-        await update.message.reply_text("شما در حال حاضر هیچ سرویس فعالی ندارید.")
+        await message.reply_text("شما در حال حاضر هیچ سرویس فعالی ندارید.")
         return
     
     keyboard = []
@@ -213,7 +216,12 @@ async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("لطفا سرویسی که می‌خواهید مدیریتش کنید را انتخاب نمایید:", reply_markup=reply_markup)
+    # If the original message is a callback query, edit it. Otherwise, send a new message.
+    if update.callback_query:
+        await message.edit_text("لطفا سرویسی که می‌خواهید مدیریتش کنید را انتخاب نمایید:", reply_markup=reply_markup)
+    else:
+        await message.reply_text("لطفا سرویسی که می‌خواهید مدیریتش کنید را انتخاب نمایید:", reply_markup=reply_markup)
+
 
 async def view_service_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1156,7 +1164,7 @@ def main():
     application.add_handler(MessageHandler(filters.Regex('^📚 راهنمای اتصال$'), show_guide), group=3)
     application.add_handler(MessageHandler(filters.Regex('^🧪 دریافت سرویس تست رایگان$'), get_trial_service), group=3)
 
-    print("Bot is running with final corrections. All features should work correctly.")
+    print("Bot is running with all corrections. All features should be working correctly.")
     application.run_polling()
 
 if __name__ == "__main__":
