@@ -256,7 +256,6 @@ async def confirm_renewal_callback(update: Update, context: ContextTypes.DEFAULT
     await query.answer()
     await proceed_with_renewal(query, context)
 
-# <<<<<<<< CORRECTED FUNCTION FOR RENEWAL WITH LOGGING >>>>>>>>>
 async def proceed_with_renewal(query: Update.callback_query, context: ContextTypes.DEFAULT_TYPE):
     service_id = context.user_data.get('renewal_service_id')
     plan_id = context.user_data.get('renewal_plan_id')
@@ -407,7 +406,6 @@ async def skip_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await create_service_after_name(update.message, context)
     return ConversationHandler.END
 
-# <<<<<<<< CORRECTED FUNCTION FOR SERVICE CREATION >>>>>>>>>
 async def create_service_after_name(message: Update.message, context: ContextTypes.DEFAULT_TYPE):
     user_id = message.chat_id
     plan_id = context.user_data.get('plan_to_buy_id')
@@ -472,13 +470,19 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                "می‌توانید با اسکن QR کد زیر یا با استفاده از لینک اشتراک، به سرویس متصل شوید.\n\n"
                f"لینک اشتراک شما:\n`{final_link_with_fragment}`")
     await query.message.delete()
-    await context.bot.send_photo(chat_id=query.message.chat_id, photo=bio, caption=caption, parse_mode=ParseMode.MARKDOWN)
+
+    await context.bot.send_photo(
+        chat_id=query.message.chat_id,
+        photo=bio,
+        caption=caption,
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=get_main_menu_keyboard(query.from_user.id)
+    )
 
 # ====================================================================
-# ADMIN SECTION ... (The rest of the file remains the same)
+# ADMIN SECTION
 # ====================================================================
 
-# ... (ALL THE ADMIN FUNCTIONS FROM BEFORE) ...
 async def admin_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👑 به پنل ادمین خوش آمدید.", reply_markup=get_admin_menu_keyboard())
     return ADMIN_MENU
@@ -1070,7 +1074,7 @@ def main():
     application.add_handler(MessageHandler(filters.Regex('^📚 راهنمای اتصال$'), show_guide), group=3)
     application.add_handler(MessageHandler(filters.Regex('^🧪 دریافت سرویس تست رایگان$'), get_trial_service), group=3)
 
-    print("Bot is running with all corrections applied. Awaiting renewal test.")
+    print("Bot is running with final corrections. All features should work correctly.")
     application.run_polling()
 
 if __name__ == "__main__":
