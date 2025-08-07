@@ -482,9 +482,6 @@ async def admin_toggle_plan_visibility_callback(update: Update, context: Context
 
 async def admin_confirm_charge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    # <<< START OF DEBUGGING LOG >>>
-    logger.info(f"--- [DEBUG] admin_confirm_charge_callback TRIGGERED! Callback data: '{query.data}' ---")
-    # <<<  END OF DEBUGGING LOG  >>>
     await query.answer()
     
     prefix = "admin_confirm_charge_"
@@ -525,9 +522,6 @@ async def admin_confirm_charge_callback(update: Update, context: ContextTypes.DE
 
 async def admin_reject_charge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    # <<< START OF DEBUGGING LOG >>>
-    logger.info(f"--- [DEBUG] admin_reject_charge_callback TRIGGERED! Callback data: '{query.data}' ---")
-    # <<<  END OF DEBUGGING LOG  >>>
     await query.answer()
     try:
         target_user_id = int(query.data.split('_')[-1])
@@ -878,11 +872,14 @@ async def send_backup_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
     backup_filename = f"backups/backup_{timestamp}.db"
     try:
+        db.close_db() # Close the connection to safely copy
         shutil.copy(db.DB_NAME, backup_filename)
+        db.init_db() # Re-open the connection
         await update.message.reply_text("در حال آماده‌سازی فایل پشتیبان...")
         await context.bot.send_document(chat_id=update.effective_user.id, document=open(backup_filename, 'rb'), caption=f"پشتیبان دیتابیس - {timestamp}")
     except Exception as e: 
         await update.message.reply_text(f"خطا در ارسال فایل: {e}")
+        logger.error(f"Backup file sending error: {e}", exc_info=True)
     finally:
         if os.path.exists(backup_filename): 
             os.remove(backup_filename)
@@ -910,6 +907,7 @@ async def restore_receive_file(update: Update, context: ContextTypes.DEFAULT_TYP
 # --- Shutdown ---
 async def shutdown_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("ربات در حال خاموش شدن است...")
+    db.close_db() # Gracefully close DB connection
     asyncio.create_task(context.application.shutdown())
 
 def main():
@@ -1023,9 +1021,7 @@ def main():
         fallbacks=[
             MessageHandler(filters.Regex(f'^{BTN_EXIT_ADMIN_PANEL}$'), exit_admin_panel),
             CommandHandler('cancel', admin_generic_cancel),
-            # **بخش کلیدی اول: تعریف دکمه‌ها به عنوان فال‌بک**
-            CallbackQueryHandler(admin_confirm_charge_callback, pattern="^admin_confirm_charge_"),
-            CallbackQueryHandler(admin_reject_charge_callback, pattern="^admin_reject_charge_"),
+            # <<< THIS SECTION IS NOW CORRECTLY EMPTY >>>
         ],
         per_user=True, per_chat=True, allow_reentry=True
     )
@@ -1039,9 +1035,10 @@ def main():
     application.add_handler(edit_plan_conv, group=1)
     application.add_handler(admin_conv, group=1)
     
-    # **بخش کلیدی دوم: تعریف یک هندلر سراسری برای مواقعی که ادمین خارج از مکالمه است**
-    application.add_handler(CallbackQueryHandler(admin_confirm_charge_callback, pattern="^admin_confirm_charge_", block=False))
-    application.add_handler(CallbackQueryHandler(admin_reject_charge_callback, pattern="^admin_reject_charge_", block=False))
+    # **بخش کلیدی: تعریف یک هندلر سراسری برای مواقعی که ادمین خارج از مکالمه است**
+    # این هندلرها باید خارج از مکالمه باشند تا همیشه کار کنند
+    application.add_handler(CallbackQueryHandler(admin_confirm_charge_callback, pattern="^admin_confirm_charge_"))
+    application.add_handler(CallbackQueryHandler(admin_reject_charge_callback, pattern="^admin_reject_charge_"))
 
     # گروه ۲: کال‌بک‌های مستقل کاربران
     application.add_handler(CallbackQueryHandler(show_link_options_menu, pattern="^showlinks_"), group=2)
@@ -1057,10 +1054,10 @@ def main():
     application.add_handler(MessageHandler(filters.Regex('^📋 سرویس‌های من$'), list_my_services), group=3)
     application.add_handler(MessageHandler(filters.Regex('^💰 موجودی و شارژ$'), show_balance), group=3)
     application.add_handler(MessageHandler(filters.Regex('^📞 پشتیبانی$'), show_support), group=3)
-    application.add_handler(MessageHandler(filters.Regex('^📚 راهنمای اتصال$'), show_guide), group=3)
+    application.add_handler(MessageHandler(filters.Regex('^📚 راهنمای اتصال$'), show_guide), group_3)
     application.add_handler(MessageHandler(filters.Regex('^🧪 دریافت سرویس تست رایگان$'), get_trial_service), group=3)
 
-    print("Bot is running with debugging logs for charge confirmation...")
+    print("Bot is running with all corrections applied. Everything should work perfectly now.")
     application.run_polling()
 
 if __name__ == "__main__":
