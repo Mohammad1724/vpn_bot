@@ -461,7 +461,7 @@ async def back_to_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text("به منوی اصلی ادمین بازگشتید.", reply_markup=get_admin_menu_keyboard())
     return ADMIN_MENU
 
-# --- Admin Callback Handlers (مهم: این توابع حالا توسط هندلرهای داخل مکالمه یا سراسری فراخوانی می‌شوند) ---
+# --- Admin Callback Handlers ---
 async def admin_delete_plan_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1021,7 +1021,6 @@ def main():
         fallbacks=[
             MessageHandler(filters.Regex(f'^{BTN_EXIT_ADMIN_PANEL}$'), exit_admin_panel),
             CommandHandler('cancel', admin_generic_cancel),
-            # <<< THIS SECTION IS NOW CORRECTLY EMPTY >>>
         ],
         per_user=True, per_chat=True, allow_reentry=True
     )
@@ -1036,7 +1035,6 @@ def main():
     application.add_handler(admin_conv, group=1)
     
     # **بخش کلیدی: تعریف یک هندلر سراسری برای مواقعی که ادمین خارج از مکالمه است**
-    # این هندلرها باید خارج از مکالمه باشند تا همیشه کار کنند
     application.add_handler(CallbackQueryHandler(admin_confirm_charge_callback, pattern="^admin_confirm_charge_"))
     application.add_handler(CallbackQueryHandler(admin_reject_charge_callback, pattern="^admin_reject_charge_"))
 
@@ -1054,7 +1052,8 @@ def main():
     application.add_handler(MessageHandler(filters.Regex('^📋 سرویس‌های من$'), list_my_services), group=3)
     application.add_handler(MessageHandler(filters.Regex('^💰 موجودی و شارژ$'), show_balance), group=3)
     application.add_handler(MessageHandler(filters.Regex('^📞 پشتیبانی$'), show_support), group=3)
-    application.add_handler(MessageHandler(filters.Regex('^📚 راهنمای اتصال$'), show_guide), group_3)
+    # <<<<<<<< THIS LINE IS NOW CORRECTED >>>>>>>>>
+    application.add_handler(MessageHandler(filters.Regex('^📚 راهنمای اتصال$'), show_guide), group=3)
     application.add_handler(MessageHandler(filters.Regex('^🧪 دریافت سرویس تست رایگان$'), get_trial_service), group=3)
 
     print("Bot is running with all corrections applied. Everything should work perfectly now.")
