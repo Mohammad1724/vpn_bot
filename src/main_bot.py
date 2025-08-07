@@ -8,6 +8,8 @@ import random
 import sqlite3
 import io
 from datetime import datetime, timedelta
+# Add jdatetime for Shamsi date conversion
+import jdatetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -85,16 +87,35 @@ def get_admin_menu_keyboard():
 
 # --- Helper Functions ---
 async def _get_service_status(hiddify_info):
-    start_date_str = hiddify_info.get('start_date')
+    # Check for different possible start date field names
+    start_date_str = hiddify_info.get('start_date') or hiddify_info.get('last_reset_time')
+    
     package_days = hiddify_info.get('package_days', 0)
-    if not start_date_str: return "🟢 فعال (جدید)", "N/A", False
+
+    if not start_date_str:
+        logger.warning(f"Could not find a valid start date in Hiddify info: {hiddify_info}")
+        return "⚠️ وضعیت نامشخص", "N/A", True
+
     try:
-        start_date_obj = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+        # Handle datetime strings like "2023-10-27T10:00:00"
+        date_part = start_date_str.split('T')[0]
+        start_date_obj = datetime.strptime(date_part, "%Y-%m-%d").date()
+        
+        # Calculate Gregorian expiration date
         expiry_date_obj = start_date_obj + timedelta(days=package_days)
+        
+        # --- Convert to Shamsi date ---
+        jalali_expiry_date = jdatetime.date.fromgregorian(date=expiry_date_obj)
+        jalali_display_str = jalali_expiry_date.strftime("%Y/%m/%d")
+        # --- End conversion ---
+
         is_expired = expiry_date_obj < datetime.now().date()
-        return ("🔴 منقضی شده", expiry_date_obj.strftime("%Y-%m-%d"), True) if is_expired else ("🟢 فعال", expiry_date_obj.strftime("%Y-%m-%d"), False)
+        status = "🔴 منقضی شده" if is_expired else "🟢 فعال"
+        
+        return status, jalali_display_str, is_expired
+
     except (ValueError, TypeError):
-        logger.error(f"Could not parse start_date: {start_date_str}")
+        logger.error(f"Could not parse the date string '{start_date_str}'")
         return "⚠️ وضعیت نامشخص", "N/A", True
 
 def is_valid_sqlite(filepath):
