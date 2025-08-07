@@ -461,7 +461,7 @@ async def back_to_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text("به منوی اصلی ادمین بازگشتید.", reply_markup=get_admin_menu_keyboard())
     return ADMIN_MENU
 
-# --- Admin Callback Handlers ---
+# --- Admin Callback Handlers (مهم: این توابع حالا توسط هندلرهای داخل مکالمه یا سراسری فراخوانی می‌شوند) ---
 async def admin_delete_plan_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -493,14 +493,18 @@ async def admin_confirm_charge_callback(update: Update, context: ContextTypes.DE
     except (ValueError, IndexError) as e:
         logger.error(f"Error parsing admin_confirm_charge_callback data: {query.data} | Error: {e}")
         try:
-            await query.edit_message_caption(caption=f"{query.message.caption}\n\n---\n❌ خطا در پردازش اطلاعات دکمه.")
-        except Exception:
-            # Fallback if editing fails (e.g., message deleted)
-            await context.bot.send_message(chat_id=ADMIN_ID, text="❌ خطا در پردازش اطلاعات دکمه تایید شارژ.")
-        return ADMIN_MENU
+            # سعی کن به کاربر اطلاع دهی که مشکلی پیش آمده
+            if query.message.photo:
+                await query.edit_message_caption(caption=f"{query.message.caption}\n\n---\n❌ خطا در پردازش اطلاعات دکمه.")
+            else:
+                await query.edit_message_text("❌ خطا در پردازش اطلاعات دکمه.")
+        except Exception as edit_error:
+            logger.error(f"Fallback error message failed to send: {edit_error}")
+        return
 
     db.update_balance(target_user_id, amount)
-    admin_feedback = f"{query.message.caption}\n\n---\n✅ با موفقیت مبلغ {amount:,} تومان به حساب کاربر `{target_user_id}` اضافه شد."
+    original_caption = query.message.caption or ""
+    admin_feedback = f"{original_caption}\n\n---\n✅ با موفقیت مبلغ {amount:,} تومان به حساب کاربر `{target_user_id}` اضافه شد."
     
     try:
         await context.bot.send_message(
@@ -516,8 +520,6 @@ async def admin_confirm_charge_callback(update: Update, context: ContextTypes.DE
     except Exception as e:
         logger.error(f"edit_message_caption failed: {e}. Sending new message as fallback.")
         await context.bot.send_message(chat_id=ADMIN_ID, text=admin_feedback, parse_mode=ParseMode.MARKDOWN)
-    
-    return ADMIN_MENU
 
 async def admin_reject_charge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -527,12 +529,16 @@ async def admin_reject_charge_callback(update: Update, context: ContextTypes.DEF
     except (ValueError, IndexError) as e:
         logger.error(f"Error parsing admin_reject_charge_callback data: {query.data} | Error: {e}")
         try:
-            await query.edit_message_caption(caption=f"{query.message.caption}\n\n---\n❌ خطا در پردازش اطلاعات دکمه.")
-        except Exception:
-            await context.bot.send_message(chat_id=ADMIN_ID, text="❌ خطا در پردازش اطلاعات دکمه رد شارژ.")
-        return ADMIN_MENU
+            if query.message.photo:
+                await query.edit_message_caption(caption=f"{query.message.caption}\n\n---\n❌ خطا در پردازش اطلاعات دکمه.")
+            else:
+                await query.edit_message_text("❌ خطا در پردازش اطلاعات دکمه.")
+        except Exception as edit_error:
+            logger.error(f"Fallback error message failed to send: {edit_error}")
+        return
 
-    admin_feedback = f"{query.message.caption}\n\n---\n❌ درخواست شارژ کاربر `{target_user_id}` رد شد."
+    original_caption = query.message.caption or ""
+    admin_feedback = f"{original_caption}\n\n---\n❌ درخواست شارژ کاربر `{target_user_id}` رد شد."
     
     try: 
         await context.bot.send_message(chat_id=target_user_id, text="متاسفانه درخواست شارژ حساب شما توسط ادمین رد شد.")
@@ -544,8 +550,6 @@ async def admin_reject_charge_callback(update: Update, context: ContextTypes.DEF
     except Exception as e:
         logger.error(f"edit_message_caption failed: {e}. Sending new message as fallback.")
         await context.bot.send_message(chat_id=ADMIN_ID, text=admin_feedback, parse_mode=ParseMode.MARKDOWN)
-        
-    return ADMIN_MENU
 
 async def admin_confirm_restore_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -963,9 +967,6 @@ def main():
                 MessageHandler(filters.Regex('^📩 ارسال پیام$'), broadcast_menu),
                 MessageHandler(filters.Regex('^👥 مدیریت کاربران$'), user_management_menu),
                 MessageHandler(filters.Regex('^🛑 خاموش کردن ربات$'), shutdown_bot),
-                # --- Inline Button Handlers now inside the conversation ---
-                CallbackQueryHandler(admin_confirm_charge_callback, pattern="^admin_confirm_charge_"),
-                CallbackQueryHandler(admin_reject_charge_callback, pattern="^admin_reject_charge_"),
                 CallbackQueryHandler(edit_setting_start, pattern="^admin_edit_setting_"),
             ],
             REPORTS_MENU: [
@@ -1017,34 +1018,42 @@ def main():
         fallbacks=[
             MessageHandler(filters.Regex(f'^{BTN_EXIT_ADMIN_PANEL}$'), exit_admin_panel),
             CommandHandler('cancel', admin_generic_cancel),
+            # **بخش کلیدی اول: تعریف دکمه‌ها به عنوان فال‌بک**
+            CallbackQueryHandler(admin_confirm_charge_callback, pattern="^admin_confirm_charge_"),
+            CallbackQueryHandler(admin_reject_charge_callback, pattern="^admin_reject_charge_"),
         ],
         per_user=True, per_chat=True, allow_reentry=True
     )
     
     # --- Add Handlers to Application ---
-    application.add_handler(charge_handler)
-    application.add_handler(gift_handler)
-    application.add_handler(buy_handler)
-    application.add_handler(settings_conv)
-    application.add_handler(edit_plan_conv)
-    application.add_handler(admin_conv)
+    # گروه ۱: مکالمات اصلی
+    application.add_handler(charge_handler, group=1)
+    application.add_handler(gift_handler, group=1)
+    application.add_handler(buy_handler, group=1)
+    application.add_handler(settings_conv, group=1)
+    application.add_handler(edit_plan_conv, group=1)
+    application.add_handler(admin_conv, group=1)
     
-    # User-facing callbacks that should always work
-    application.add_handler(CallbackQueryHandler(show_link_options_menu, pattern="^showlinks_"))
-    application.add_handler(CallbackQueryHandler(get_link_callback, pattern="^getlink_"))
-    application.add_handler(CallbackQueryHandler(refresh_service_details, pattern="^refresh_"))
-    application.add_handler(CallbackQueryHandler(renew_service_handler, pattern="^renew_"))
-    application.add_handler(CallbackQueryHandler(confirm_renewal_callback, pattern="^confirmrenew$"))
-    application.add_handler(CallbackQueryHandler(cancel_renewal_callback, pattern="^cancelrenew$"))
+    # **بخش کلیدی دوم: تعریف یک هندلر سراسری برای مواقعی که ادمین خارج از مکالمه است**
+    application.add_handler(CallbackQueryHandler(admin_confirm_charge_callback, pattern="^admin_confirm_charge_", block=False))
+    application.add_handler(CallbackQueryHandler(admin_reject_charge_callback, pattern="^admin_reject_charge_", block=False))
+
+    # گروه ۲: کال‌بک‌های مستقل کاربران
+    application.add_handler(CallbackQueryHandler(show_link_options_menu, pattern="^showlinks_"), group=2)
+    application.add_handler(CallbackQueryHandler(get_link_callback, pattern="^getlink_"), group=2)
+    application.add_handler(CallbackQueryHandler(refresh_service_details, pattern="^refresh_"), group=2)
+    application.add_handler(CallbackQueryHandler(renew_service_handler, pattern="^renew_"), group=2)
+    application.add_handler(CallbackQueryHandler(confirm_renewal_callback, pattern="^confirmrenew$"), group=2)
+    application.add_handler(CallbackQueryHandler(cancel_renewal_callback, pattern="^cancelrenew$"), group=2)
     
-    # General Command & Message Handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.Regex('^🛍️ خرید سرویس$'), buy_service_list))
-    application.add_handler(MessageHandler(filters.Regex('^📋 سرویس‌های من$'), list_my_services))
-    application.add_handler(MessageHandler(filters.Regex('^💰 موجودی و شارژ$'), show_balance))
-    application.add_handler(MessageHandler(filters.Regex('^📞 پشتیبانی$'), show_support))
-    application.add_handler(MessageHandler(filters.Regex('^📚 راهنمای اتصال$'), show_guide))
-    application.add_handler(MessageHandler(filters.Regex('^🧪 دریافت سرویس تست رایگان$'), get_trial_service))
+    # گروه ۳: دستورات و پیام‌های عمومی
+    application.add_handler(CommandHandler("start", start), group=3)
+    application.add_handler(MessageHandler(filters.Regex('^🛍️ خرید سرویس$'), buy_service_list), group=3)
+    application.add_handler(MessageHandler(filters.Regex('^📋 سرویس‌های من$'), list_my_services), group=3)
+    application.add_handler(MessageHandler(filters.Regex('^💰 موجودی و شارژ$'), show_balance), group=3)
+    application.add_handler(MessageHandler(filters.Regex('^📞 پشتیبانی$'), show_support), group=3)
+    application.add_handler(MessageHandler(filters.Regex('^📚 راهنمای اتصال$'), show_guide), group=3)
+    application.add_handler(MessageHandler(filters.Regex('^🧪 دریافت سرویس تست رایگان$'), get_trial_service), group=3)
 
     print("Bot is running with the final, definitive fix...")
     application.run_polling()
