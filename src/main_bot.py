@@ -463,10 +463,7 @@ async def back_to_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 # --- Admin Callback Handlers ---
 async def admin_delete_plan_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # SECURITY CHECK: Ensure only admin can perform this action
-    if update.effective_user.id != ADMIN_ID:
-        return
-
+    if update.effective_user.id != ADMIN_ID: return
     query = update.callback_query
     await query.answer()
     plan_id = int(query.data.split('_')[-1])
@@ -475,78 +472,80 @@ async def admin_delete_plan_callback(update: Update, context: ContextTypes.DEFAU
     await query.from_user.send_message("پلن با موفقیت حذف شد.")
 
 async def admin_toggle_plan_visibility_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # SECURITY CHECK: Ensure only admin can perform this action
-    if update.effective_user.id != ADMIN_ID:
-        return
-
+    if update.effective_user.id != ADMIN_ID: return
     query = update.callback_query
     plan_id = int(query.data.split('_')[-1])
     db.toggle_plan_visibility(plan_id)
     await query.answer("وضعیت نمایش پلن تغییر کرد.")
-    # Refreshing the list is better, but this works
     await query.message.delete()
     await query.from_user.send_message("وضعیت نمایش پلن تغییر کرد. برای دیدن تغییرات، لیست را مجددا باز کنید.")
 
 async def admin_confirm_charge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # SECURITY CHECK: Ensure only admin can perform this action
-    if update.effective_user.id != ADMIN_ID:
-        return
-
+    """
+    Handles the admin's confirmation of a user's charge request.
+    This function uses a robust parsing method for the callback data.
+    """
+    if update.effective_user.id != ADMIN_ID: return
     query = update.callback_query
     await query.answer()
+    
+    prefix = "admin_confirm_charge_"
     try:
-        parts = query.data.split('_')
-        target_user_id = int(parts[3])
-        amount = int(float(parts[4]))
+        # Robust Parsing: Remove the known prefix and split the rest.
+        # This avoids errors if the prefix format changes.
+        # e.g., "admin_confirm_charge_123456_50000" -> "123456_50000"
+        data_part = query.data[len(prefix):]
+        
+        # Split the remaining part into user_id and amount
+        # split('_', 1) ensures we only split on the first underscore
+        user_id_str, amount_str = data_part.split('_', 1)
+        
+        target_user_id = int(user_id_str)
+        amount = int(float(amount_str)) # Use float for safety, then int
+        
     except (ValueError, IndexError) as e:
         logger.error(f"Error parsing admin_confirm_charge_callback data: {query.data} | Error: {e}")
-        await query.edit_message_caption(caption="خطا در پردازش اطلاعات. داده نامعتبر است.")
+        await query.edit_message_caption(caption=f"{query.message.caption}\n\n---\n❌ خطا در پردازش اطلاعات دکمه.")
         return
 
     db.update_balance(target_user_id, amount)
-    admin_feedback = f"✅ با موفقیت مبلغ {amount:,} تومان به حساب کاربر `{target_user_id}` اضافه شد."
+    admin_feedback = f"{query.message.caption}\n\n---\n✅ با موفقیت مبلغ {amount:,} تومان به حساب کاربر `{target_user_id}` اضافه شد."
+    
     try:
-        await context.bot.send_message(chat_id=target_user_id, text=f"حساب شما با موفقیت به مبلغ **{amount:,} تومان** شارژ شد!", parse_mode=ParseMode.MARKDOWN)
+        await context.bot.send_message(
+            chat_id=target_user_id, 
+            text=f"حساب شما با موفقیت به مبلغ **{amount:,} تومان** شارژ شد!", 
+            parse_mode=ParseMode.MARKDOWN
+        )
     except (Forbidden, BadRequest):
         admin_feedback += "\n\n⚠️ **اخطار:** کاربر ربات را بلاک کرده و پیام تایید را دریافت نکرد."
     
-    # Check if the original message had a photo to edit caption, otherwise send new message
-    if query.message.photo:
-        await query.edit_message_caption(caption=admin_feedback, reply_markup=None, parse_mode=ParseMode.MARKDOWN)
-    else:
-        await query.edit_message_text(text=admin_feedback, reply_markup=None, parse_mode=ParseMode.MARKDOWN)
-
+    await query.edit_message_caption(caption=admin_feedback, reply_markup=None, parse_mode=ParseMode.MARKDOWN)
 
 async def admin_reject_charge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # SECURITY CHECK: Ensure only admin can perform this action
-    if update.effective_user.id != ADMIN_ID:
-        return
-        
+    if update.effective_user.id != ADMIN_ID: return
     query = update.callback_query
     await query.answer()
+
     try:
+        # This method is robust for getting the last element (user_id)
         target_user_id = int(query.data.split('_')[-1])
-    except (ValueError, IndexError):
-        await query.edit_message_caption(caption="خطا در پردازش اطلاعات. داده نامعتبر است.")
+    except (ValueError, IndexError) as e:
+        logger.error(f"Error parsing admin_reject_charge_callback data: {query.data} | Error: {e}")
+        await query.edit_message_caption(caption=f"{query.message.caption}\n\n---\n❌ خطا در پردازش اطلاعات دکمه.")
         return
 
-    admin_feedback = f"❌ درخواست شارژ کاربر `{target_user_id}` رد شد."
+    admin_feedback = f"{query.message.caption}\n\n---\n❌ درخواست شارژ کاربر `{target_user_id}` رد شد."
+    
     try: 
         await context.bot.send_message(chat_id=target_user_id, text="متاسفانه درخواست شارژ حساب شما توسط ادمین رد شد.")
     except (Forbidden, BadRequest): 
         admin_feedback += "\n\n⚠️ **اخطار:** کاربر ربات را بلاک کرده است."
     
-    if query.message.photo:
-        await query.edit_message_caption(caption=admin_feedback, reply_markup=None, parse_mode=ParseMode.MARKDOWN)
-    else:
-        await query.edit_message_text(text=admin_feedback, reply_markup=None, parse_mode=ParseMode.MARKDOWN)
-
+    await query.edit_message_caption(caption=admin_feedback, reply_markup=None, parse_mode=ParseMode.MARKDOWN)
 
 async def admin_confirm_restore_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # SECURITY CHECK: Ensure only admin can perform this action
-    if update.effective_user.id != ADMIN_ID:
-        return
-        
+    if update.effective_user.id != ADMIN_ID: return
     query = update.callback_query
     await query.answer()
     restore_path = context.user_data.get('restore_path')
@@ -554,22 +553,17 @@ async def admin_confirm_restore_callback(update: Update, context: ContextTypes.D
         await query.edit_message_text("خطا: فایل پشتیبان یافت نشد."); 
         return
     try:
-        # Close current connection before moving file
         db.close_db()
         shutil.move(restore_path, db.DB_NAME)
-        # Re-initialize the database connection
         db.init_db()
-        await query.edit_message_text("✅ دیتابیس با موفقیت بازیابی شد.\n\n**مهم:** برای اعمال کامل تغییرات، لطفاً ربات را ری‌استارت کنید (مثلاً با دستور /start در یک چت خصوصی با BotFather یا ری‌استارت کردن پروسه).", parse_mode=ParseMode.MARKDOWN)
+        await query.edit_message_text("✅ دیتابیس با موفقیت بازیابی شد.\n\n**مهم:** برای اعمال کامل تغییرات، لطفاً ربات را ری‌استارت کنید.", parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         logger.error(f"Error during DB restore: {e}", exc_info=True)
         await query.edit_message_text(f"خطا در هنگام جایگزینی فایل دیتابیس: {e}")
     context.user_data.clear()
 
 async def admin_cancel_restore_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # SECURITY CHECK: Ensure only admin can perform this action
-    if update.effective_user.id != ADMIN_ID:
-        return
-        
+    if update.effective_user.id != ADMIN_ID: return
     query = update.callback_query
     await query.answer()
     restore_path = context.user_data.get('restore_path')
@@ -673,11 +667,10 @@ async def edit_plan_gb_received(update: Update, context: ContextTypes.DEFAULT_TY
     try:
         context.user_data['edit_plan_data']['gb'] = int(update.message.text)
         await finish_plan_edit(update, context)
-        return ConversationHandler.END # End conversation after final input
+        return ConversationHandler.END
     except ValueError: 
         await update.message.reply_text("لطفا حجم را به صورت عدد وارد کنید."); 
         return EDIT_PLAN_GB
-    
 
 async def skip_edit_plan_gb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("از تغییر حجم صرف نظر شد.")
@@ -693,7 +686,9 @@ async def finish_plan_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.update_plan(plan_id, new_data)
         await update.message.reply_text("✅ پلن با موفقیت به‌روزرسانی شد!", reply_markup=get_admin_menu_keyboard())
     context.user_data.clear()
-    return ADMIN_MENU # Return to admin menu after finishing
+    return ADMIN_MENU
+
+# ... (بقیه توابع بدون تغییر باقی می‌مانند) ...
 
 # --- Reports (Admin) ---
 async def reports_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -769,7 +764,7 @@ async def broadcast_to_all_send(update: Update, context: ContextTypes.DEFAULT_TY
         try: 
             await message_to_send.copy(chat_id=user_id)
             sent_count += 1
-            await asyncio.sleep(0.1) # Avoid hitting API rate limits
+            await asyncio.sleep(0.1)
         except (Forbidden, BadRequest): 
             failed_count += 1
     await update.message.reply_text(f"✅ پیام همگانی با موفقیت ارسال شد.\n\nتعداد ارسال موفق: {sent_count}\nتعداد ارسال ناموفق: {failed_count}")
@@ -833,8 +828,9 @@ async def manage_user_action_handler(update: Update, context: ContextTypes.DEFAU
         new_ban_status = not user_info['is_banned']
         db.set_user_ban_status(target_user_id, new_ban_status)
         await update.message.reply_text(f"✅ وضعیت کاربر با موفقیت به '{'مسدود' if new_ban_status else 'فعال'}' تغییر کرد.")
-        # After action, return to user management main menu to see the changes
-        return await manage_user_id_received(update, context) # This re-displays the user info
+        # Re-display user info to show the change
+        update.message.text = str(target_user_id)
+        return await manage_user_id_received(update, context)
     elif action == "📜 سوابق خرید":
         history = db.get_user_sales_history(target_user_id)
         if not history: 
@@ -858,10 +854,7 @@ async def manage_user_amount_received(update: Update, context: ContextTypes.DEFA
         db.update_balance(target_user_id, amount if is_add else -amount)
         await update.message.reply_text(f"✅ مبلغ {amount:.0f} تومان به حساب کاربر {'اضافه' if is_add else 'کسر'} شد.")
         # Re-display user info to show new balance
-        context.user_data['target_user_id_for_redisplay'] = target_user_id
-        # A bit of a workaround to re-trigger the display
-        fake_message = update.message
-        fake_message.text = str(target_user_id)
+        update.message.text = str(target_user_id)
         return await manage_user_id_received(update, context)
 
     except (ValueError, TypeError): 
@@ -1021,19 +1014,13 @@ def main():
     )
     
     # --- Add Handlers to Application ---
-    # Handler registration order matters.
-    # 1. Conversations (they are stateful and should get priority for their specific inputs)
-    application.add_handler(charge_handler)
-    application.add_handler(gift_handler)
-    application.add_handler(buy_handler)
-    application.add_handler(settings_conv)
-    application.add_handler(edit_plan_conv)
-    application.add_handler(admin_conv)
+    application.add_handler(charge_handler, group=1)
+    application.add_handler(gift_handler, group=1)
+    application.add_handler(buy_handler, group=1)
+    application.add_handler(settings_conv, group=1)
+    application.add_handler(edit_plan_conv, group=1)
+    application.add_handler(admin_conv, group=1)
 
-    # 2. Independent CallbackQueryHandlers (must work anytime, even inside conversations)
-    # The `block=False` parameter is crucial here. It allows these handlers to be triggered
-    # even when a ConversationHandler is active for the user.
-    # A security check is added inside each of these functions to ensure only ADMIN_ID can run them.
     application.add_handler(CallbackQueryHandler(admin_confirm_charge_callback, pattern="^admin_confirm_charge_", block=False))
     application.add_handler(CallbackQueryHandler(admin_reject_charge_callback, pattern="^admin_reject_charge_", block=False))
     application.add_handler(CallbackQueryHandler(admin_delete_plan_callback, pattern="^admin_delete_plan_", block=False))
@@ -1041,7 +1028,6 @@ def main():
     application.add_handler(CallbackQueryHandler(admin_confirm_restore_callback, pattern="^admin_confirm_restore$", block=False))
     application.add_handler(CallbackQueryHandler(admin_cancel_restore_callback, pattern="^admin_cancel_restore$", block=False))
     
-    # User-facing callbacks that should always work
     application.add_handler(CallbackQueryHandler(show_link_options_menu, pattern="^showlinks_"))
     application.add_handler(CallbackQueryHandler(get_link_callback, pattern="^getlink_"))
     application.add_handler(CallbackQueryHandler(refresh_service_details, pattern="^refresh_"))
@@ -1049,7 +1035,6 @@ def main():
     application.add_handler(CallbackQueryHandler(confirm_renewal_callback, pattern="^confirmrenew$"))
     application.add_handler(CallbackQueryHandler(cancel_renewal_callback, pattern="^cancelrenew$"))
     
-    # 3. General Command & Message Handlers (lowest priority)
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.Regex('^🛍️ خرید سرویس$'), buy_service_list))
     application.add_handler(MessageHandler(filters.Regex('^📋 سرویس‌های من$'), list_my_services))
