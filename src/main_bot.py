@@ -461,52 +461,39 @@ async def back_to_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text("به منوی اصلی ادمین بازگشتید.", reply_markup=get_admin_menu_keyboard())
     return ADMIN_MENU
 
-# --- Admin Callback Handlers ---
+# --- Admin Callback Handlers (Now inside ConversationHandler) ---
 async def admin_delete_plan_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID: return
     query = update.callback_query
     await query.answer()
     plan_id = int(query.data.split('_')[-1])
     db.delete_plan(plan_id)
     await query.message.delete()
     await query.from_user.send_message("پلن با موفقیت حذف شد.")
+    return PLAN_MENU # Stay in the same menu
 
 async def admin_toggle_plan_visibility_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID: return
     query = update.callback_query
     plan_id = int(query.data.split('_')[-1])
     db.toggle_plan_visibility(plan_id)
     await query.answer("وضعیت نمایش پلن تغییر کرد.")
     await query.message.delete()
     await query.from_user.send_message("وضعیت نمایش پلن تغییر کرد. برای دیدن تغییرات، لیست را مجددا باز کنید.")
+    return PLAN_MENU # Stay in the same menu
 
 async def admin_confirm_charge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Handles the admin's confirmation of a user's charge request.
-    This function uses a robust parsing method for the callback data.
-    """
-    if update.effective_user.id != ADMIN_ID: return
     query = update.callback_query
     await query.answer()
     
     prefix = "admin_confirm_charge_"
     try:
-        # Robust Parsing: Remove the known prefix and split the rest.
-        # This avoids errors if the prefix format changes.
-        # e.g., "admin_confirm_charge_123456_50000" -> "123456_50000"
         data_part = query.data[len(prefix):]
-        
-        # Split the remaining part into user_id and amount
-        # split('_', 1) ensures we only split on the first underscore
         user_id_str, amount_str = data_part.split('_', 1)
-        
         target_user_id = int(user_id_str)
-        amount = int(float(amount_str)) # Use float for safety, then int
-        
+        amount = int(float(amount_str))
     except (ValueError, IndexError) as e:
         logger.error(f"Error parsing admin_confirm_charge_callback data: {query.data} | Error: {e}")
         await query.edit_message_caption(caption=f"{query.message.caption}\n\n---\n❌ خطا در پردازش اطلاعات دکمه.")
-        return
+        return ADMIN_MENU
 
     db.update_balance(target_user_id, amount)
     admin_feedback = f"{query.message.caption}\n\n---\n✅ با موفقیت مبلغ {amount:,} تومان به حساب کاربر `{target_user_id}` اضافه شد."
@@ -521,19 +508,18 @@ async def admin_confirm_charge_callback(update: Update, context: ContextTypes.DE
         admin_feedback += "\n\n⚠️ **اخطار:** کاربر ربات را بلاک کرده و پیام تایید را دریافت نکرد."
     
     await query.edit_message_caption(caption=admin_feedback, reply_markup=None, parse_mode=ParseMode.MARKDOWN)
+    return ADMIN_MENU # Stay in admin menu
 
 async def admin_reject_charge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID: return
     query = update.callback_query
     await query.answer()
 
     try:
-        # This method is robust for getting the last element (user_id)
         target_user_id = int(query.data.split('_')[-1])
     except (ValueError, IndexError) as e:
         logger.error(f"Error parsing admin_reject_charge_callback data: {query.data} | Error: {e}")
         await query.edit_message_caption(caption=f"{query.message.caption}\n\n---\n❌ خطا در پردازش اطلاعات دکمه.")
-        return
+        return ADMIN_MENU
 
     admin_feedback = f"{query.message.caption}\n\n---\n❌ درخواست شارژ کاربر `{target_user_id}` رد شد."
     
@@ -543,15 +529,15 @@ async def admin_reject_charge_callback(update: Update, context: ContextTypes.DEF
         admin_feedback += "\n\n⚠️ **اخطار:** کاربر ربات را بلاک کرده است."
     
     await query.edit_message_caption(caption=admin_feedback, reply_markup=None, parse_mode=ParseMode.MARKDOWN)
+    return ADMIN_MENU # Stay in admin menu
 
 async def admin_confirm_restore_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID: return
     query = update.callback_query
     await query.answer()
     restore_path = context.user_data.get('restore_path')
     if not restore_path or not os.path.exists(restore_path): 
         await query.edit_message_text("خطا: فایل پشتیبان یافت نشد."); 
-        return
+        return BACKUP_MENU
     try:
         db.close_db()
         shutil.move(restore_path, db.DB_NAME)
@@ -561,15 +547,16 @@ async def admin_confirm_restore_callback(update: Update, context: ContextTypes.D
         logger.error(f"Error during DB restore: {e}", exc_info=True)
         await query.edit_message_text(f"خطا در هنگام جایگزینی فایل دیتابیس: {e}")
     context.user_data.clear()
+    return BACKUP_MENU
 
 async def admin_cancel_restore_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID: return
     query = update.callback_query
     await query.answer()
     restore_path = context.user_data.get('restore_path')
     if restore_path and os.path.exists(restore_path): os.remove(restore_path)
     await query.edit_message_text("عملیات بازیابی لغو شد.")
     context.user_data.clear()
+    return BACKUP_MENU
 
 # --- Plan Management (Admin) ---
 async def plan_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -687,8 +674,6 @@ async def finish_plan_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("✅ پلن با موفقیت به‌روزرسانی شد!", reply_markup=get_admin_menu_keyboard())
     context.user_data.clear()
     return ADMIN_MENU
-
-# ... (بقیه توابع بدون تغییر باقی می‌مانند) ...
 
 # --- Reports (Admin) ---
 async def reports_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -828,7 +813,6 @@ async def manage_user_action_handler(update: Update, context: ContextTypes.DEFAU
         new_ban_status = not user_info['is_banned']
         db.set_user_ban_status(target_user_id, new_ban_status)
         await update.message.reply_text(f"✅ وضعیت کاربر با موفقیت به '{'مسدود' if new_ban_status else 'فعال'}' تغییر کرد.")
-        # Re-display user info to show the change
         update.message.text = str(target_user_id)
         return await manage_user_id_received(update, context)
     elif action == "📜 سوابق خرید":
@@ -853,7 +837,6 @@ async def manage_user_amount_received(update: Update, context: ContextTypes.DEFA
         is_add = True if action == "افزایش موجودی" else False
         db.update_balance(target_user_id, amount if is_add else -amount)
         await update.message.reply_text(f"✅ مبلغ {amount:.0f} تومان به حساب کاربر {'اضافه' if is_add else 'کسر'} شد.")
-        # Re-display user info to show new balance
         update.message.text = str(target_user_id)
         return await manage_user_id_received(update, context)
 
@@ -897,7 +880,7 @@ async def restore_receive_file(update: Update, context: ContextTypes.DEFAULT_TYP
         return ADMIN_MENU
     context.user_data['restore_path'] = temp_path
     keyboard = [[InlineKeyboardButton("✅ بله، مطمئنم", callback_data="admin_confirm_restore"), InlineKeyboardButton("❌ خیر، لغو کن", callback_data="admin_cancel_restore")]]
-    await update.message.reply_text("**آیا از جایگزینی دیتابیس فعلی کاملاً مطمئن هستید؟ این عمل غیرقابل بازگشت است.**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN); return ADMIN_MENU
+    await update.message.reply_text("**آیا از جایگزینی دیتابیس فعلی کاملاً مطمئن هستید؟ این عمل غیرقابل بازگشت است.**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN); return BACKUP_MENU
 
 # --- Shutdown ---
 async def shutdown_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -957,6 +940,7 @@ def main():
         entry_points=[MessageHandler(filters.Regex(f'^{BTN_ADMIN_PANEL}$') & admin_filter, admin_entry)],
         states={
             ADMIN_MENU: [
+                # --- Menu Navigation ---
                 MessageHandler(filters.Regex('^➕ مدیریت پلن‌ها$'), plan_management_menu),
                 MessageHandler(filters.Regex('^📈 گزارش‌ها و آمار$'), reports_menu),
                 MessageHandler(filters.Regex('^⚙️ تنظیمات$'), settings_menu),
@@ -964,6 +948,9 @@ def main():
                 MessageHandler(filters.Regex('^📩 ارسال پیام$'), broadcast_menu),
                 MessageHandler(filters.Regex('^👥 مدیریت کاربران$'), user_management_menu),
                 MessageHandler(filters.Regex('^🛑 خاموش کردن ربات$'), shutdown_bot),
+                # --- Inline Button Handlers now inside the conversation ---
+                CallbackQueryHandler(admin_confirm_charge_callback, pattern="^admin_confirm_charge_"),
+                CallbackQueryHandler(admin_reject_charge_callback, pattern="^admin_reject_charge_"),
             ],
             REPORTS_MENU: [
                 MessageHandler(filters.Regex('^📊 آمار کلی$'), show_stats_report),
@@ -976,6 +963,11 @@ def main():
                 MessageHandler(filters.Regex('^➕ افزودن پلن جدید$'), add_plan_start),
                 MessageHandler(filters.Regex('^📋 لیست پلن‌ها$'), list_plans_admin),
                 MessageHandler(filters.Regex(f'^{BTN_BACK_TO_ADMIN_MENU}$'), back_to_admin_menu),
+                # --- Inline Button Handlers for Plan Management ---
+                CallbackQueryHandler(admin_delete_plan_callback, pattern="^admin_delete_plan_"),
+                CallbackQueryHandler(admin_toggle_plan_visibility_callback, pattern="^admin_toggle_plan_"),
+                # This will trigger the edit_plan_conv
+                CallbackQueryHandler(edit_plan_start, pattern="^admin_edit_plan_")
             ],
             PLAN_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_name_received)],
             PLAN_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_price_received)],
@@ -1002,7 +994,10 @@ def main():
             BACKUP_MENU: [
                 MessageHandler(filters.Regex('^📥 دریافت فایل پشتیبان$'), send_backup_file),
                 MessageHandler(filters.Regex('^📤 بارگذاری فایل پشتیبان$'), restore_start),
-                MessageHandler(filters.Regex(f'^{BTN_BACK_TO_ADMIN_MENU}$'), back_to_admin_menu)
+                MessageHandler(filters.Regex(f'^{BTN_BACK_TO_ADMIN_MENU}$'), back_to_admin_menu),
+                # --- Inline Button Handlers for Backup/Restore ---
+                CallbackQueryHandler(admin_confirm_restore_callback, pattern="^admin_confirm_restore$"),
+                CallbackQueryHandler(admin_cancel_restore_callback, pattern="^admin_cancel_restore$"),
             ],
             RESTORE_UPLOAD: [MessageHandler(filters.Document.FileExtension("db"), restore_receive_file)]
         },
@@ -1014,20 +1009,15 @@ def main():
     )
     
     # --- Add Handlers to Application ---
-    application.add_handler(charge_handler, group=1)
-    application.add_handler(gift_handler, group=1)
-    application.add_handler(buy_handler, group=1)
-    application.add_handler(settings_conv, group=1)
-    application.add_handler(edit_plan_conv, group=1)
-    application.add_handler(admin_conv, group=1)
-
-    application.add_handler(CallbackQueryHandler(admin_confirm_charge_callback, pattern="^admin_confirm_charge_", block=False))
-    application.add_handler(CallbackQueryHandler(admin_reject_charge_callback, pattern="^admin_reject_charge_", block=False))
-    application.add_handler(CallbackQueryHandler(admin_delete_plan_callback, pattern="^admin_delete_plan_", block=False))
-    application.add_handler(CallbackQueryHandler(admin_toggle_plan_visibility_callback, pattern="^admin_toggle_plan_", block=False))
-    application.add_handler(CallbackQueryHandler(admin_confirm_restore_callback, pattern="^admin_confirm_restore$", block=False))
-    application.add_handler(CallbackQueryHandler(admin_cancel_restore_callback, pattern="^admin_cancel_restore$", block=False))
+    # Conversations should be added first.
+    application.add_handler(charge_handler)
+    application.add_handler(gift_handler)
+    application.add_handler(buy_handler)
+    application.add_handler(settings_conv)
+    application.add_handler(edit_plan_conv)
+    application.add_handler(admin_conv)
     
+    # User-facing callbacks that should always work
     application.add_handler(CallbackQueryHandler(show_link_options_menu, pattern="^showlinks_"))
     application.add_handler(CallbackQueryHandler(get_link_callback, pattern="^getlink_"))
     application.add_handler(CallbackQueryHandler(refresh_service_details, pattern="^refresh_"))
@@ -1035,6 +1025,7 @@ def main():
     application.add_handler(CallbackQueryHandler(confirm_renewal_callback, pattern="^confirmrenew$"))
     application.add_handler(CallbackQueryHandler(cancel_renewal_callback, pattern="^cancelrenew$"))
     
+    # General Command & Message Handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.Regex('^🛍️ خرید سرویس$'), buy_service_list))
     application.add_handler(MessageHandler(filters.Regex('^📋 سرویس‌های من$'), list_my_services))
@@ -1043,7 +1034,7 @@ def main():
     application.add_handler(MessageHandler(filters.Regex('^📚 راهنمای اتصال$'), show_guide))
     application.add_handler(MessageHandler(filters.Regex('^🧪 دریافت سرویس تست رایگان$'), get_trial_service))
 
-    print("Bot is running with final fixes...")
+    print("Bot is running with the final, definitive fix...")
     application.run_polling()
 
 if __name__ == "__main__":
