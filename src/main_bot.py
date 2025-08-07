@@ -8,7 +8,6 @@ import random
 import sqlite3
 import io
 from datetime import datetime, timedelta
-# Add jdatetime for Shamsi date conversion
 import jdatetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
@@ -86,37 +85,58 @@ def get_admin_menu_keyboard():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 # --- Helper Functions ---
-async def _get_service_status(hiddify_info):
-    # Check for different possible start date field names
-    start_date_str = hiddify_info.get('start_date') or hiddify_info.get('last_reset_time')
+
+def _parse_date_flexible(date_str: str) -> datetime.date | None:
+    """Tries to parse a date string with multiple common formats."""
+    if not date_str:
+        return None
     
+    # Handle ISO format with timezone info by splitting it
+    date_part = date_str.split('T')[0]
+    
+    # List of common date formats to try
+    formats_to_try = [
+        "%Y-%m-%d",  # 2023-10-27
+        "%Y/%m/%d",  # 2023/10/27
+    ]
+    
+    for fmt in formats_to_try:
+        try:
+            return datetime.strptime(date_part, fmt).date()
+        except (ValueError, TypeError):
+            continue
+            
+    logger.error(f"Could not parse date string '{date_str}' with any known format.")
+    return None
+
+async def _get_service_status(hiddify_info):
+    # List of possible keys for the start date, in order of priority
+    date_keys = ['start_date', 'last_reset_time', 'created_at']
+    start_date_str = None
+    for key in date_keys:
+        if hiddify_info.get(key):
+            start_date_str = hiddify_info.get(key)
+            break
+            
     package_days = hiddify_info.get('package_days', 0)
 
     if not start_date_str:
-        logger.warning(f"Could not find a valid start date in Hiddify info: {hiddify_info}")
+        logger.warning(f"Could not find a valid date key {date_keys} in Hiddify info: {hiddify_info}")
         return "⚠️ وضعیت نامشخص", "N/A", True
 
-    try:
-        # Handle datetime strings like "2023-10-27T10:00:00"
-        date_part = start_date_str.split('T')[0]
-        start_date_obj = datetime.strptime(date_part, "%Y-%m-%d").date()
-        
-        # Calculate Gregorian expiration date
-        expiry_date_obj = start_date_obj + timedelta(days=package_days)
-        
-        # --- Convert to Shamsi date ---
-        jalali_expiry_date = jdatetime.date.fromgregorian(date=expiry_date_obj)
-        jalali_display_str = jalali_expiry_date.strftime("%Y/%m/%d")
-        # --- End conversion ---
-
-        is_expired = expiry_date_obj < datetime.now().date()
-        status = "🔴 منقضی شده" if is_expired else "🟢 فعال"
-        
-        return status, jalali_display_str, is_expired
-
-    except (ValueError, TypeError):
-        logger.error(f"Could not parse the date string '{start_date_str}'")
+    start_date_obj = _parse_date_flexible(start_date_str)
+    
+    if not start_date_obj:
         return "⚠️ وضعیت نامشخص", "N/A", True
+        
+    expiry_date_obj = start_date_obj + timedelta(days=package_days)
+    jalali_expiry_date = jdatetime.date.fromgregorian(date=expiry_date_obj)
+    jalali_display_str = jalali_expiry_date.strftime("%Y/%m/%d")
+    
+    is_expired = expiry_date_obj < datetime.now().date()
+    status = "🔴 منقضی شده" if is_expired else "🟢 فعال"
+    
+    return status, jalali_display_str, is_expired
 
 def is_valid_sqlite(filepath):
     try:
