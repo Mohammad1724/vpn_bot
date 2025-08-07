@@ -1,4 +1,4 @@
-# hiddify_api.py (نسخه نهایی با سناریوی حذف و ساخت مجدد برای تمدید)
+# hiddify_api.py (نسخه نهایی با لاگ دقیق برای عیب‌یابی تاریخ)
 
 import httpx
 import uuid
@@ -96,6 +96,8 @@ async def get_user_info(user_uuid: str) -> dict:
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(endpoint, headers=_get_api_headers())
+            # <<<<<<< DEBUG LOG ADDED HERE >>>>>>>>>
+            logger.info(f"Hiddify get_user_info RAW RESPONSE for {user_uuid}: {response.text}")
             response.raise_for_status()
             return response.json()
     except httpx.HTTPStatusError as e:
@@ -109,32 +111,23 @@ async def get_user_info(user_uuid: str) -> dict:
         return None
 
 async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: int) -> dict:
-    """
-    Renews a user's subscription using the delete-and-recreate strategy.
-    """
+    """Renews a user's subscription using the delete-and-recreate strategy."""
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            # Step 1: Get current user info to preserve their name
             current_info = await get_user_info(user_uuid)
             if not current_info:
                 logger.error(f"Cannot renew: User {user_uuid} does not exist. Aborting.")
                 return None
             user_name = current_info.get("name", f"user-{uuid.uuid4().hex[:4]}")
-
-            # Step 2: Delete the user
             delete_success = await _delete_user(user_uuid, client)
             if not delete_success:
                 logger.error(f"Renewal failed at delete step for user {user_uuid}.")
                 return None
-
-            # Step 3: Recreate the user with the same UUID and name, but new plan details
             recreated_user = await _recreate_user(user_uuid, user_name, plan_days, plan_gb, client)
             if not recreated_user:
                 logger.error(f"CRITICAL: Deleted user {user_uuid} but failed to recreate them!")
                 return None
-            
             return recreated_user
-
     except Exception as e:
         logger.error(f"An unexpected error occurred in renew_user_subscription: {e}", exc_info=True)
         return None
