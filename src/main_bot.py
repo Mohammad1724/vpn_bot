@@ -9,6 +9,7 @@ import sqlite3
 import io
 from datetime import datetime, timedelta
 import jdatetime
+from typing import Union
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -85,19 +86,16 @@ def get_admin_menu_keyboard():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 # --- Helper Functions ---
-
-def _parse_date_flexible(date_str: str) -> datetime.date | None:
+def _parse_date_flexible(date_str: str) -> Union[datetime.date, None]:
     """Tries to parse a date string with multiple common formats."""
     if not date_str:
         return None
     
-    # Handle ISO format with timezone info by splitting it
     date_part = date_str.split('T')[0]
     
-    # List of common date formats to try
     formats_to_try = [
-        "%Y-%m-%d",  # 2023-10-27
-        "%Y/%m/%d",  # 2023/10/27
+        "%Y-%m-%d",
+        "%Y/%m/%d",
     ]
     
     for fmt in formats_to_try:
@@ -110,7 +108,6 @@ def _parse_date_flexible(date_str: str) -> datetime.date | None:
     return None
 
 async def _get_service_status(hiddify_info):
-    # List of possible keys for the start date, in order of priority
     date_keys = ['start_date', 'last_reset_time', 'created_at']
     start_date_str = None
     for key in date_keys:
