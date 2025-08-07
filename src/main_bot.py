@@ -87,23 +87,15 @@ def get_admin_menu_keyboard():
 
 # --- Helper Functions ---
 def _parse_date_flexible(date_str: str) -> Union[datetime.date, None]:
-    """Tries to parse a date string with multiple common formats."""
     if not date_str:
         return None
-    
     date_part = date_str.split('T')[0]
-    
-    formats_to_try = [
-        "%Y-%m-%d",
-        "%Y/%m/%d",
-    ]
-    
+    formats_to_try = ["%Y-%m-%d", "%Y/%m/%d"]
     for fmt in formats_to_try:
         try:
             return datetime.strptime(date_part, fmt).date()
         except (ValueError, TypeError):
             continue
-            
     logger.error(f"Could not parse date string '{date_str}' with any known format.")
     return None
 
@@ -116,23 +108,19 @@ async def _get_service_status(hiddify_info):
             break
             
     package_days = hiddify_info.get('package_days', 0)
-
     if not start_date_str:
         logger.warning(f"Could not find a valid date key {date_keys} in Hiddify info: {hiddify_info}")
         return "⚠️ وضعیت نامشخص", "N/A", True
 
     start_date_obj = _parse_date_flexible(start_date_str)
-    
     if not start_date_obj:
         return "⚠️ وضعیت نامشخص", "N/A", True
         
     expiry_date_obj = start_date_obj + timedelta(days=package_days)
     jalali_expiry_date = jdatetime.date.fromgregorian(date=expiry_date_obj)
     jalali_display_str = jalali_expiry_date.strftime("%Y/%m/%d")
-    
     is_expired = expiry_date_obj < datetime.now().date()
     status = "🔴 منقضی شده" if is_expired else "🟢 فعال"
-    
     return status, jalali_display_str, is_expired
 
 def is_valid_sqlite(filepath):
@@ -217,14 +205,25 @@ async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not services:
         await update.message.reply_text("شما در حال حاضر هیچ سرویس فعالی ندارید.")
         return
-    msg = await update.message.reply_text("در حال دریافت اطلاعات سرویس‌های شما... ⏳")
+    
+    keyboard = []
     for service in services:
-        await send_service_details(context, user_id, service['service_id'])
-        await asyncio.sleep(0.2)
-    try: await msg.delete()
-    except BadRequest: pass
+        button_text = f"⚙️ {service['name']}"
+        callback_data = f"view_service_{service['service_id']}"
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("لطفا سرویسی که می‌خواهید مدیریتش کنید را انتخاب نمایید:", reply_markup=reply_markup)
 
-async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int, service_id: int, original_message=None):
+async def view_service_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    service_id = int(query.data.split('_')[-1])
+    
+    await query.edit_message_text("در حال دریافت اطلاعات سرویس... ⏳")
+    await send_service_details(context, query.from_user.id, service_id, original_message=query.message, is_from_menu=True)
+
+async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int, service_id: int, original_message=None, is_from_menu: bool = False):
     service = db.get_service(service_id)
     if not service:
         error_text = "❌ سرویس مورد نظر یافت نشد."
@@ -236,18 +235,49 @@ async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
         if info:
             status, expiry_date_display, is_expired = await _get_service_status(info)
             renewal_plan = db.get_plan(service['plan_id'])
-            service_name_display = f"🏷️ نام سرویس: **{service['name']}**\n\n" if service['name'] else ""
-            message_text = (f"{service_name_display}🔗 لینک پروفایل: `{service['sub_link']}`\n🗓️ تاریخ انقضا: **{expiry_date_display}**\n"
-                       f"📊 حجم مصرفی: **{info.get('current_usage_GB', 0):.2f} / {info.get('usage_limit_GB', 0):.0f}** گیگ\n🚦 وضعیت: {status}")
-            keyboard = [[InlineKeyboardButton("📋 دریافت لینک‌های اشتراک", callback_data=f"showlinks_{service['sub_uuid']}")],
-                        [InlineKeyboardButton("🔄 به‌روزرسانی اطلاعات", callback_data=f"refresh_{service['service_id']}")]
-                       ]
+            
+            sub_path = SUB_PATH or ADMIN_PATH
+            sub_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
+            base_link = f"https://{sub_domain}/{sub_path}/{service['sub_uuid']}"
+            config_name = info.get('name', 'config')
+            final_link = f"{base_link}/?name={config_name.replace(' ', '_')}"
+            qr_image = qrcode.make(final_link)
+            bio = io.BytesIO()
+            bio.name = 'qrcode.png'
+            qr_image.save(bio, 'PNG')
+            bio.seek(0)
+            
+            caption = (
+                f"🏷️ نام سرویس: **{service['name']}**\n\n"
+                f"📊 حجم مصرفی: **{info.get('current_usage_GB', 0):.2f} / {info.get('usage_limit_GB', 0):.0f}** گیگ\n"
+                f"🗓️ تاریخ انقضا: **{expiry_date_display}**\n"
+                f"🚦 وضعیت: {status}\n\n"
+                f"🔗 لینک اشتراک شما:\n`{final_link}`"
+            )
+
+            keyboard = [
+                [InlineKeyboardButton("🔄 به‌روزرسانی اطلاعات", callback_data=f"refresh_{service['service_id']}")]
+            ]
             if renewal_plan and service.get('plan_id', 0) > 0:
                 keyboard.append([InlineKeyboardButton(f"⏳ تمدید سرویس ({renewal_plan['price']:.0f} تومان)", callback_data=f"renew_{service['service_id']}")])
+            
+            if is_from_menu:
+                keyboard.append([InlineKeyboardButton("⬅️ بازگشت به لیست سرویس‌ها", callback_data="back_to_services")])
+
             reply_markup = InlineKeyboardMarkup(keyboard)
-            if original_message: await original_message.edit_text(message_text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
-            else: await context.bot.send_message(chat_id=chat_id, text=message_text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
-        else: raise ConnectionError(f"API did not return info for UUID {service['sub_uuid']}")
+
+            if original_message:
+                await original_message.delete()
+            
+            await context.bot.send_photo(
+                chat_id=chat_id,
+                photo=bio,
+                caption=caption,
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=reply_markup
+            )
+        else:
+            raise ConnectionError(f"API did not return info for UUID {service['sub_uuid']}")
     except Exception as e:
         logger.error(f"Error in send_service_details for service_id {service_id}: {e}", exc_info=True)
         error_text = "❌ خطا در دریافت اطلاعات سرویس. لطفاً بعدا دوباره تلاش کنید."
@@ -262,81 +292,94 @@ async def refresh_service_details(update: Update, context: ContextTypes.DEFAULT_
     service_id = int(query.data.split('_')[1])
     service = db.get_service(service_id)
     if service and service['user_id'] == query.from_user.id:
-        await query.edit_message_text("در حال به‌روزرسانی اطلاعات...", reply_markup=None)
-        await send_service_details(context, query.from_user.id, service_id, original_message=query.message)
-    else: await query.answer("خطا: این سرویس متعلق به شما نیست.", show_alert=True)
+        await query.message.delete()
+        msg = await context.bot.send_message(chat_id=query.from_user.id, text="در حال به‌روزرسانی اطلاعات...")
+        await send_service_details(context, query.from_user.id, service_id, original_message=msg, is_from_menu=True)
+    else:
+        await query.answer("خطا: این سرویس متعلق به شما نیست.", show_alert=True)
+
+async def back_to_services_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.message.delete()
+    await list_my_services(update, context)
 
 # --- Renewal Logic ---
 async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    await query.message.delete()
+    
     service_id = int(query.data.split('_')[1])
     user_id = query.from_user.id
     service = db.get_service(service_id)
-    if not service: await query.edit_message_text("❌ سرویس نامعتبر است."); return
+    if not service: await context.bot.send_message(chat_id=user_id, text="❌ سرویس نامعتبر است."); return
     plan = db.get_plan(service['plan_id'])
-    if not plan: await query.edit_message_text("❌ پلن تمدید برای این سرویس یافت نشد."); return
+    if not plan: await context.bot.send_message(chat_id=user_id, text="❌ پلن تمدید برای این سرویس یافت نشد."); return
     user = db.get_or_create_user(user_id)
-    if user['balance'] < plan['price']: await query.edit_message_text(f"موجودی برای تمدید کافی نیست! (نیاز به {plan['price']:.0f} تومان)"); return
-    await query.edit_message_text("در حال بررسی وضعیت سرویس... ⏳")
+    if user['balance'] < plan['price']: await context.bot.send_message(chat_id=user_id, text=f"موجودی برای تمدید کافی نیست! (نیاز به {plan['price']:.0f} تومان)"); return
+
+    msg = await context.bot.send_message(chat_id=user_id, text="در حال بررسی وضعیت سرویس... ⏳")
     hiddify_info = await hiddify_api.get_user_info(service['sub_uuid'])
-    if not hiddify_info: await query.edit_message_text("❌ امکان دریافت اطلاعات سرویس از پنل وجود ندارد. لطفاً بعداً تلاش کنید."); return
+    if not hiddify_info: await msg.edit_text("❌ امکان دریافت اطلاعات سرویس از پنل وجود ندارد. لطفاً بعداً تلاش کنید."); return
+    
     _, _, is_expired = await _get_service_status(hiddify_info)
     context.user_data['renewal_service_id'] = service_id
     context.user_data['renewal_plan_id'] = plan['plan_id']
-    if is_expired: await proceed_with_renewal(query, context)
+    
+    if is_expired:
+        await proceed_with_renewal(update, context, original_message=msg)
     else:
         keyboard = [[InlineKeyboardButton("✅ بله، تمدید کن", callback_data=f"confirmrenew")], [InlineKeyboardButton("❌ خیر، لغو کن", callback_data=f"cancelrenew")]]
-        await query.edit_message_text("⚠️ **هشدار مهم** ⚠️\n\nسرویس شما هنوز اعتبار دارد. تمدید در حال حاضر باعث می‌شود اعتبار زمانی و حجمی باقیمانده شما **از بین برود** و دوره جدید از همین امروز شروع شود.\n\nآیا می‌خواهید ادامه دهید?", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+        await msg.edit_text("⚠️ **هشدار مهم** ⚠️\n\nسرویس شما هنوز اعتبار دارد. تمدید در حال حاضر باعث می‌شود اعتبار زمانی و حجمی باقیمانده شما **از بین برود** و دوره جدید از همین امروز شروع شود.\n\nآیا می‌خواهید ادامه دهید?", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
 
 async def confirm_renewal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await proceed_with_renewal(query, context)
+    await proceed_with_renewal(update, context, original_message=query.message)
 
-async def proceed_with_renewal(query: Update.callback_query, context: ContextTypes.DEFAULT_TYPE):
+async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYPE, original_message=None):
+    query = update.callback_query
+    user_id = query.from_user.id if query else update.effective_user.id
+    
     service_id = context.user_data.get('renewal_service_id')
     plan_id = context.user_data.get('renewal_plan_id')
     
     if not all([service_id, plan_id]):
-        await query.edit_message_text("❌ خطای داخلی: اطلاعات تمدید یافت نشد. لطفا دوباره تلاش کنید.")
+        if original_message: await original_message.edit_text("❌ خطای داخلی: اطلاعات تمدید یافت نشد.")
         return
 
-    await query.edit_message_text("در حال ارسال درخواست تمدید به پنل... ⏳")
+    if original_message: await original_message.edit_text("در حال ارسال درخواست تمدید به پنل... ⏳")
     
-    transaction_id = db.initiate_renewal_transaction(query.from_user.id, service_id, plan_id)
+    transaction_id = db.initiate_renewal_transaction(user_id, service_id, plan_id)
     if not transaction_id:
-        await query.edit_message_text("❌ مشکلی در شروع فرآیند تمدید پیش آمد (مثلا عدم موجودی).")
+        if original_message: await original_message.edit_text("❌ مشکلی در شروع فرآیند تمدید پیش آمد (مثلا عدم موجودی).")
         return
 
     service = db.get_service(service_id)
     plan = db.get_plan(plan_id)
 
-    logger.info(f"Attempting to renew service {service_id} for user {query.from_user.id} with UUID {service['sub_uuid']}")
+    logger.info(f"Attempting to renew service {service_id} for user {user_id} with UUID {service['sub_uuid']}")
     logger.info(f"Renewal details: Plan ID {plan_id}, Days: {plan['days']}, GB: {plan['gb']}")
 
     new_hiddify_info = await hiddify_api.renew_user_subscription(service['sub_uuid'], plan['days'], plan['gb'])
-
     logger.info(f"Hiddify renewal API returned: {new_hiddify_info}")
 
     if new_hiddify_info:
         db.finalize_renewal_transaction(transaction_id, plan_id) 
-        await query.edit_message_text("✅ سرویس با موفقیت تمدید شد! در حال دریافت اطلاعات جدید...")
-        await send_service_details(context, query.from_user.id, service_id, original_message=query.message)
+        if original_message: await original_message.edit_text("✅ سرویس با موفقیت تمدید شد! در حال نمایش اطلاعات جدید...")
+        await send_service_details(context, user_id, service_id, original_message=original_message, is_from_menu=True)
     else:
         db.cancel_renewal_transaction(transaction_id)
-        await query.edit_message_text("❌ خطا در تمدید سرویس. مشکلی در ارتباط با پنل وجود دارد. لطفاً به پشتیبانی اطلاع دهید.")
+        if original_message: await original_message.edit_text("❌ خطا در تمدید سرویس. مشکلی در ارتباط با پنل وجود دارد. لطفاً به پشتیبانی اطلاع دهید.")
         
     context.user_data.clear()
 
 async def cancel_renewal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    service_id = context.user_data.get('renewal_service_id')
+    await query.edit_message_text("عملیات تمدید لغو شد.")
     context.user_data.clear()
-    await query.edit_message_text("عملیات تمدید لغو شد. در حال بازگشت به منوی سرویس...")
-    if service_id: await send_service_details(context, query.from_user.id, service_id, original_message=query.message)
-    else: await query.edit_message_text("سرویس مورد نظر یافت نشد.")
 
 # --- Main User Flow Handlers ---
 async def show_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1097,7 +1140,8 @@ def main():
     application.add_handler(CallbackQueryHandler(admin_confirm_charge_callback, pattern="^admin_confirm_charge_"))
     application.add_handler(CallbackQueryHandler(admin_reject_charge_callback, pattern="^admin_reject_charge_"))
 
-    application.add_handler(CallbackQueryHandler(show_link_options_menu, pattern="^showlinks_"), group=2)
+    application.add_handler(CallbackQueryHandler(view_service_callback, pattern="^view_service_"), group=2)
+    application.add_handler(CallbackQueryHandler(back_to_services_callback, pattern="^back_to_services$"), group=2)
     application.add_handler(CallbackQueryHandler(get_link_callback, pattern="^getlink_"), group=2)
     application.add_handler(CallbackQueryHandler(refresh_service_details, pattern="^refresh_"), group=2)
     application.add_handler(CallbackQueryHandler(renew_service_handler, pattern="^renew_"), group=2)
