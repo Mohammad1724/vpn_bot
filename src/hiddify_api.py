@@ -87,7 +87,6 @@ async def get_user_info(user_uuid: str) -> dict:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(endpoint, headers=_get_api_headers())
             response.raise_for_status()
-            # CORRECTED: Return the whole JSON response, as it should be the user object itself.
             return response.json()
 
     except httpx.HTTPStatusError as e:
@@ -104,6 +103,7 @@ async def get_user_info(user_uuid: str) -> dict:
         return None
 
 
+# <<<<<<<< CORRECTED FUNCTION FOR BUG 2 >>>>>>>>>
 async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: int) -> dict:
     """
     Renews a user's subscription by updating their package details.
@@ -114,6 +114,7 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: int) 
         "current_usage_GB": 0,
         "package_days": int(plan_days),
         "usage_limit_GB": int(plan_gb),
+        "mode": "no_reset"  # This line fixes the bug
     }
 
     try:
