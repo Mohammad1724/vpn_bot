@@ -30,7 +30,6 @@ from config import (
 import qrcode
 
 # ... (تمام کد تا قبل از تابع main بدون تغییر باقی می‌ماند) ...
-# ... (تمام توابع از logging تا shutdown_bot را اینجا کپی کنید) ...
 
 # --- Setup ---
 os.makedirs('backups', exist_ok=True)
@@ -531,8 +530,7 @@ async def admin_cancel_restore_callback(update: Update, context: ContextTypes.DE
 # --- Plan Management (Admin) ---
 async def plan_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [["➕ افزودن پلن جدید", "📋 لیست پلن‌ها"], [BTN_BACK_TO_ADMIN_MENU]]
-    await update.message.reply_text("بخش مدیریت پلن‌ها", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
-    return PLAN_MENU
+    await update.message.reply_text("بخش مدیریت پلن‌ها", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)); return PLAN_MENU
 
 async def list_plans_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     plans = db.list_plans()
@@ -546,26 +544,22 @@ async def list_plans_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return PLAN_MENU
 
 async def add_plan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("لطفا نام پلن را وارد کنید:", reply_markup=ReplyKeyboardMarkup([[CMD_CANCEL]], resize_keyboard=True))
-    return PLAN_NAME
+    await update.message.reply_text("لطفا نام پلن را وارد کنید:", reply_markup=ReplyKeyboardMarkup([[CMD_CANCEL]], resize_keyboard=True)); return PLAN_NAME
 
 async def plan_name_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['plan_name'] = update.message.text
-    await update.message.reply_text("نام ثبت شد. قیمت را به تومان وارد کنید:")
-    return PLAN_PRICE
+    await update.message.reply_text("نام ثبت شد. قیمت را به تومان وارد کنید:"); return PLAN_PRICE
 
 async def plan_price_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         context.user_data['plan_price'] = float(update.message.text)
-        await update.message.reply_text("قیمت ثبت شد. تعداد روزهای اعتبار را وارد کنید:")
-        return PLAN_DAYS
+        await update.message.reply_text("قیمت ثبت شد. تعداد روزهای اعتبار را وارد کنید:"); return PLAN_DAYS
     except ValueError: await update.message.reply_text("لطفا قیمت را به صورت عدد وارد کنید."); return PLAN_PRICE
 
 async def plan_days_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         context.user_data['plan_days'] = int(update.message.text)
-        await update.message.reply_text("تعداد روز ثبت شد. حجم سرویس به گیگابایت را وارد کنید:")
-        return PLAN_GB
+        await update.message.reply_text("تعداد روز ثبت شد. حجم سرویس به گیگابایت را وارد کنید:"); return PLAN_GB
     except ValueError: await update.message.reply_text("لطفا تعداد روز را به صورت عدد وارد کنید."); return PLAN_DAYS
 
 async def plan_gb_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -573,21 +567,18 @@ async def plan_gb_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['plan_gb'] = int(update.message.text)
         db.add_plan(context.user_data['plan_name'], context.user_data['plan_price'], context.user_data['plan_days'], context.user_data['plan_gb'])
         await update.message.reply_text("✅ پلن جدید اضافه شد!", reply_markup=get_admin_menu_keyboard())
-        context.user_data.clear()
-        return ADMIN_MENU
+        context.user_data.clear(); return ADMIN_MENU
     except ValueError: await update.message.reply_text("لطفا حجم را به صورت عدد وارد کنید."); return PLAN_GB
 
 # --- Edit Plan Conversation ---
 async def edit_plan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+    query = update.callback_query; await query.answer()
     plan_id = int(query.data.split('_')[-1])
     plan = db.get_plan(plan_id)
     if not plan: await query.edit_message_text("خطا: پلن یافت نشد."); return ConversationHandler.END
     context.user_data['edit_plan_id'] = plan_id
     context.user_data['edit_plan_data'] = {}
-    await query.message.reply_text(f"در حال ویرایش پلن: **{plan['name']}**\n\nلطفا نام جدید را وارد کنید. برای رد شدن، {CMD_SKIP} را بزنید.", parse_mode=ParseMode.MARKDOWN, reply_markup=ReplyKeyboardMarkup([[CMD_SKIP],[CMD_CANCEL]], resize_keyboard=True))
-    return EDIT_PLAN_NAME
+    await query.message.reply_text(f"در حال ویرایش پلن: **{plan['name']}**\n\nلطفا نام جدید را وارد کنید. برای رد شدن، {CMD_SKIP} را بزنید.", parse_mode=ParseMode.MARKDOWN, reply_markup=ReplyKeyboardMarkup([[CMD_SKIP],[CMD_CANCEL]], resize_keyboard=True)); return EDIT_PLAN_NAME
 
 async def edit_plan_name_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['edit_plan_data']['name'] = update.message.text
@@ -927,30 +918,41 @@ def main():
         fallbacks=[
             MessageHandler(filters.Regex(f'^{BTN_EXIT_ADMIN_PANEL}$'), exit_admin_panel),
             CommandHandler('cancel', admin_generic_cancel),
-            # **اصلاحیه کلیدی: اضافه کردن handler های عمومی ادمین به fallbacks**
-            CallbackQueryHandler(admin_confirm_charge_callback, pattern="^admin_confirm_charge_"),
-            CallbackQueryHandler(admin_reject_charge_callback, pattern="^admin_reject_charge_"),
-            CallbackQueryHandler(admin_toggle_plan_visibility_callback, pattern="^admin_toggle_plan_"),
-            CallbackQueryHandler(admin_delete_plan_callback, pattern="^admin_delete_plan_"),
-            CallbackQueryHandler(admin_confirm_restore_callback, pattern="^admin_confirm_restore$"),
-            CallbackQueryHandler(admin_cancel_restore_callback, pattern="^admin_cancel_restore$"),
-            # مکالمات ویرایش باید جدا باشند چون فال‌بک آنها متفاوت است
-            edit_plan_conv, 
-            settings_conv,
         ],
         per_user=True, per_chat=True, allow_reentry=True
     )
     
     # --- Add Handlers to Application ---
-    # handler اصلی ادمین که شامل fallbacks برای دیگر handler هاست
-    application.add_handler(admin_conv)
+    # **اصلاحیه کلیدی: ثبت handler های مستقل در بالاترین سطح**
+    # این handler ها چون خارج از مکالمات هستند، باید قبل از مکالمات سنگین ثبت شوند.
+    # گروه بندی بر اساس اولویت
     
-    # handler های کاربر
-    application.add_handler(buy_handler)
-    application.add_handler(gift_handler)
+    # 1. مکالمات (بیشترین اولویت برای ورودی‌های خاص خودشان)
     application.add_handler(charge_handler)
+    application.add_handler(gift_handler)
+    application.add_handler(buy_handler)
+    application.add_handler(settings_conv)
+    application.add_handler(edit_plan_conv)
+    # مکالمه اصلی ادمین باید بعد از مکالمات خاص‌تر باشد
+    application.add_handler(admin_conv)
 
-    # handler های عمومی (خارج از هر مکالمه‌ای)
+    # 2. CallbackQueryHandlers مستقل (برای دکمه‌هایی که همیشه باید کار کنند)
+    # فیلتر ادمین برای امنیت اضافه شد
+    application.add_handler(CallbackQueryHandler(admin_confirm_charge_callback, pattern="^admin_confirm_charge_", block=False))
+    application.add_handler(CallbackQueryHandler(admin_reject_charge_callback, pattern="^admin_reject_charge_", block=False))
+    application.add_handler(CallbackQueryHandler(admin_delete_plan_callback, pattern="^admin_delete_plan_", block=False))
+    application.add_handler(CallbackQueryHandler(admin_toggle_plan_visibility_callback, pattern="^admin_toggle_plan_", block=False))
+    application.add_handler(CallbackQueryHandler(admin_confirm_restore_callback, pattern="^admin_confirm_restore$", block=False))
+    application.add_handler(CallbackQueryHandler(admin_cancel_restore_callback, pattern="^admin_cancel_restore$", block=False))
+    
+    application.add_handler(CallbackQueryHandler(show_link_options_menu, pattern="^showlinks_"))
+    application.add_handler(CallbackQueryHandler(get_link_callback, pattern="^getlink_"))
+    application.add_handler(CallbackQueryHandler(refresh_service_details, pattern="^refresh_"))
+    application.add_handler(CallbackQueryHandler(renew_service_handler, pattern="^renew_"))
+    application.add_handler(CallbackQueryHandler(confirm_renewal_callback, pattern="^confirmrenew$"))
+    application.add_handler(CallbackQueryHandler(cancel_renewal_callback, pattern="^cancelrenew$"))
+    
+    # 3. CommandHandlers & MessageHandlers عمومی (کمترین اولویت)
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.Regex('^🛍️ خرید سرویس$') & user_filter, buy_service_list))
     application.add_handler(MessageHandler(filters.Regex('^📋 سرویس‌های من$') & user_filter, list_my_services))
@@ -958,14 +960,6 @@ def main():
     application.add_handler(MessageHandler(filters.Regex('^📞 پشتیبانی$') & user_filter, show_support))
     application.add_handler(MessageHandler(filters.Regex('^📚 راهنمای اتصال$') & user_filter, show_guide))
     application.add_handler(MessageHandler(filters.Regex('^🧪 دریافت سرویس تست رایگان$') & user_filter, get_trial_service))
-    
-    # handler های عمومی callback query برای کاربران
-    application.add_handler(CallbackQueryHandler(show_link_options_menu, pattern="^showlinks_"))
-    application.add_handler(CallbackQueryHandler(get_link_callback, pattern="^getlink_"))
-    application.add_handler(CallbackQueryHandler(refresh_service_details, pattern="^refresh_"))
-    application.add_handler(CallbackQueryHandler(renew_service_handler, pattern="^renew_"))
-    application.add_handler(CallbackQueryHandler(confirm_renewal_callback, pattern="^confirmrenew$"))
-    application.add_handler(CallbackQueryHandler(cancel_renewal_callback, pattern="^cancelrenew$"))
 
     print("Bot is running with final fixes...")
     application.run_polling()
