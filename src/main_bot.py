@@ -350,7 +350,7 @@ async def charge_receipt_received(update: Update, context: ContextTypes.DEFAULT_
         return ConversationHandler.END
     receipt_photo = update.message.photo[-1]
     caption = (f"درخواست شارژ جدید 🔔\n\n" f"کاربر: {user.full_name} (@{user.username or 'N/A'})\n" f"آیدی عددی: `{user.id}`\n" f"مبلغ درخواستی: **{amount:,} تومان**")
-    keyboard = [[InlineKeyboardButton("✅ تایید شارژ", callback_data=f"admin_confirm_charge_{user.id}_{amount}"), InlineKeyboardButton("❌ رد درخواست", callback_data=f"admin_reject_charge_{user.id}")]]
+    keyboard = [[InlineKeyboardButton("✅ تایید شارژ", callback_data=f"admin_confirm_charge_{user.id}_{int(amount)}"), InlineKeyboardButton("❌ رد درخواست", callback_data=f"admin_reject_charge_{user.id}")]]
     await context.bot.send_photo(chat_id=ADMIN_ID, photo=receipt_photo.file_id, caption=caption, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
     await update.message.reply_text("✅ رسید شما برای ادمین ارسال شد. لطفاً تا زمان بررسی منتظر بمانید.", reply_markup=get_main_menu_keyboard(user.id))
     context.user_data.clear()
@@ -482,6 +482,9 @@ async def admin_toggle_plan_visibility_callback(update: Update, context: Context
 
 async def admin_confirm_charge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    # <<< START OF DEBUGGING LOG >>>
+    logger.info(f"--- [DEBUG] admin_confirm_charge_callback TRIGGERED! Callback data: '{query.data}' ---")
+    # <<<  END OF DEBUGGING LOG  >>>
     await query.answer()
     
     prefix = "admin_confirm_charge_"
@@ -493,7 +496,6 @@ async def admin_confirm_charge_callback(update: Update, context: ContextTypes.DE
     except (ValueError, IndexError) as e:
         logger.error(f"Error parsing admin_confirm_charge_callback data: {query.data} | Error: {e}")
         try:
-            # سعی کن به کاربر اطلاع دهی که مشکلی پیش آمده
             if query.message.photo:
                 await query.edit_message_caption(caption=f"{query.message.caption}\n\n---\n❌ خطا در پردازش اطلاعات دکمه.")
             else:
@@ -523,6 +525,9 @@ async def admin_confirm_charge_callback(update: Update, context: ContextTypes.DE
 
 async def admin_reject_charge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    # <<< START OF DEBUGGING LOG >>>
+    logger.info(f"--- [DEBUG] admin_reject_charge_callback TRIGGERED! Callback data: '{query.data}' ---")
+    # <<<  END OF DEBUGGING LOG  >>>
     await query.answer()
     try:
         target_user_id = int(query.data.split('_')[-1])
@@ -1055,7 +1060,7 @@ def main():
     application.add_handler(MessageHandler(filters.Regex('^📚 راهنمای اتصال$'), show_guide), group=3)
     application.add_handler(MessageHandler(filters.Regex('^🧪 دریافت سرویس تست رایگان$'), get_trial_service), group=3)
 
-    print("Bot is running with the final, definitive fix...")
+    print("Bot is running with debugging logs for charge confirmation...")
     application.run_polling()
 
 if __name__ == "__main__":
