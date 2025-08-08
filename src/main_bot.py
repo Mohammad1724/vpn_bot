@@ -10,6 +10,7 @@ import io
 from datetime import datetime, timedelta, time
 import jdatetime
 from typing import Union
+from functools import wraps
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -21,14 +22,14 @@ from telegram.ext import (
     ConversationHandler,
     ApplicationBuilder
 )
-from telegram.constants import ParseMode
+from telegram.constants import ParseMode, ChatMemberStatus
 from telegram.error import Forbidden, BadRequest
 import database as db
 import hiddify_api
 from config import (
     BOT_TOKEN, ADMIN_ID, SUPPORT_USERNAME, SUB_DOMAINS, ADMIN_PATH,
     PANEL_DOMAIN, SUB_PATH, TRIAL_ENABLED, TRIAL_DAYS, TRIAL_GB,
-    REFERRAL_BONUS_AMOUNT, EXPIRY_REMINDER_DAYS
+    REFERRAL_BONUS_AMOUNT, EXPIRY_REMINDER_DAYS, FORCE_JOIN_CHANNELS, USAGE_ALERT_THRESHOLD
 )
 import qrcode
 
@@ -45,7 +46,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- Constants & States ---
-USAGE_ALERT_THRESHOLD = 0.8
 BTN_ADMIN_PANEL = "👑 ورود به پنل ادمین"
 BTN_EXIT_ADMIN_PANEL = "↩️ خروج از پنل"
 BTN_BACK_TO_ADMIN_MENU = "بازگشت به منوی ادمین"
@@ -58,9 +58,59 @@ CMD_SKIP = "/skip"
     MANAGE_USER_AMOUNT, GET_CUSTOM_NAME, REDEEM_GIFT, CHARGE_AMOUNT,
     CHARGE_RECEIPT, SETTINGS_MENU, BACKUP_MENU, BROADCAST_MENU, BROADCAST_MESSAGE,
     BROADCAST_CONFIRM, BROADCAST_TO_USER_ID, BROADCAST_TO_USER_MESSAGE, RESTORE_UPLOAD,
-    AWAIT_SETTING_VALUE
-) = range(28)
+    AWAIT_SETTING_VALUE, REPORT_CUSTOM_DATE_START, REPORT_CUSTOM_DATE_END
+) = range(30)
 
+
+# --- Force Join Decorator ---
+def check_channel_membership(func):
+    @wraps(func)
+    async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        if not FORCE_JOIN_CHANNELS:
+            return await func(update, context, *args, **kwargs)
+
+        user_id = update.effective_user.id
+        if user_id == ADMIN_ID:
+            return await func(update, context, *args, **kwargs)
+
+        not_joined_channels = []
+        for channel in FORCE_JOIN_CHANNELS:
+            try:
+                member = await context.bot.get_chat_member(chat_id=channel, user_id=user_id)
+                if member.status not in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]:
+                    not_joined_channels.append(channel)
+            except (BadRequest, Forbidden) as e:
+                logger.error(f"Error checking membership for channel {channel}: {e}")
+                not_joined_channels.append(channel)
+        
+        if not_joined_channels:
+            keyboard = []
+            text = "کاربر گرامی، برای استفاده از ربات لازم است ابتدا در کانال‌های زیر عضو شوید:\n\n"
+            for i, channel in enumerate(not_joined_channels, 1):
+                try:
+                    chat = await context.bot.get_chat(channel)
+                    invite_link = chat.invite_link or f"https://t.me/{chat.username}"
+                    text += f"{i}- {chat.title}\n"
+                    keyboard.append([InlineKeyboardButton(f"عضویت در کانال {chat.title}", url=invite_link)])
+                except Exception as e:
+                    logger.error(f"Could not get info for channel {channel}: {e}")
+            
+            keyboard.append([InlineKeyboardButton("✅ عضو شدم", callback_data="check_join")])
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            if update.callback_query:
+                await update.callback_query.answer("لطفا ابتدا در کانال عضو شوید.", show_alert=True)
+                # Check if the message is a photo, if so, we can't edit text. Send new.
+                if update.effective_message.photo:
+                    await update.effective_message.reply_text(text, reply_markup=reply_markup)
+                else:
+                    await update.effective_message.edit_text(text, reply_markup=reply_markup)
+            else:
+                await update.message.reply_text(text, reply_markup=reply_markup)
+            return
+
+        return await func(update, context, *args, **kwargs)
+    return wrapped
 
 # --- Keyboards ---
 def get_main_menu_keyboard(user_id):
@@ -214,6 +264,7 @@ async def check_expiring_services(context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"An unexpected error in expiry reminder job for service {service['service_id']}: {e}", exc_info=True)
             
 # --- Generic Handlers ---
+@check_channel_membership
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db.get_or_create_user(user.id, user.username)
@@ -234,6 +285,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👋 به ربات فروش VPN خوش آمدید!", reply_markup=get_main_menu_keyboard(user.id))
     return ConversationHandler.END
 
+async def check_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.message.delete()
+    await start(update, context)
+
 async def admin_generic_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await update.message.reply_text("عملیات لغو شد.", reply_markup=get_admin_menu_keyboard())
@@ -250,6 +307,7 @@ async def user_generic_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE
     return ConversationHandler.END
 
 # --- User Service Management ---
+@check_channel_membership
 async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     message = update.effective_message
@@ -272,6 +330,7 @@ async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await message.reply_text("لطفا سرویسی که می‌خواهید مدیریتش کنید را انتخاب نمایید:", reply_markup=reply_markup)
 
+@check_channel_membership
 async def view_service_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -343,6 +402,7 @@ async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
             except BadRequest: pass
         else: await context.bot.send_message(chat_id=chat_id, text=error_text)
 
+@check_channel_membership
 async def refresh_service_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -355,6 +415,7 @@ async def refresh_service_details(update: Update, context: ContextTypes.DEFAULT_
     else:
         await query.answer("خطا: این سرویس متعلق به شما نیست.", show_alert=True)
 
+@check_channel_membership
 async def back_to_services_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -362,6 +423,7 @@ async def back_to_services_callback(update: Update, context: ContextTypes.DEFAUL
     await list_my_services(update, context)
 
 # --- Renewal Logic ---
+@check_channel_membership
 async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -390,6 +452,7 @@ async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TY
         keyboard = [[InlineKeyboardButton("✅ بله، تمدید کن", callback_data=f"confirmrenew")], [InlineKeyboardButton("❌ خیر، لغو کن", callback_data=f"cancelrenew")]]
         await msg.edit_text("⚠️ **هشدار مهم** ⚠️\n\nسرویس شما هنوز اعتبار دارد. تمدید در حال حاضر باعث می‌شود اعتبار زمانی و حجمی باقیمانده شما **از بین برود** و دوره جدید از همین امروز شروع شود.\n\nآیا می‌خواهید ادامه دهید?", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
 
+@check_channel_membership
 async def confirm_renewal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -432,6 +495,7 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
         
     context.user_data.clear()
 
+@check_channel_membership
 async def cancel_renewal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -439,6 +503,7 @@ async def cancel_renewal_callback(update: Update, context: ContextTypes.DEFAULT_
     context.user_data.clear()
 
 # --- Main User Flow Handlers ---
+@check_channel_membership
 async def show_account_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_info = db.get_user(user_id)
@@ -465,12 +530,16 @@ async def show_account_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
 
+
+@check_channel_membership
 async def show_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"جهت ارتباط با پشتیبانی به آیدی زیر پیام ارسال کنید:\n@{SUPPORT_USERNAME}")
 
+@check_channel_membership
 async def show_guide(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("راهنمای اتصال به سرویس‌ها:\n\n(اینجا می‌توانید آموزش‌های لازم را قرار دهید)")
 
+@check_channel_membership
 async def show_referral_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     bot_username = (await context.bot.get_me()).username
@@ -487,6 +556,7 @@ async def show_referral_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
+@check_channel_membership
 async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_info = db.get_or_create_user(user_id, update.effective_user.username)
@@ -501,6 +571,7 @@ async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else: await msg_loading.edit_text("❌ متاسفانه در ساخت سرویس تست مشکلی پیش آمد. لطفا بعداً تلاش کنید.")
 
 # --- Gift Code Conversation ---
+@check_channel_membership
 async def gift_code_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🎁 لطفا کد هدیه خود را وارد کنید:", reply_markup=ReplyKeyboardMarkup([[CMD_CANCEL]], resize_keyboard=True))
     return REDEEM_GIFT
@@ -514,6 +585,7 @@ async def redeem_gift_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 # --- Charge Account Conversation ---
+@check_channel_membership
 async def charge_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -548,12 +620,14 @@ async def charge_receipt_received(update: Update, context: ContextTypes.DEFAULT_
     return ConversationHandler.END
 
 # --- Buy Service Conversation ---
+@check_channel_membership
 async def buy_service_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     plans = db.list_plans(only_visible=True)
     if not plans: await update.message.reply_text("متاسفانه در حال حاضر هیچ پلنی برای فروش موجود نیست."); return
     keyboard = [[InlineKeyboardButton(f"{p['name']} - {p['days']} روزه {p['gb']} گیگ - {p['price']:.0f} تومان", callback_data=f"user_buy_{p['plan_id']}")] for p in plans]
     await update.message.reply_text("لطفا سرویس مورد نظر خود را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
 
+@check_channel_membership
 async def buy_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1244,6 +1318,7 @@ def main():
     
     application.add_handler(CallbackQueryHandler(admin_confirm_charge_callback, pattern="^admin_confirm_charge_"))
     application.add_handler(CallbackQueryHandler(admin_reject_charge_callback, pattern="^admin_reject_charge_"))
+    application.add_handler(CallbackQueryHandler(check_join_callback, pattern="^check_join$"))
 
     application.add_handler(CallbackQueryHandler(view_service_callback, pattern="^view_service_"), group=2)
     application.add_handler(CallbackQueryHandler(back_to_services_callback, pattern="^back_to_services$"), group=2)
