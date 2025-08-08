@@ -84,10 +84,8 @@ function install_bot() {
     deactivate
     print_color "C_GREEN" "Python environment is ready."
 
-    # 4. Create configuration file
-    print_color "C_YELLOW" "[4/6] Creating configuration file (config.py)..."
+    # 4. Gather configuration details
     CONFIG_FILE="config.py"
-    cp config_template.py "$CONFIG_FILE"
 
     print_color "C_BLUE" "--- Bot & Panel Configuration ---"
     read -p "Enter your Telegram Bot Token: " BOT_TOKEN
@@ -103,49 +101,65 @@ function install_bot() {
     
     print_color "C_BLUE" "--- Free Trial Configuration ---"
     read -p "Enable free trial service? [Y/n]: " TRIAL_ENABLED_CHOICE
-    if [[ "$TRIAL_ENABLED_CHOICE" =~ ^[Yy]$ ]]; then
+    if [[ "$TRIAL_ENABLED_CHOICE" =~ ^[Yy]$ ]] || [ -z "$TRIAL_ENABLED_CHOICE" ]; then
         TRIAL_ENABLED_VAL="True"
-        read -p "Enter trial duration in days (e.g., 1): " TRIAL_DAYS
-        read -p "Enter trial data limit in GB (e.g., 1): " TRIAL_GB
+        read -p "Enter trial duration in days (Default: 1): " -i "1" -e TRIAL_DAYS
+        read -p "Enter trial data limit in GB (Default: 1): " -i "1" -e TRIAL_GB
     else
         TRIAL_ENABLED_VAL="False"
-        TRIAL_DAYS=1  # Default value, won't be used
-        TRIAL_GB=1    # Default value, won't be used
+        TRIAL_DAYS=1
+        TRIAL_GB=1
     fi
 
     print_color "C_BLUE" "--- Features & Reminders ---"
-    read -p "Enter referral bonus amount in Toman (e.g., 5000): " REFERRAL_BONUS_AMOUNT
-    read -p "Send expiry reminder how many days before expiration? (e.g., 3): " EXPIRY_REMINDER_DAYS
-    read -p "Send usage limit reminder at what percentage? (e.g., 80 for 80%): " USAGE_LIMIT_REMINDER_PERCENT
+    read -p "Enter referral bonus amount in Toman (Default: 5000): " -i "5000" -e REFERRAL_BONUS_AMOUNT
+    read -p "Send expiry reminder how many days before expiration? (Default: 3): " -i "3" -e EXPIRY_REMINDER_DAYS
+    read -p "Send usage limit reminder at what percentage? (e.g., 80 for 80%. Default: 80): " -i "80" -e USAGE_LIMIT_REMINDER_PERCENT
 
-    # --- Apply configurations using sed ---
-    sed -i "s|^BOT_TOKEN = .*|BOT_TOKEN = \"${BOT_TOKEN}\"|" "$CONFIG_FILE"
-    sed -i "s|^ADMIN_ID = .*|ADMIN_ID = ${ADMIN_ID}|" "$CONFIG_FILE"
-    sed -i "s|^SUPPORT_USERNAME = .*|SUPPORT_USERNAME = \"${SUPPORT_USERNAME}\"|" "$CONFIG_FILE"
-    sed -i "s|^PANEL_DOMAIN = .*|PANEL_DOMAIN = \"${PANEL_DOMAIN}\"|" "$CONFIG_FILE"
-    sed -i "s|^ADMIN_PATH = .*|ADMIN_PATH = \"${ADMIN_PATH}\"|" "$CONFIG_FILE"
-    sed -i "s|^SUB_PATH = .*|SUB_PATH = \"${SUB_PATH}\"|" "$CONFIG_FILE"
-    if [ -n "$API_KEY" ]; then
-        sed -i "s|^API_KEY = .*|API_KEY = \"${API_KEY}\"|" "$CONFIG_FILE"
-    fi
+    # --- FIX: Create the config.py file from scratch using a heredoc for reliability ---
+    print_color "C_YELLOW" "[4/6] Creating configuration file (config.py)..."
     
     # Process subdomains into a Python list format
     if [ -n "$SUB_DOMAINS_INPUT" ]; then
         PROCESSED_SUB_DOMAINS=$(echo "$SUB_DOMAINS_INPUT" | sed 's/[^,]\+/"&"/g')
-        sed -i "s|^SUB_DOMAINS = .*|SUB_DOMAINS = [${PROCESSED_SUB_DOMAINS}]|" "$CONFIG_FILE"
+        SUB_DOMAINS_LINE="SUB_DOMAINS = [${PROCESSED_SUB_DOMAINS}]"
+    else
+        SUB_DOMAINS_LINE="SUB_DOMAINS = []"
     fi
 
-    # Apply new settings
-    sed -i "s|^TRIAL_ENABLED = .*|TRIAL_ENABLED = ${TRIAL_ENABLED_VAL}|" "$CONFIG_FILE"
-    sed -i "s|^TRIAL_DAYS = .*|TRIAL_DAYS = ${TRIAL_DAYS}|" "$CONFIG_FILE"
-    sed -i "s|^TRIAL_GB = .*|TRIAL_GB = ${TRIAL_GB}|" "$CONFIG_FILE"
-    sed -i "s|^REFERRAL_BONUS_AMOUNT = .*|REFERRAL_BONUS_AMOUNT = ${REFERRAL_BONUS_AMOUNT}|" "$CONFIG_FILE"
-    sed -i "s|^EXPIRY_REMINDER_DAYS = .*|EXPIRY_REMINDER_DAYS = ${EXPIRY_REMINDER_DAYS}|" "$CONFIG_FILE"
-    
-    # Add the new usage limit reminder setting to the file
-    # This assumes USAGE_LIMIT_REMINDER_PERCENT is not in the template, so we append it.
-    # If it IS in the template, this line can be changed to a sed -i command like the others.
-    echo "USAGE_LIMIT_REMINDER_PERCENT = ${USAGE_LIMIT_REMINDER_PERCENT}" >> "$CONFIG_FILE"
+    cat > "$CONFIG_FILE" << EOL
+# -*- coding: utf-8 -*-
+
+# ===============================================================
+# TELEGRAM BOT CONFIGURATION
+# ===============================================================
+BOT_TOKEN = "${BOT_TOKEN}"
+ADMIN_ID = ${ADMIN_ID}
+SUPPORT_USERNAME = "${SUPPORT_USERNAME}"
+
+# ===============================================================
+# HIDDIFY PANEL CONFIGURATION
+# ===============================================================
+PANEL_DOMAIN = "${PANEL_DOMAIN}"
+ADMIN_PATH = "${ADMIN_PATH}"
+SUB_PATH = "${SUB_PATH}"
+API_KEY = "${API_KEY}"
+${SUB_DOMAINS_LINE}
+
+# ===============================================================
+# FREE TRIAL SERVICE CONFIGURATION
+# ===============================================================
+TRIAL_ENABLED = ${TRIAL_ENABLED_VAL}
+TRIAL_DAYS = ${TRIAL_DAYS}
+TRIAL_GB = ${TRIAL_GB}
+
+# ===============================================================
+# REFERRAL & REMINDER CONFIGURATION
+# ===============================================================
+REFERRAL_BONUS_AMOUNT = ${REFERRAL_BONUS_AMOUNT}
+EXPIRY_REMINDER_DAYS = ${EXPIRY_REMINDER_DAYS}
+USAGE_LIMIT_REMINDER_PERCENT = ${USAGE_LIMIT_REMINDER_PERCENT}
+EOL
 
     print_color "C_GREEN" "Configuration file created successfully."
 
@@ -263,7 +277,7 @@ function uninstall_bot() {
 function uninstall_bot_silent() {
     print_color "C_YELLOW" "Stopping and disabling service..."
     systemctl stop "$SERVICE_NAME" &>/dev/null || true
-    systemctl disable "$SERVICE_NAME" &>/_dev/null || true
+    systemctl disable "$SERVICE_NAME" &>/dev/null || true
     
     print_color "C_YELLOW" "Removing service file..."
     rm -f "$SERVICE_FILE"
