@@ -8,6 +8,7 @@ import random
 import sqlite3
 import io
 import re
+from types import SimpleNamespace
 from datetime import datetime, timedelta, time
 import jdatetime
 from typing import Union
@@ -113,7 +114,7 @@ async def _get_service_status(hiddify_info):
     start_date_obj = _parse_date_flexible(start_date_str)
     if not start_date_obj:
         return "Unknown", "N/A", True
-        
+
     expiry_date_obj = start_date_obj + timedelta(days=package_days)
     jalali_expiry_date = jdatetime.date.fromgregorian(date=expiry_date_obj)
     jalali_display_str = jalali_expiry_date.strftime("%Y/%m/%d")
@@ -131,7 +132,7 @@ def is_valid_sqlite(filepath):
     except sqlite3.DatabaseError:
         return False
 
-# Jobs
+# Background jobs (PTB JobQueue handlers)
 async def check_low_usage(context: ContextTypes.DEFAULT_TYPE):
     logger.info("Job: checking low-usage services...")
     all_services = db.get_all_active_services()
@@ -144,7 +145,7 @@ async def check_low_usage(context: ContextTypes.DEFAULT_TYPE):
                 logger.warning(f"Could not fetch info for service {service['service_id']}.")
                 continue
 
-            status, _, is_expired = await _get_service_status(info)
+            _, _, is_expired = await _get_service_status(info)
             if is_expired:
                 continue
 
@@ -183,7 +184,7 @@ async def check_expiring_services(context: ContextTypes.DEFAULT_TYPE):
             _, expiry_date_str, is_expired = await _get_service_status(info)
             if is_expired or expiry_date_str == "N/A":
                 continue
-            
+
             parts = expiry_date_str.split('/')
             jalali_date = jdatetime.date(int(parts[0]), int(parts[1]), int(parts[2]))
             gregorian_expiry_date = jalali_date.togregorian()
@@ -207,11 +208,34 @@ async def check_expiring_services(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Unexpected error in expiry reminder job for service {service['service_id']}: {e}", exc_info=True)
 
+# Fallback loops (used if JobQueue is unavailable)
+async def _low_usage_loop(app: Application, interval_s: int = 4 * 60 * 60):
+    ctx = SimpleNamespace(bot=app.bot)
+    while True:
+        try:
+            await check_low_usage(ctx)
+        except Exception:
+            logger.exception("Error in _low_usage_loop")
+        await asyncio.sleep(interval_s)
+
+async def _daily_expiry_loop(app: Application, hour: int = 9, minute: int = 0):
+    while True:
+        now = datetime.now()
+        target = datetime.combine(now.date(), time(hour, minute))
+        if now >= target:
+            target += timedelta(days=1)
+        await asyncio.sleep((target - now).total_seconds())
+        ctx = SimpleNamespace(bot=app.bot)
+        try:
+            await check_expiring_services(ctx)
+        except Exception:
+            logger.exception("Error in _daily_expiry_loop")
+
 # Generic Handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db.get_or_create_user(user.id, user.username)
-    
+
     if context.args and context.args[0].startswith('ref_'):
         try:
             referrer_id = int(context.args[0].split('_')[1])
@@ -224,7 +248,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_info and user_info.get('is_banned'):
         await update.message.reply_text("You are banned from using this bot.")
         return ConversationHandler.END
-        
+
     await update.message.reply_text("Welcome to the VPN Sales Bot!", reply_markup=get_main_menu_keyboard(user.id))
     return ConversationHandler.END
 
@@ -247,19 +271,20 @@ async def user_generic_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     message = update.effective_message
-    
+
     services = db.get_user_services(user_id)
     if not services:
         await message.reply_text("You have no active services yet.")
         return
-    
+
     keyboard = []
     for service in services:
         button_text = f"⚙️ {service['name']}"
         callback_data = f"view_service_{service['service_id']}"
         keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
-    
+
     reply_markup = InlineKeyboardMarkup(keyboard)
+
     if update.callback_query:
         await message.edit_text("Please choose a service to manage:", reply_markup=reply_markup)
     else:
@@ -276,15 +301,17 @@ async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
     service = db.get_service(service_id)
     if not service:
         error_text = "Service not found."
-        if original_message: await original_message.edit_text(error_text)
-        else: await context.bot.send_message(chat_id=chat_id, text=error_text)
+        if original_message:
+            await original_message.edit_text(error_text)
+        else:
+            await context.bot.send_message(chat_id=chat_id, text=error_text)
         return
     try:
         info = await hiddify_api.get_user_info(service['sub_uuid'])
         if info:
             status, expiry_date_display, is_expired = await _get_service_status(info)
             renewal_plan = db.get_plan(service['plan_id'])
-            
+
             sub_path = SUB_PATH or ADMIN_PATH
             sub_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
             base_link = f"https://{sub_domain}/{sub_path}/{service['sub_uuid']}"
@@ -295,7 +322,7 @@ async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
             bio.name = 'qrcode.png'
             qr_image.save(bio, 'PNG')
             bio.seek(0)
-            
+
             caption = (
                 f"Service name: **{service['name']}**\n\n"
                 f"Usage: **{info.get('current_usage_GB', 0):.2f} / {info.get('usage_limit_GB', 0):.0f}** GB\n"
@@ -319,7 +346,7 @@ async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
                     await original_message.delete()
                 except BadRequest:
                     pass
-            
+
             await context.bot.send_photo(
                 chat_id=chat_id,
                 photo=bio,
@@ -333,9 +360,12 @@ async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
         logger.error(f"send_service_details error for service_id {service_id}: {e}", exc_info=True)
         error_text = "Failed to retrieve service info. Please try again later."
         if original_message:
-            try: await original_message.edit_text(error_text)
-            except BadRequest: pass
-        else: await context.bot.send_message(chat_id=chat_id, text=error_text)
+            try:
+                await original_message.edit_text(error_text)
+            except BadRequest:
+                pass
+        else:
+            await context.bot.send_message(chat_id=chat_id, text=error_text)
 
 async def refresh_service_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -363,7 +393,7 @@ async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     await query.answer()
     await query.message.delete()
-    
+
     service_id = int(query.data.split('_')[1])
     user_id = query.from_user.id
     service = db.get_service(service_id)
@@ -384,11 +414,11 @@ async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TY
     if not hiddify_info:
         await msg.edit_text("Could not fetch service info from panel. Please try again later.")
         return
-    
+
     _, _, is_expired = await _get_service_status(hiddify_info)
     context.user_data['renewal_service_id'] = service_id
     context.user_data['renewal_plan_id'] = plan['plan_id']
-    
+
     if is_expired:
         await proceed_with_renewal(update, context, original_message=msg)
     else:
@@ -410,10 +440,10 @@ async def confirm_renewal_callback(update: Update, context: ContextTypes.DEFAULT
 async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYPE, original_message=None):
     query = update.callback_query
     user_id = query.from_user.id if query else update.effective_user.id
-    
+
     service_id = context.user_data.get('renewal_service_id')
     plan_id = context.user_data.get('renewal_plan_id')
-    
+
     if not all([service_id, plan_id]):
         if original_message:
             await original_message.edit_text("Internal error: renewal state not found.")
@@ -421,7 +451,7 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if original_message:
         await original_message.edit_text("Submitting renewal request... ⏳")
-    
+
     transaction_id = db.initiate_renewal_transaction(user_id, service_id, plan_id)
     if not transaction_id:
         if original_message:
@@ -431,13 +461,16 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
     service = db.get_service(service_id)
     plan = db.get_plan(plan_id)
 
-    logger.info(f"Renewing service {service_id} for user {user_id} with UUID {service['sub_uuid']}. Plan days={plan['days']}, gb={plan['gb']}")
+    logger.info(
+        f"Renewing service {service_id} for user {user_id} with UUID {service['sub_uuid']}. "
+        f"Plan days={plan['days']}, gb={plan['gb']}"
+    )
 
     new_hiddify_info = await hiddify_api.renew_user_subscription(service['sub_uuid'], plan['days'], plan['gb'])
     logger.info(f"Renewal API result: {new_hiddify_info}")
 
     if new_hiddify_info:
-        db.finalize_renewal_transaction(transaction_id, plan_id) 
+        db.finalize_renewal_transaction(transaction_id, plan_id)
         if original_message:
             await original_message.edit_text("Service renewed successfully. Showing updated details...")
         await send_service_details(context, user_id, service_id, original_message=original_message, is_from_menu=True)
@@ -445,7 +478,7 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
         db.cancel_renewal_transaction(transaction_id)
         if original_message:
             await original_message.edit_text("Renewal failed due to panel communication issue. Please contact support.")
-        
+
     context.user_data.clear()
 
 async def cancel_renewal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -458,7 +491,11 @@ async def cancel_renewal_callback(update: Update, context: ContextTypes.DEFAULT_
 async def show_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = db.get_or_create_user(update.effective_user.id)
     keyboard = [[InlineKeyboardButton("💳 شارژ حساب", callback_data="user_start_charge")]]
-    await update.message.reply_text(f"Your current balance: **{user['balance']:.0f}** Toman", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(
+        f"Your current balance: **{user['balance']:.0f}** Toman",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN
+    )
 
 async def show_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"For support, message @{SUPPORT_USERNAME}")
@@ -470,13 +507,13 @@ async def show_referral_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user_id = update.effective_user.id
     bot_username = (await context.bot.get_me()).username
     referral_link = f"https://t.me/{bot_username}?start=ref_{user_id}"
-    
+
     bonus_str = db.get_setting('referral_bonus_amount')
     try:
         bonus = int(float(bonus_str)) if bonus_str is not None else REFERRAL_BONUS_AMOUNT
     except (ValueError, TypeError):
         bonus = REFERRAL_BONUS_AMOUNT
-    
+
     text = (
         f"Invite friends and earn rewards!\n\n"
         f"Share your unique link below with your friends.\n\n"
@@ -614,10 +651,10 @@ async def create_service_after_name(message: Update.message, context: ContextTyp
         await message.reply_text("Internal error. Please try again.", reply_markup=get_main_menu_keyboard(user_id))
         context.user_data.clear()
         return
-        
+
     plan = db.get_plan(plan_id)
     custom_name = custom_name_input if custom_name_input else f"Service {plan['gb']}GB"
-    
+
     msg_loading = await message.reply_text("Creating your service... ⏳", reply_markup=get_main_menu_keyboard(user_id))
     result = await hiddify_api.create_hiddify_user(plan['days'], plan['gb'], user_id, custom_name=custom_name)
 
@@ -634,11 +671,11 @@ async def create_service_after_name(message: Update.message, context: ContextTyp
             await msg_loading.delete()
         except BadRequest as e:
             logger.warning(f"Could not delete 'loading' message: {e}")
-        await show_link_options_menu(message, result['uuid'], is_edit=False) 
+        await show_link_options_menu(message, result['uuid'], is_edit=False)
     else:
         db.cancel_purchase_transaction(transaction_id)
         await msg_loading.edit_text("Failed to create service. Please contact support.")
-        
+
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -687,7 +724,7 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=get_main_menu_keyboard(query.from_user.id)
     )
 
-# ADMIN SECTION (texts are English, buttons remain Persian)
+# ADMIN SECTION (texts in English, buttons remain Persian)
 async def admin_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Welcome to the admin panel.", reply_markup=get_admin_menu_keyboard())
     return ADMIN_MENU
@@ -745,13 +782,13 @@ async def admin_confirm_charge_callback(update: Update, context: ContextTypes.DE
 
     try:
         await context.bot.send_message(
-            chat_id=target_user_id, 
-            text=f"Your account was successfully charged by **{amount:,} Toman**!", 
+            chat_id=target_user_id,
+            text=f"Your account was successfully charged by **{amount:,} Toman**!",
             parse_mode=ParseMode.MARKDOWN
         )
     except (Forbidden, BadRequest):
         admin_feedback += "\n\nWarning: User has blocked the bot. Confirmation not delivered."
-    
+
     try:
         await query.edit_message_caption(caption=admin_feedback, reply_markup=None, parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
@@ -776,12 +813,12 @@ async def admin_reject_charge_callback(update: Update, context: ContextTypes.DEF
 
     original_caption = query.message.caption or ""
     admin_feedback = f"{original_caption}\n\n---\nCharge request of user `{target_user_id}` was rejected."
-    
-    try: 
+
+    try:
         await context.bot.send_message(chat_id=target_user_id, text="Unfortunately, your charge request was rejected by the admin.")
-    except (Forbidden, BadRequest): 
+    except (Forbidden, BadRequest):
         admin_feedback += "\n\nWarning: User has blocked the bot."
-    
+
     try:
         await query.edit_message_caption(caption=admin_feedback, reply_markup=None, parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
@@ -792,8 +829,8 @@ async def admin_confirm_restore_callback(update: Update, context: ContextTypes.D
     query = update.callback_query
     await query.answer()
     restore_path = context.user_data.get('restore_path')
-    if not restore_path or not os.path.exists(restore_path): 
-        await query.edit_message_text("Error: backup file not found.") 
+    if not restore_path or not os.path.exists(restore_path):
+        await query.edit_message_text("Error: backup file not found.")
         return BACKUP_MENU
     try:
         db.close_db()
@@ -824,7 +861,7 @@ async def plan_management_menu(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def list_plans_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     plans = db.list_plans()
-    if not plans: 
+    if not plans:
         await update.message.reply_text("No plans defined.")
         return PLAN_MENU
     await update.message.reply_text("Defined plans:")
@@ -857,7 +894,7 @@ async def plan_price_received(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data['plan_price'] = float(update.message.text)
         await update.message.reply_text("Enter duration (days):")
         return PLAN_DAYS
-    except ValueError: 
+    except ValueError:
         await update.message.reply_text("Please enter a numeric price.")
         return PLAN_PRICE
 
@@ -866,7 +903,7 @@ async def plan_days_received(update: Update, context: ContextTypes.DEFAULT_TYPE)
         context.user_data['plan_days'] = int(update.message.text)
         await update.message.reply_text("Enter volume (GB):")
         return PLAN_GB
-    except ValueError: 
+    except ValueError:
         await update.message.reply_text("Please enter a numeric duration (days).")
         return PLAN_DAYS
 
@@ -877,7 +914,7 @@ async def plan_gb_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Plan added successfully.", reply_markup=get_admin_menu_keyboard())
         context.user_data.clear()
         return ADMIN_MENU
-    except ValueError: 
+    except ValueError:
         await update.message.reply_text("Please enter a numeric volume (GB).")
         return PLAN_GB
 
@@ -887,7 +924,7 @@ async def edit_plan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     plan_id = int(query.data.split('_')[-1])
     plan = db.get_plan(plan_id)
-    if not plan: 
+    if not plan:
         await query.edit_message_text("Plan not found.")
         return ConversationHandler.END
     context.user_data['edit_plan_id'] = plan_id
@@ -895,7 +932,7 @@ async def edit_plan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.message.reply_text(
         f"Editing plan: **{plan['name']}**\n\nEnter new name or {CMD_SKIP} to skip.",
         parse_mode=ParseMode.MARKDOWN,
-        reply_markup=ReplyKeyboardMarkup([[CMD_SKIP],[CMD_CANCEL]], resize_keyboard=True)
+        reply_markup=ReplyKeyboardMarkup([[CMD_SKIP], [CMD_CANCEL]], resize_keyboard=True)
     )
     return EDIT_PLAN_NAME
 
@@ -913,7 +950,7 @@ async def edit_plan_price_received(update: Update, context: ContextTypes.DEFAULT
         context.user_data['edit_plan_data']['price'] = float(update.message.text)
         await update.message.reply_text(f"Enter new duration (days) or {CMD_SKIP} to skip.")
         return EDIT_PLAN_DAYS
-    except ValueError: 
+    except ValueError:
         await update.message.reply_text("Please enter a numeric price.")
         return EDIT_PLAN_PRICE
 
@@ -926,7 +963,7 @@ async def edit_plan_days_received(update: Update, context: ContextTypes.DEFAULT_
         context.user_data['edit_plan_data']['days'] = int(update.message.text)
         await update.message.reply_text(f"Enter new volume (GB) or {CMD_SKIP} to skip.")
         return EDIT_PLAN_GB
-    except ValueError: 
+    except ValueError:
         await update.message.reply_text("Please enter a numeric duration (days).")
         return EDIT_PLAN_DAYS
 
@@ -939,7 +976,7 @@ async def edit_plan_gb_received(update: Update, context: ContextTypes.DEFAULT_TY
         context.user_data['edit_plan_data']['gb'] = int(update.message.text)
         await finish_plan_edit(update, context)
         return ConversationHandler.END
-    except ValueError: 
+    except ValueError:
         await update.message.reply_text("Please enter a numeric volume (GB).")
         return EDIT_PLAN_GB
 
@@ -951,7 +988,7 @@ async def skip_edit_plan_gb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def finish_plan_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     plan_id = context.user_data.get('edit_plan_id')
     new_data = context.user_data.get('edit_plan_data')
-    if not new_data: 
+    if not new_data:
         await update.message.reply_text("No changes applied.", reply_markup=get_admin_menu_keyboard())
     else:
         db.update_plan(plan_id, new_data)
@@ -1075,11 +1112,11 @@ async def broadcast_to_all_send(update: Update, context: ContextTypes.DEFAULT_TY
     sent_count, failed_count = 0, 0
     await update.message.reply_text(f"Broadcasting to {len(user_ids)} users...", reply_markup=get_admin_menu_keyboard())
     for user_id in user_ids:
-        try: 
+        try:
             await message_to_send.copy_to(chat_id=user_id)
             sent_count += 1
             await asyncio.sleep(0.1)
-        except (Forbidden, BadRequest): 
+        except (Forbidden, BadRequest):
             failed_count += 1
     await update.message.reply_text(f"Broadcast finished.\n\nSent: {sent_count}\nFailed: {failed_count}")
     context.user_data.clear()
@@ -1121,15 +1158,15 @@ async def user_management_menu(update: Update, context: ContextTypes.DEFAULT_TYP
 async def manage_user_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_input = update.message.text.strip()
     user_info = None
-    if user_input.isdigit(): 
+    if user_input.isdigit():
         user_info = db.get_user(int(user_input))
     elif re.fullmatch(r'@?[A-Za-z0-9_]{5,32}', user_input):
         user_info = db.get_user_by_username(user_input)
-    else: 
-        await update.message.reply_text("Invalid input. Please enter a numeric ID or a Telegram username.") 
+    else:
+        await update.message.reply_text("Invalid input. Please enter a numeric ID or a Telegram username.")
         return MANAGE_USER_ID
-    if not user_info: 
-        await update.message.reply_text("No user found with the given identifier.") 
+    if not user_info:
+        await update.message.reply_text("No user found with the given identifier.")
         return MANAGE_USER_ID
     context.user_data['target_user_id'] = user_info['user_id']
     ban_text = "آزاد کردن کاربر" if user_info['is_banned'] else "مسدود کردن کاربر"
@@ -1146,7 +1183,7 @@ async def manage_user_id_received(update: Update, context: ContextTypes.DEFAULT_
 async def manage_user_action_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = update.message.text
     target_user_id = context.user_data.get('target_user_id')
-    if not target_user_id: 
+    if not target_user_id:
         await update.message.reply_text("Error: target user is not set.")
         return await back_to_admin_menu(update, context)
     if action in ["افزایش موجودی", "کاهش موجودی"]:
@@ -1162,7 +1199,7 @@ async def manage_user_action_handler(update: Update, context: ContextTypes.DEFAU
         return await manage_user_id_received(update, context)
     elif action == "📜 سوابق خرید":
         history = db.get_user_sales_history(target_user_id)
-        if not history: 
+        if not history:
             await update.message.reply_text("This user has no purchase history.")
             return MANAGE_USER_ACTION
         response_message = "User purchase history:\n\n"
@@ -1171,7 +1208,7 @@ async def manage_user_action_handler(update: Update, context: ContextTypes.DEFAU
             response_message += f"- {sale['plan_name'] or 'Deleted plan'} | Price: {sale['price']:.0f} Toman | Date: {sale_date}\n"
         await update.message.reply_text(response_message, parse_mode=ParseMode.MARKDOWN)
         return MANAGE_USER_ACTION
-    else: 
+    else:
         await update.message.reply_text("Invalid command. Please use the buttons.")
         return MANAGE_USER_ACTION
 
@@ -1185,7 +1222,7 @@ async def manage_user_amount_received(update: Update, context: ContextTypes.DEFA
         await update.message.reply_text(f"{amount:.0f} Toman has been {'added to' if is_add else 'deducted from'} the user's balance.")
         update.message.text = str(target_user_id)
         return await manage_user_id_received(update, context)
-    except (ValueError, TypeError): 
+    except (ValueError, TypeError):
         await update.message.reply_text("Please enter a valid numeric amount.")
         return MANAGE_USER_AMOUNT
 
@@ -1204,11 +1241,11 @@ async def send_backup_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.init_db()
         await update.message.reply_text("Preparing the backup file...")
         await context.bot.send_document(chat_id=update.effective_user.id, document=open(backup_filename, 'rb'), caption=f"Database Backup - {timestamp}")
-    except Exception as e: 
+    except Exception as e:
         await update.message.reply_text(f"Error sending file: {e}")
         logger.error(f"Backup sending error: {e}", exc_info=True)
     finally:
-        if os.path.exists(backup_filename): 
+        if os.path.exists(backup_filename):
             os.remove(backup_filename)
     return BACKUP_MENU
 
@@ -1222,7 +1259,7 @@ async def restore_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def restore_receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     document = update.message.document
-    if not document or not document.file_name.endswith('.db'): 
+    if not document or not document.file_name.endswith('.db'):
         await update.message.reply_text("Invalid file format. Please send a .db file.")
         return RESTORE_UPLOAD
     file = await document.get_file()
@@ -1243,20 +1280,28 @@ async def shutdown_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db.close_db()
     asyncio.create_task(context.application.shutdown())
 
+# Post-init scheduler: use JobQueue if available; otherwise fallback loops
+async def _post_init(app: Application):
+    jq = app.job_queue
+    if jq:
+        jq.run_repeating(check_low_usage, interval=timedelta(hours=4), first=10)
+        jq.run_daily(check_expiring_services, time=time(hour=9, minute=0))
+        logger.info("JobQueue initialized. Background jobs scheduled.")
+    else:
+        logger.warning('No JobQueue available. Install PTB extra: pip install "python-telegram-bot[job-queue]"')
+        app.create_task(_low_usage_loop(app))
+        app.create_task(_daily_expiry_loop(app))
+
 def main():
     db.init_db()
     if db.get_setting('referral_bonus_amount') is None:
         db.set_setting('referral_bonus_amount', str(REFERRAL_BONUS_AMOUNT))
 
-    application = ApplicationBuilder().token(BOT_TOKEN).build()
-    job_queue = application.job_queue
-    
-    job_queue.run_repeating(check_low_usage, interval=timedelta(hours=4), first=10)
-    job_queue.run_daily(check_expiring_services, time=time(hour=9, minute=0))
+    application = ApplicationBuilder().token(BOT_TOKEN).post_init(_post_init).build()
 
     admin_filter = filters.User(user_id=ADMIN_ID)
     user_filter = ~admin_filter
-    
+
     buy_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(buy_start, pattern='^user_buy_')],
         states={GET_CUSTOM_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_custom_name), CommandHandler('skip', skip_custom_name)]},
@@ -1295,7 +1340,7 @@ def main():
         fallbacks=[CommandHandler('cancel', admin_conv_cancel)],
         per_user=True, per_chat=True,
     )
-    
+
     admin_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f'^{BTN_ADMIN_PANEL}$') & admin_filter, admin_entry)],
         states={
@@ -1311,7 +1356,7 @@ def main():
             ],
             REPORTS_MENU: [
                 MessageHandler(filters.Regex('^📊 آمار کلی$'), show_stats_report),
-                MessageHandler(filters.Regex('^📈 گزارش فروش امروز$'), show_daily_report),
+                MessageHandler(filters.Regex('^📈 گزارش‌ها و آمار$'), show_daily_report),
                 MessageHandler(filters.Regex('^📅 گزارش فروش ۷ روز اخیر$'), show_weekly_report),
                 MessageHandler(filters.Regex('^🏆 محبوب‌ترین پلن‌ها$'), show_popular_plans_report),
                 MessageHandler(filters.Regex(f'^{BTN_BACK_TO_ADMIN_MENU}$'), back_to_admin_menu),
@@ -1361,14 +1406,14 @@ def main():
         ],
         per_user=True, per_chat=True, allow_reentry=True
     )
-    
+
     application.add_handler(charge_handler, group=1)
     application.add_handler(gift_handler, group=1)
     application.add_handler(buy_handler, group=1)
     application.add_handler(settings_conv, group=1)
     application.add_handler(edit_plan_conv, group=1)
     application.add_handler(admin_conv, group=1)
-    
+
     application.add_handler(CallbackQueryHandler(admin_confirm_charge_callback, pattern="^admin_confirm_charge_"))
     application.add_handler(CallbackQueryHandler(admin_reject_charge_callback, pattern="^admin_reject_charge_"))
 
@@ -1379,7 +1424,7 @@ def main():
     application.add_handler(CallbackQueryHandler(renew_service_handler, pattern="^renew_"), group=2)
     application.add_handler(CallbackQueryHandler(confirm_renewal_callback, pattern="^confirmrenew$"), group=2)
     application.add_handler(CallbackQueryHandler(cancel_renewal_callback, pattern="^cancelrenew$"), group=2)
-    
+
     application.add_handler(CommandHandler("start", start), group=3)
     application.add_handler(MessageHandler(filters.Regex('^🛍️ خرید سرویس$'), buy_service_list), group=3)
     application.add_handler(MessageHandler(filters.Regex('^📋 سرویس‌های من$'), list_my_services), group=3)
