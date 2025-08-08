@@ -125,6 +125,7 @@ def init_db():
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_holder', 'نام صاحب حساب'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('referral_bonus_amount', '5000'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('recommended_link_type', 'auto'))
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('connection_guide_text', 'این متن راهنمای اتصال است. لطفاً از پنل ادمین آن را ویرایش کنید.'))
 
     conn.commit()
     logger.info("Database initialized successfully.")
@@ -461,35 +462,6 @@ def get_sales_report(days=1) -> list:
     cursor.execute("SELECT * FROM sales_log WHERE sale_date >= ?", (start_date,))
     sales = cursor.fetchall()
     return [dict(sale) for sale in sales]
-
-def get_sales_by_period(start_date: str, end_date: str) -> list:
-    conn = _connect_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM sales_log WHERE sale_date BETWEEN ? AND ?", (start_date, end_date))
-    sales = cursor.fetchall()
-    return [dict(sale) for sale in sales]
-
-def get_sales_by_month(year: int, month: int) -> list:
-    month_str = f"{year}-{month:02d}"
-    conn = _connect_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM sales_log WHERE strftime('%Y-%m', sale_date) = ?", (month_str,))
-    sales = cursor.fetchall()
-    return [dict(sale) for sale in sales]
-
-def get_top_customers(limit=10) -> list:
-    query = """
-        SELECT u.user_id, u.username, SUM(s.price) as total_spent
-        FROM sales_log s
-        JOIN users u ON s.user_id = u.user_id
-        GROUP BY s.user_id
-        ORDER BY total_spent DESC
-        LIMIT ?
-    """
-    conn = _connect_db()
-    cursor = conn.cursor()
-    cursor.execute(query, (limit,))
-    return [dict(row) for row in cursor.fetchall()]
 
 def get_popular_plans(limit=5) -> list:
     query = """
