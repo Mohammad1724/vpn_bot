@@ -85,10 +85,9 @@ read -p "Enter your support Telegram username (without @): " SUPPORT_USERNAME
 
 print_color "yellow" "\nEnter your subscription domains, separated by a comma (or press Enter to use panel domain)."
 read -p "Subscription Domains: " SUB_DOMAINS_INPUT
-
-PYTHON_LIST_FORMAT="[]"
+PYTHON_LIST_FORMAT_DOMAINS="[]"
 if [ -n "$SUB_DOMAINS_INPUT" ]; then
-    PYTHON_LIST_FORMAT="[\"$(echo "$SUB_DOMAINS_INPUT" | sed 's/,/\", \"/g')\"]"
+    PYTHON_LIST_FORMAT_DOMAINS="[\"$(echo "$SUB_DOMAINS_INPUT" | sed 's/,/\", \"/g')\"]"
 fi
 
 # --- Collect input for features ---
@@ -114,8 +113,15 @@ EXPIRY_REMINDER_DAYS=${EXPIRY_REMINDER_INPUT:-3}
 
 read -p "Send low usage warning at what percentage? (e.g., 80 for 80%) [80]: " USAGE_THRESHOLD_INPUT
 USAGE_ALERT_THRESHOLD_PERCENT=${USAGE_THRESHOLD_INPUT:-80}
-# Convert percentage to decimal for the script
 USAGE_ALERT_THRESHOLD=$(awk "BEGIN {print ${USAGE_ALERT_THRESHOLD_PERCENT}/100}")
+
+print_color "blue" "\n--- Force Join Configuration ---"
+print_color "yellow" "Enter the username(s) of the channel(s) for forced join, separated by a comma (e.g., @channel1,@channel2)."
+read -p "Force Join Channels: " FORCE_JOIN_INPUT
+PYTHON_LIST_FORMAT_CHANNELS="[]"
+if [ -n "$FORCE_JOIN_INPUT" ]; then
+    PYTHON_LIST_FORMAT_CHANNELS="[\"$(echo "$FORCE_JOIN_INPUT" | sed 's/,/\", \"/g')\"]"
+fi
 
 # --- Use sed to replace placeholders in config.py ---
 sed -i "s|^BOT_TOKEN = .*|BOT_TOKEN = \"${BOT_TOKEN}\"|" "$CONFIG_FILE"
@@ -125,13 +131,14 @@ sed -i "s|^PANEL_DOMAIN = .*|PANEL_DOMAIN = \"${PANEL_DOMAIN}\"|" "$CONFIG_FILE"
 sed -i "s|^ADMIN_PATH = .*|ADMIN_PATH = \"${ADMIN_PATH}\"|" "$CONFIG_FILE"
 sed -i "s|^SUB_PATH = .*|SUB_PATH = \"${SUB_PATH}\"|" "$CONFIG_FILE"
 sed -i "s|^API_KEY = .*|API_KEY = \"${API_KEY}\"|" "$CONFIG_FILE"
-sed -i "s|^SUB_DOMAINS = .*|SUB_DOMAINS = ${PYTHON_LIST_FORMAT}|" "$CONFIG_FILE"
+sed -i "s|^SUB_DOMAINS = .*|SUB_DOMAINS = ${PYTHON_LIST_FORMAT_DOMAINS}|" "$CONFIG_FILE"
 sed -i "s|^TRIAL_ENABLED = .*|TRIAL_ENABLED = ${TRIAL_ENABLED_VAL}|" "$CONFIG_FILE"
 sed -i "s|^TRIAL_DAYS = .*|TRIAL_DAYS = ${TRIAL_DAYS_VAL}|" "$CONFIG_FILE"
 sed -i "s|^TRIAL_GB = .*|TRIAL_GB = ${TRIAL_GB_VAL}|" "$CONFIG_FILE"
 sed -i "s|^REFERRAL_BONUS_AMOUNT = .*|REFERRAL_BONUS_AMOUNT = ${REFERRAL_BONUS_AMOUNT}|" "$CONFIG_FILE"
 sed -i "s|^EXPIRY_REMINDER_DAYS = .*|EXPIRY_REMINDER_DAYS = ${EXPIRY_REMINDER_DAYS}|" "$CONFIG_FILE"
 sed -i "s|^USAGE_ALERT_THRESHOLD = .*|USAGE_ALERT_THRESHOLD = ${USAGE_ALERT_THRESHOLD}|" "$CONFIG_FILE"
+sed -i "s|^FORCE_JOIN_CHANNELS = .*|FORCE_JOIN_CHANNELS = ${PYTHON_LIST_FORMAT_CHANNELS}|" "$CONFIG_FILE"
 
 print_color "green" "Configuration file created successfully."
 
