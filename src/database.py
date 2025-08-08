@@ -44,7 +44,7 @@ def init_db():
             referred_by INTEGER,
             has_received_referral_bonus INTEGER DEFAULT 0
         )''')
-    
+
     try:
         cursor.execute("SELECT referred_by FROM users LIMIT 1")
     except sqlite3.OperationalError:
@@ -106,7 +106,7 @@ def init_db():
             used_date TEXT,
             FOREIGN KEY(used_by) REFERENCES users(user_id)
         )''')
-    
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS transactions (
             transaction_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -124,7 +124,7 @@ def init_db():
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_number', '0000-0000-0000-0000'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_holder', 'نام صاحب حساب'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('referral_bonus_amount', '5000'))
-    
+
     conn.commit()
     logger.info("Database initialized successfully.")
 
@@ -206,7 +206,7 @@ def apply_referral_bonus(user_id: int):
                 logger.info(f"Applied referral bonus of {bonus_amount} to user {user_id} and referrer {referrer_id}.")
                 return referrer_id, bonus_amount
     return None, 0
-    
+
 # --- Plan Management ---
 def add_plan(name: str, price: float, days: int, gb: int):
     conn = _connect_db()
@@ -262,19 +262,33 @@ def get_plan_by_gb_and_days(gb: int, days: int) -> dict:
     return dict(plan) if plan else None
 
 # --- Service Management ---
-def add_active_service(user_id: int, name: str, sub_uuid: str, sub_link: str, plan_id: int):
+def add_active_service(user_id: int, name: str, sub_uuid: str, sub_link: str, plan_id: int) -> dict:
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn = _connect_db()
-    conn.execute(
+    cursor = conn.cursor()
+    cursor.execute(
         "INSERT INTO active_services (user_id, name, sub_uuid, sub_link, plan_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
         (user_id, name, sub_uuid, sub_link, plan_id, now_str)
     )
+    service_id = cursor.lastrowid
     conn.commit()
+    return get_service(service_id)
 
 def get_service(service_id: int) -> dict:
     conn = _connect_db()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM active_services WHERE service_id = ?", (service_id,))
+    service = cursor.fetchone()
+    return dict(service) if service else None
+
+def get_service_by_uuid(uuid: str) -> dict:
+    """
+    Retrieves a service from the database by its subscription UUID.
+    This is the only new function added.
+    """
+    conn = _connect_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM active_services WHERE sub_uuid = ?", (uuid,))
     service = cursor.fetchone()
     return dict(service) if service else None
 
@@ -334,10 +348,7 @@ def finalize_purchase_transaction(transaction_id: int, sub_uuid: str, sub_link: 
         if not trans: raise ValueError("Transaction not found or not pending.")
         cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (trans['amount'], trans['user_id']))
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        cursor.execute(
-            "INSERT INTO active_services (user_id, name, sub_uuid, sub_link, plan_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (trans['user_id'], custom_name, sub_uuid, sub_link, trans['plan_id'], now_str)
-        )
+        add_active_service(trans['user_id'], custom_name, sub_uuid, sub_link, trans['plan_id'])
         cursor.execute(
             "INSERT INTO sales_log (user_id, plan_id, price, sale_date) VALUES (?, ?, ?, ?)",
             (trans['user_id'], trans['plan_id'], trans['amount'], now_str)
@@ -383,7 +394,7 @@ def finalize_renewal_transaction(transaction_id: int, new_plan_id: int):
         trans = cursor.fetchone()
         if not trans: raise ValueError("Renewal transaction not found or not pending.")
         cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (trans['amount'], trans['user_id']))
-        cursor.execute("UPDATE active_services SET plan_id = ?, low_usage_alert_sent = 0 WHERE service_id = ?", (new_plan_id, trans['service_id']))
+        update_service_after_renewal(trans['service_id'], new_plan_id)
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute("INSERT INTO sales_log (user_id, plan_id, price, sale_date) VALUES (?, ?, ?, ?)", (trans['user_id'], trans['plan_id'], trans['amount'], now_str))
         cursor.execute("UPDATE transactions SET status = 'completed', updated_at = ? WHERE transaction_id = ?", (now_str, transaction_id))
@@ -453,7 +464,7 @@ def get_sales_report(days=1) -> list:
     cursor.execute("SELECT * FROM sales_log WHERE sale_date >= ?", (start_date,))
     sales = cursor.fetchall()
     return [dict(sale) for sale in sales]
-    
+
 def get_sales_by_period(start_date: str, end_date: str) -> list:
     conn = _connect_db()
     cursor = conn.cursor()
@@ -496,7 +507,7 @@ def get_most_profitable_plans(limit=5) -> list:
     cursor = conn.cursor()
     cursor.execute(query, (limit,))
     return [dict(row) for row in cursor.fetchall()]
-    
+
 def get_user_sales_history(user_id: int) -> list:
     query = """
         SELECT s.sale_date, s.price, p.name as plan_name 
