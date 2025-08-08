@@ -39,9 +39,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles /start. Differentiates between admin and regular user."""
     user = update.effective_user
     user_id = user.id
-    logger.info(f"User {user.first_name} ({user_id}) started the bot.")
 
-    is_admin = (user_id == ADMIN_ID)
+    # --- FIX: Added detailed logging for debugging the admin check ---
+    logger.info("--- ADMIN CHECK ---")
+    logger.info(f"User ID from Telegram: {user_id} (Type: {type(user_id)})")
+    logger.info(f"Admin ID from config.py: {ADMIN_ID} (Type: {type(ADMIN_ID)})")
+
+    # --- FIX: Forcing both IDs to be integers before comparison for robustness ---
+    try:
+        is_admin = (int(user_id) == int(ADMIN_ID))
+    except (ValueError, TypeError):
+        is_admin = False # If conversion fails, they are not admin.
+    
+    logger.info(f"Comparison result (is_admin): {is_admin}")
+    logger.info("-------------------")
     
     reply_text = f"سلام {user.mention_html()}! به ربات فروش هیدیفای خوش آمدید."
     if is_admin:
@@ -77,9 +88,10 @@ async def handle_wallet_amount(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         amount = int(update.message.text)
         if amount <= 0: raise ValueError
+        is_admin = (int(update.effective_user.id) == int(ADMIN_ID))
         await update.message.reply_text(
             f"درخواست افزایش موجودی به مبلغ {amount} تومان ثبت شد. (منطق پرداخت پیاده‌سازی نشده)",
-            reply_markup=create_main_menu_keyboard(is_admin=(update.effective_user.id == ADMIN_ID))
+            reply_markup=create_main_menu_keyboard(is_admin=is_admin)
         )
         return SELECTING_ACTION
     except (ValueError, TypeError):
@@ -93,8 +105,7 @@ async def handle_wallet_amount(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Shows the admin-specific menu."""
-    if update.effective_user.id != ADMIN_ID:
-        # Security check: if a non-admin somehow triggers this, ignore it.
+    if int(update.effective_user.id) != int(ADMIN_ID):
         return SELECTING_ACTION
 
     await update.message.reply_text(
@@ -112,7 +123,7 @@ async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def unhandled_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles any text that doesn't match a specific command or button."""
-    is_admin = (update.effective_user.id == ADMIN_ID)
+    is_admin = (int(update.effective_user.id) == int(ADMIN_ID))
     await update.message.reply_text(
         "دستور شما شناسایی نشد. لطفا از دکمه‌های منو استفاده کنید.",
         reply_markup=create_main_menu_keyboard(is_admin=is_admin)
@@ -132,21 +143,18 @@ def main() -> None:
             SELECTING_ACTION: [
                 MessageHandler(filters.Regex(f"^{BUTTON_TEXTS['services']}$"), show_services),
                 MessageHandler(filters.Regex(f"^{BUTTON_TEXTS['wallet']}$"), show_wallet),
-                # Admin can switch to admin panel from the user menu
                 MessageHandler(filters.Regex(f"^{BUTTON_TEXTS['admin_panel']}$"), show_admin_panel),
             ],
             TYPING_WALLET_AMOUNT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_wallet_amount),
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{BUTTON_TEXTS['back']}$"), handle_wallet_amount),
             ],
             SELECTING_ADMIN_ACTION: [
                 MessageHandler(filters.Regex(f"^{BUTTON_TEXTS['broadcast']}$"), admin_broadcast),
-                # This button takes the admin back to the user menu
                 MessageHandler(filters.Regex(f"^{BUTTON_TEXTS['back_to_user_menu']}$"), start),
             ]
         },
         fallbacks=[
             CommandHandler("start", start),
-            # The 'Back' button in user sub-menus will trigger the start function
             MessageHandler(filters.Regex(f"^{BUTTON_TEXTS['back']}$"), start),
         ],
         conversation_timeout=600
