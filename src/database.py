@@ -124,6 +124,7 @@ def init_db():
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_number', '0000-0000-0000-0000'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_holder', 'نام صاحب حساب'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('referral_bonus_amount', '5000'))
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('recommended_link_type', 'auto'))
 
     conn.commit()
     logger.info("Database initialized successfully.")
@@ -282,10 +283,6 @@ def get_service(service_id: int) -> dict:
     return dict(service) if service else None
 
 def get_service_by_uuid(uuid: str) -> dict:
-    """
-    Retrieves a service from the database by its subscription UUID.
-    This is the only new function added.
-    """
     conn = _connect_db()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM active_services WHERE sub_uuid = ?", (uuid,))
@@ -494,13 +491,13 @@ def get_top_customers(limit=10) -> list:
     cursor.execute(query, (limit,))
     return [dict(row) for row in cursor.fetchall()]
 
-def get_most_profitable_plans(limit=5) -> list:
+def get_popular_plans(limit=5) -> list:
     query = """
-        SELECT p.name, SUM(s.price) as total_revenue
+        SELECT p.name, count(s.sale_id) as sales_count
         FROM sales_log s
         JOIN plans p ON s.plan_id = p.plan_id
         GROUP BY s.plan_id
-        ORDER BY total_revenue DESC
+        ORDER BY sales_count DESC
         LIMIT ?
     """
     conn = _connect_db()
@@ -534,6 +531,6 @@ def get_user_purchase_stats(user_id: int) -> dict:
     cursor.execute(query, (user_id,))
     stats = cursor.fetchone()
     return {
-        'total_purchases': stats['total_purchases'] if stats else 0,
+        'total_purchases': stats['total_purchases'] if stats and stats['total_purchases'] else 0,
         'total_spent': stats['total_spent'] if stats and stats['total_spent'] else 0.0
     }
