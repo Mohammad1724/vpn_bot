@@ -346,16 +346,18 @@ def finalize_purchase_transaction(transaction_id: int, sub_uuid: str, sub_link: 
         if not trans: raise ValueError("Transaction not found or not pending.")
         cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (trans['amount'], trans['user_id']))
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        add_active_service(trans['user_id'], custom_name, sub_uuid, sub_link, trans['plan_id'])
+        service = add_active_service(trans['user_id'], custom_name, sub_uuid, sub_link, trans['plan_id'])
         cursor.execute(
             "INSERT INTO sales_log (user_id, plan_id, price, sale_date) VALUES (?, ?, ?, ?)",
             (trans['user_id'], trans['plan_id'], trans['amount'], now_str)
         )
         cursor.execute("UPDATE transactions SET status = 'completed', updated_at = ? WHERE transaction_id = ?", (now_str, transaction_id))
         conn.commit()
+        return service
     except Exception as e:
         logger.error(f"Error finalizing purchase {transaction_id}: {e}")
         conn.rollback()
+        return None
 
 def cancel_purchase_transaction(transaction_id: int):
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
