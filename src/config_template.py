@@ -37,5 +37,4 @@ EXPIRY_REMINDER_DAYS = 3
 USAGE_ALERT_THRESHOLD = 0.8
 
 # --- Force Join Channel Settings ---
-# Example: ["@MyChannel1", "@MyChannel2"]
-FORCE_JOIN_CHANNELS = ["@HogoBot"] 
+FORCE_JOIN_CHANNELS = []
