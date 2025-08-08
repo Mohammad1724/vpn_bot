@@ -32,7 +32,7 @@ apt-get update > /dev/null 2>&1
 apt-get install -y python3 python3-pip python3-venv curl git > /dev/null 2>&1
 
 # 3. Get repository and installation directory
-GITHUB_REPO="https://github.com/Mohammad1724/vpn_bot.git" # <<< Assumed repo, change if needed
+GITHUB_REPO="https://github.com/Mohammad1724/vpn_bot.git" # Assumed repo, change if needed
 DEFAULT_INSTALL_DIR="/opt/vpn-bot"
 
 read -p "Enter the installation directory [${DEFAULT_INSTALL_DIR}]: " INSTALL_DIR
@@ -40,7 +40,6 @@ INSTALL_DIR=${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}
 
 if [ -d "$INSTALL_DIR" ]; then
     print_color "yellow" "An existing installation was found. It will be removed for a clean setup."
-    # Stop the service before removing files to prevent issues
     systemctl stop vpn_bot.service || true
     rm -rf "$INSTALL_DIR"
 fi
@@ -54,13 +53,11 @@ if [ $? -ne 0 ]; then
 fi
 cd "$INSTALL_DIR"
 
-# 5. Set up Python environment and install packages from requirements.txt
+# 5. Set up Python environment
 print_color "yellow" "Setting up Python virtual environment and installing required packages..."
 python3 -m venv venv
-# Activate venv for this script's context to ensure pip commands run inside it
 source venv/bin/activate
 pip install --upgrade pip > /dev/null 2>&1
-# Ensure requirements.txt exists
 if [ ! -f "requirements.txt" ]; then
     print_color "red" "Error: 'requirements.txt' not found in the repository root."
     exit 1
@@ -71,14 +68,13 @@ deactivate
 # 6. Create and configure config.py
 print_color "blue" "--- Bot Configuration ---"
 CONFIG_FILE="src/config.py"
-# Check if the template file exists before copying
 if [ ! -f "src/config_template.py" ]; then
     print_color "red" "Error: 'src/config_template.py' not found in the repository."
     exit 1
 fi
 cp src/config_template.py "$CONFIG_FILE"
 
-# --- Collect user input ---
+# --- Collect user input for main settings ---
 read -p "Enter your Telegram Bot Token: " BOT_TOKEN
 read -p "Enter your numeric Telegram Admin ID: " ADMIN_ID
 read -p "Enter your Hiddify panel domain (e.g., mypanel.com): " PANEL_DOMAIN
@@ -92,19 +88,16 @@ read -p "Subscription Domains: " SUB_DOMAINS_INPUT
 
 PYTHON_LIST_FORMAT="[]"
 if [ -n "$SUB_DOMAINS_INPUT" ]; then
-    # Improved sed command to handle special characters in domains
     PYTHON_LIST_FORMAT="[\"$(echo "$SUB_DOMAINS_INPUT" | sed 's/,/\", \"/g')\"]"
 fi
 
+# --- Collect input for features ---
 print_color "blue" "\n--- Free Trial Configuration ---"
-read -p "Do you want to enable the free trial service? [Y/n]: " ENABLE_TRIAL
-ENABLE_TRIAL=${ENABLE_TRIAL:-Y}
-
+read -p "Enable the free trial service? [Y/n]: " ENABLE_TRIAL
 TRIAL_ENABLED_VAL="False"
 TRIAL_DAYS_VAL=0
 TRIAL_GB_VAL=0
-
-if [[ "$ENABLE_TRIAL" =~ ^[Yy]$ ]]; then
+if [[ "${ENABLE_TRIAL:-Y}" =~ ^[Yy]$ ]]; then
     TRIAL_ENABLED_VAL="True"
     read -p "Enter trial duration in days [1]: " TRIAL_DAYS_INPUT
     TRIAL_DAYS_VAL=${TRIAL_DAYS_INPUT:-1}
@@ -112,19 +105,33 @@ if [[ "$ENABLE_TRIAL" =~ ^[Yy]$ ]]; then
     TRIAL_GB_VAL=${TRIAL_GB_INPUT:-1}
 fi
 
+print_color "blue" "\n--- New Features Configuration ---"
+read -p "Enter the referral bonus amount in Toman [5000]: " REFERRAL_BONUS_INPUT
+REFERRAL_BONUS_AMOUNT=${REFERRAL_BONUS_INPUT:-5000}
+
+read -p "Send expiry reminder how many days before expiry? [3]: " EXPIRY_REMINDER_INPUT
+EXPIRY_REMINDER_DAYS=${EXPIRY_REMINDER_INPUT:-3}
+
+read -p "Send low usage warning at what percentage? (e.g., 80 for 80%) [80]: " USAGE_THRESHOLD_INPUT
+USAGE_ALERT_THRESHOLD_PERCENT=${USAGE_THRESHOLD_INPUT:-80}
+# Convert percentage to decimal for the script
+USAGE_ALERT_THRESHOLD=$(awk "BEGIN {print ${USAGE_ALERT_THRESHOLD_PERCENT}/100}")
+
 # --- Use sed to replace placeholders in config.py ---
-# Using a different delimiter for sed to avoid issues with special characters in inputs
 sed -i "s|^BOT_TOKEN = .*|BOT_TOKEN = \"${BOT_TOKEN}\"|" "$CONFIG_FILE"
 sed -i "s|^ADMIN_ID = .*|ADMIN_ID = ${ADMIN_ID}|" "$CONFIG_FILE"
+sed -i "s|^SUPPORT_USERNAME = .*|SUPPORT_USERNAME = \"${SUPPORT_USERNAME}\"|" "$CONFIG_FILE"
 sed -i "s|^PANEL_DOMAIN = .*|PANEL_DOMAIN = \"${PANEL_DOMAIN}\"|" "$CONFIG_FILE"
 sed -i "s|^ADMIN_PATH = .*|ADMIN_PATH = \"${ADMIN_PATH}\"|" "$CONFIG_FILE"
 sed -i "s|^SUB_PATH = .*|SUB_PATH = \"${SUB_PATH}\"|" "$CONFIG_FILE"
 sed -i "s|^API_KEY = .*|API_KEY = \"${API_KEY}\"|" "$CONFIG_FILE"
-sed -i "s|^SUPPORT_USERNAME = .*|SUPPORT_USERNAME = \"${SUPPORT_USERNAME}\"|" "$CONFIG_FILE"
 sed -i "s|^SUB_DOMAINS = .*|SUB_DOMAINS = ${PYTHON_LIST_FORMAT}|" "$CONFIG_FILE"
 sed -i "s|^TRIAL_ENABLED = .*|TRIAL_ENABLED = ${TRIAL_ENABLED_VAL}|" "$CONFIG_FILE"
 sed -i "s|^TRIAL_DAYS = .*|TRIAL_DAYS = ${TRIAL_DAYS_VAL}|" "$CONFIG_FILE"
 sed -i "s|^TRIAL_GB = .*|TRIAL_GB = ${TRIAL_GB_VAL}|" "$CONFIG_FILE"
+sed -i "s|^REFERRAL_BONUS_AMOUNT = .*|REFERRAL_BONUS_AMOUNT = ${REFERRAL_BONUS_AMOUNT}|" "$CONFIG_FILE"
+sed -i "s|^EXPIRY_REMINDER_DAYS = .*|EXPIRY_REMINDER_DAYS = ${EXPIRY_REMINDER_DAYS}|" "$CONFIG_FILE"
+sed -i "s|^USAGE_ALERT_THRESHOLD = .*|USAGE_ALERT_THRESHOLD = ${USAGE_ALERT_THRESHOLD}|" "$CONFIG_FILE"
 
 print_color "green" "Configuration file created successfully."
 
