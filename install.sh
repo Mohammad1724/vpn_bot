@@ -85,9 +85,9 @@ function install_bot() {
     print_color "C_GREEN" "Python environment is ready."
 
     # 4. Create configuration file
-    print_color "C_YELLOW" "[4/6] Creating configuration file (src/config.py)..."
-    CONFIG_FILE="src/config.py"
-    cp src/config_template.py "$CONFIG_FILE"
+    print_color "C_YELLOW" "[4/6] Creating configuration file (config.py)..."
+    CONFIG_FILE="config.py" # <--- FIX: Removed "src/"
+    cp config_template.py "$CONFIG_FILE" # <--- FIX: Removed "src/"
 
     print_color "C_BLUE" "Please provide the following details to configure the bot:"
     read -p "Enter your Telegram Bot Token: " BOT_TOKEN
@@ -122,7 +122,7 @@ After=network.target
 [Service]
 User=root
 Group=root
-WorkingDirectory=${INSTALL_DIR}/src
+WorkingDirectory=${INSTALL_DIR}
 ExecStart=${INSTALL_DIR}/venv/bin/python main.py
 Restart=always
 RestartSec=10
@@ -132,6 +132,9 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 EOL
+# <--- FIX: Changed WorkingDirectory from ${INSTALL_DIR}/src to ${INSTALL_DIR}
+# <--- FIX: Changed ExecStart to run main.py from the root of the project.
+    
     print_color "C_GREEN" "Service file created at $SERVICE_FILE."
 
     # 6. Enable and start the service
