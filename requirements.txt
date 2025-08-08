@@ -1,14 +1,4 @@
-# Telegram Bot Library (version locked for stability)
-# [job-queue] is included for background tasks like usage checks.
-python-telegram-bot[job-queue]~=21.0
-
-# Modern asynchronous HTTP client for API calls to Hiddify Panel.
-# [http2] is recommended for better performance.
-httpx[http2]~=0.27.0
-
-# For generating QR Codes.
-# [pil] ensures that Pillow, the image library, is also installed.
-qrcode[pil]~=7.4.2
-
-# For converting Gregorian dates to Shamsi (Jalali) format.
-jdatetime~=4.1.1
+python-telegram-bot[persistence]==21.0.1
+jdatetime
+qrcode[pil]
+aiosqlite
