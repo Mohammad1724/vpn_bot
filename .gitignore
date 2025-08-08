@@ -1,22 +1,31 @@
-# Python cache
-__pycache__/
-*.pyc
-*.pyo
-
-# Virtual environment
+# Python virtual environment
 venv/
+/venv/
 .venv/
+*/venv/
+env/
+/env/
+.env/
+*/env/
 
-# Sensitive user-specific files
-src/config.py
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
 
-# Database files
-*.db
-*.db-journal
-*.sqlite3
+# IDE and editor directories
+.idea/
+.vscode/
+*.swp
 
-# Log files
+# Bot specific files (IMPORTANT)
+bot_database.db
+bot_database.db-journal
+bot_persistence
+bot.log
 *.log
-
-# Backup files
 backups/
+
+# OS-specific files
+.DS_Store
+Thumbs.db
