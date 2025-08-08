@@ -499,11 +499,9 @@ async def back_to_services_callback(update: Update, context: ContextTypes.DEFAUL
     query = update.callback_query
     await query.answer()
     
-    # We send a new message because the old one might be a photo
     await query.message.delete()
     new_msg = await query.from_user.send_message("بازگشت به لیست سرویس‌ها...")
     
-    # Create a new fake update object to pass to list_my_services
     from unittest.mock import Mock
     mock_query = Mock()
     mock_query.message = new_msg
@@ -646,8 +644,9 @@ async def show_referral_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
     bot_username = (await context.bot.get_me()).username
     referral_link = f"https://t.me/{bot_username}?start=ref_{user_id}"
     
-    bonus = REFERRAL_BONUS_AMOUNT
-    
+    bonus_str = db.get_setting('referral_bonus_amount') or REFERRAL_BONUS_AMOUNT
+    bonus = float(bonus_str)
+
     text = (
         f"🎁 **دوستان خود را دعوت کنید و هدیه بگیرید!**\n\n"
         f"با این لینک منحصر به فرد, دوستان خود را به ربات دعوت کنید.\n\n"
@@ -668,20 +667,17 @@ async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if result and result.get('uuid'):
         db.set_user_trial_used(user_id)
         service = db.add_active_service(user_id, "سرویس تست", result['uuid'], result['full_link'], 0)
-        await msg_loading.delete()
         
-        # After creating a trial service, show the management menu directly
         from unittest.mock import Mock
         mock_query = Mock()
         mock_query.data = f"show_service_management_{service['service_id']}"
-        mock_query.message = msg_loading # Pass a message object that can be edited
-        mock_query.from_user = update.effective_user
+        mock_query.message = msg_loading
         mock_query.answer = asyncio.coroutine(lambda: None)
         mock_update = Mock(callback_query=mock_query, effective_user=update.effective_user)
         
         await show_service_management_menu(mock_update, context)
-
-    else: await msg_loading.edit_text("❌ متاسفانه در ساخت سرویس تست مشکلی پیش آمد. لطفا بعداً تلاش کنید.")
+    else: 
+        await msg_loading.edit_text("❌ متاسفانه در ساخت سرویس تست مشکلی پیش آمد. لطفا بعداً تلاش کنید.")
 
 # --- Gift Code Conversation ---
 @check_channel_membership
@@ -776,7 +772,7 @@ async def create_service_after_name(message: Update.message, context: ContextTyp
     if not all([plan_id, transaction_id]):
         await message.reply_text("خطای داخلی رخ داده است. لطفا مجددا تلاش کنید.", reply_markup=get_main_menu_keyboard(user_id))
         context.user_data.clear()
-        return
+        return ConversationHandler.END
         
     plan = db.get_plan(plan_id)
     custom_name = custom_name_input if custom_name_input else f"سرویس {plan['gb']} گیگ"
@@ -807,11 +803,12 @@ async def create_service_after_name(message: Update.message, context: ContextTyp
         except BadRequest as e:
             logger.warning(f"Could not delete 'loading' message: {e}")
             
-        # Show the management menu directly after purchase
         from unittest.mock import Mock
+        new_msg = await message.chat.send_message("سرویس شما با موفقیت ساخته شد. در حال نمایش منوی مدیریت...")
+        
         mock_query = Mock()
         mock_query.data = f"show_service_management_{service['service_id']}"
-        mock_query.message = msg_loading # Pass a message object that can be edited
+        mock_query.message = new_msg
         mock_query.from_user = message.from_user
         mock_query.answer = asyncio.coroutine(lambda: None)
         mock_update = Mock(callback_query=mock_query, effective_user=message.from_user)
