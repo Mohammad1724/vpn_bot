@@ -77,12 +77,13 @@ function install_bot() {
     # 3. Set up Python virtual environment
     print_color "C_YELLOW" "[3/6] Setting up Python virtual environment..."
     python3 -m venv venv
-    print_color "C_YELLOW" "Installing Python dependencies from requirements.txt..."
+    print_color "C_YELLOW" "Installing Python dependencies from requirements.txt... (Displaying logs for debugging)"
     source venv/bin/activate
-    pip install --upgrade pip > /dev/null 2>&1
-    pip install -r requirements.txt > /dev/null 2>&1
+    # --- FIX: Removed output redirection to see potential errors ---
+    pip install --upgrade pip
+    pip install -r requirements.txt
     deactivate
-    print_color "C_GREEN" "Python environment is ready."
+    print_color "C_GREEN" "Python environment setup complete."
 
     # 4. Gather configuration details
     CONFIG_FILE="config.py"
@@ -116,7 +117,7 @@ function install_bot() {
     read -p "Send expiry reminder how many days before expiration? (Default: 3): " -e -i "3" EXPIRY_REMINDER_DAYS
     read -p "Send usage limit reminder at what percentage? (e.g., 80 for 80%. Default: 80): " -e -i "80" USAGE_LIMIT_REMINDER_PERCENT
 
-    # Create the config.py file from scratch using a heredoc for reliability
+    # Create the config.py file from scratch
     print_color "C_YELLOW" "[4/6] Creating configuration file (config.py)..."
     
     if [ -n "$SUB_DOMAINS_INPUT" ]; then
@@ -128,33 +129,17 @@ function install_bot() {
 
     cat > "$CONFIG_FILE" << EOL
 # -*- coding: utf-8 -*-
-
-# ===============================================================
-# TELEGRAM BOT CONFIGURATION
-# ===============================================================
 BOT_TOKEN = "${BOT_TOKEN}"
 ADMIN_ID = ${ADMIN_ID}
 SUPPORT_USERNAME = "${SUPPORT_USERNAME}"
-
-# ===============================================================
-# HIDDIFY PANEL CONFIGURATION
-# ===============================================================
 PANEL_DOMAIN = "${PANEL_DOMAIN}"
 ADMIN_PATH = "${ADMIN_PATH}"
 SUB_PATH = "${SUB_PATH}"
 API_KEY = "${API_KEY}"
 ${SUB_DOMAINS_LINE}
-
-# ===============================================================
-# FREE TRIAL SERVICE CONFIGURATION
-# ===============================================================
 TRIAL_ENABLED = ${TRIAL_ENABLED_VAL}
 TRIAL_DAYS = ${TRIAL_DAYS}
 TRIAL_GB = ${TRIAL_GB}
-
-# ===============================================================
-# REFERRAL & REMINDER CONFIGURATION
-# ===============================================================
 REFERRAL_BONUS_AMOUNT = ${REFERRAL_BONUS_AMOUNT}
 EXPIRY_REMINDER_DAYS = ${EXPIRY_REMINDER_DAYS}
 USAGE_LIMIT_REMINDER_PERCENT = ${USAGE_LIMIT_REMINDER_PERCENT}
@@ -276,7 +261,7 @@ function uninstall_bot() {
 function uninstall_bot_silent() {
     print_color "C_YELLOW" "Stopping and disabling service..."
     systemctl stop "$SERVICE_NAME" &>/dev/null || true
-    systemctl disable "$SERVICE_NAME" &>/dev/null || true # <--- FIX: Corrected typo from /_dev/null
+    systemctl disable "$SERVICE_NAME" &>/dev/null || true
     
     print_color "C_YELLOW" "Removing service file..."
     rm -f "$SERVICE_FILE"
