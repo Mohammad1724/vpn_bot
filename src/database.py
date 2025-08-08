@@ -510,3 +510,19 @@ def get_user_sales_history(user_id: int) -> list:
     cursor.execute(query, (user_id,))
     history = cursor.fetchall()
     return [dict(row) for row in history]
+
+def get_user_purchase_stats(user_id: int) -> dict:
+    """Calculates total purchases and spending for a specific user."""
+    query = """
+        SELECT COUNT(sale_id) as total_purchases, SUM(price) as total_spent
+        FROM sales_log
+        WHERE user_id = ?
+    """
+    conn = _connect_db()
+    cursor = conn.cursor()
+    cursor.execute(query, (user_id,))
+    stats = cursor.fetchone()
+    return {
+        'total_purchases': stats['total_purchases'] if stats else 0,
+        'total_spent': stats['total_spent'] if stats and stats['total_spent'] else 0.0
+    }
