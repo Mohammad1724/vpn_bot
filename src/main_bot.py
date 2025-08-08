@@ -790,7 +790,6 @@ async def create_service_after_name(message: Update.message, context: ContextTyp
 # ====================================================================
 # ADMIN SECTION
 # ====================================================================
-# ... (All other admin functions are here unchanged, only settings_menu is modified)
 async def admin_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👑 به پنل ادمین خوش آمدید.", reply_markup=get_admin_menu_keyboard())
     return ADMIN_MENU
@@ -804,63 +803,120 @@ async def back_to_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text("به منوی اصلی ادمین بازگشتید.", reply_markup=get_admin_menu_keyboard())
     return ADMIN_MENU
 
-async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    card_number = db.get_setting('card_number') or "تنظیم نشده"
-    card_holder = db.get_setting('card_holder') or "تنظیم نشده"
-    text = (f"⚙️ **تنظیمات ربات**\n\n"
-            f"شماره کارت فعلی: `{card_number}`\n"
-            f"صاحب حساب فعلی: `{card_holder}`\n\n"
-            "برای تغییر هر مورد روی دکمه مربوطه کلیک کنید.")
-    keyboard = [
-        [InlineKeyboardButton("ویرایش شماره کارت", callback_data="admin_edit_setting_card_number"),
-         InlineKeyboardButton("ویرایش نام صاحب حساب", callback_data="admin_edit_setting_card_holder")],
-        [InlineKeyboardButton("🔧 تنظیمات لینک پیشنهادی", callback_data="admin_link_settings")]
-    ]
-    
-    # Check if called from callback or message
-    if update.callback_query:
-        await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
-    else:
-        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
-        
-    return ADMIN_MENU
-
-async def admin_link_settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin_delete_plan_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    plan_id = int(query.data.split('_')[-1])
+    db.delete_plan(plan_id)
+    await query.message.delete()
+    await query.from_user.send_message("پلن با موفقیت حذف شد.")
+    return PLAN_MENU
 
-    recommended_type = db.get_setting('recommended_link_type') or 'auto'
-    
-    def get_check(link_type):
-        return "✅ " if recommended_type == link_type else ""
-
-    keyboard = [
-        [InlineKeyboardButton(f"{get_check('auto')}لینک هوشمند (Auto)", callback_data="set_rec_link_auto")],
-        [InlineKeyboardButton(f"{get_check('sub')}لینک استاندارد (Sub)", callback_data="set_rec_link_sub")],
-        [InlineKeyboardButton(f"{get_check('clash')}لینک Clash", callback_data="set_rec_link_clash")],
-        [InlineKeyboardButton(f"{get_check('clashmeta')}لینک Clash Meta", callback_data="set_rec_link_clashmeta")],
-        [InlineKeyboardButton(f"{get_check('xray')}لینک Xray", callback_data="set_rec_link_xray")],
-        [InlineKeyboardButton("⬅️ بازگشت به تنظیمات", callback_data="back_to_settings")]
-    ]
-    
-    await query.edit_message_text(
-        "لطفاً نوع لینکی که می‌خواهید به کاربران پیشنهاد شود را انتخاب کنید:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-async def set_recommended_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin_toggle_plan_visibility_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    link_type = query.data.split('_')[-1]
-    
-    db.set_setting('recommended_link_type', link_type)
-    await query.answer(f"لینک {link_type.capitalize()} به عنوان پیشنهاد انتخاب شد.", show_alert=True)
-    
-    await admin_link_settings_menu(update, context)
+    plan_id = int(query.data.split('_')[-1])
+    db.toggle_plan_visibility(plan_id)
+    await query.answer("وضعیت نمایش پلن تغییر کرد.")
+    await query.message.delete()
+    await query.from_user.send_message("وضعیت نمایش پلن تغییر کرد. برای دیدن تغییرات، لیست را مجددا باز کنید.")
+    return PLAN_MENU
 
-async def back_to_settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin_confirm_charge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await settings_menu(query, context)
+    
+    prefix = "admin_confirm_charge_"
+    try:
+        data_part = query.data[len(prefix):]
+        user_id_str, amount_str = data_part.split('_', 1)
+        target_user_id = int(user_id_str)
+        amount = int(float(amount_str))
+    except (ValueError, IndexError) as e:
+        logger.error(f"Error parsing admin_confirm_charge_callback data: {query.data} | Error: {e}")
+        try:
+            if query.message.photo:
+                await query.edit_message_caption(caption=f"{query.message.caption}\n\n---\n❌ خطا در پردازش اطلاعات دکمه.")
+            else:
+                await query.edit_message_text("❌ خطا در پردازش اطلاعات دکمه.")
+        except Exception as edit_error:
+            logger.error(f"Fallback error message failed to send: {edit_error}")
+        return
+
+    db.update_balance(target_user_id, amount)
+    original_caption = query.message.caption or ""
+    admin_feedback = f"{original_caption}\n\n---\n✅ با موفقیت مبلغ {amount:,} تومان به حساب کاربر `{target_user_id}` اضافه شد."
+    
+    try:
+        await context.bot.send_message(
+            chat_id=target_user_id, 
+            text=f"حساب شما با موفقیت به مبلغ **{amount:,} تومان** شارژ شد!", 
+            parse_mode=ParseMode.MARKDOWN
+        )
+    except (Forbidden, BadRequest):
+        admin_feedback += "\n\n⚠️ **اخطار:** کاربر ربات را بلاک کرده و پیام تایید را دریافت نکرد."
+    
+    try:
+        await query.edit_message_caption(caption=admin_feedback, reply_markup=None, parse_mode=ParseMode.MARKDOWN)
+    except Exception as e:
+        logger.error(f"edit_message_caption failed: {e}. Sending new message as fallback.")
+        await context.bot.send_message(chat_id=ADMIN_ID, text=admin_feedback, parse_mode=ParseMode.MARKDOWN)
+
+async def admin_reject_charge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    try:
+        target_user_id = int(query.data.split('_')[-1])
+    except (ValueError, IndexError) as e:
+        logger.error(f"Error parsing admin_reject_charge_callback data: {query.data} | Error: {e}")
+        try:
+            if query.message.photo:
+                await query.edit_message_caption(caption=f"{query.message.caption}\n\n---\n❌ خطا در پردازش اطلاعات دکمه.")
+            else:
+                await query.edit_message_text("❌ خطا در پردازش اطلاعات دکمه.")
+        except Exception as edit_error:
+            logger.error(f"Fallback error message failed to send: {edit_error}")
+        return
+
+    original_caption = query.message.caption or ""
+    admin_feedback = f"{original_caption}\n\n---\n❌ درخواست شارژ کاربر `{target_user_id}` رد شد."
+    
+    try: 
+        await context.bot.send_message(chat_id=target_user_id, text="متاسفانه درخواست شارژ حساب شما توسط ادمین رد شد.")
+    except (Forbidden, BadRequest): 
+        admin_feedback += "\n\n⚠️ **اخطار:** کاربر ربات را بلاک کرده است."
+    
+    try:
+        await query.edit_message_caption(caption=admin_feedback, reply_markup=None, parse_mode=ParseMode.MARKDOWN)
+    except Exception as e:
+        logger.error(f"edit_message_caption failed: {e}. Sending new message as fallback.")
+        await context.bot.send_message(chat_id=ADMIN_ID, text=admin_feedback, parse_mode=ParseMode.MARKDOWN)
+
+async def admin_confirm_restore_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    restore_path = context.user_data.get('restore_path')
+    if not restore_path or not os.path.exists(restore_path): 
+        await query.edit_message_text("خطا: فایل پشتیبان یافت نشد."); 
+        return BACKUP_MENU
+    try:
+        db.close_db()
+        shutil.move(restore_path, db.DB_NAME)
+        db.init_db()
+        await query.edit_message_text("✅ دیتابیس با موفقیت بازیابی شد.\n\n**مهم:** برای اعمال کامل تغییرات، لطفاً ربات را ری‌استارت کنید.", parse_mode=ParseMode.MARKDOWN)
+    except Exception as e:
+        logger.error(f"Error during DB restore: {e}", exc_info=True)
+        await query.edit_message_text(f"خطا در هنگام جایگزینی فایل دیتابیس: {e}")
+    context.user_data.clear()
+    return BACKUP_MENU
+
+async def admin_cancel_restore_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    restore_path = context.user_data.get('restore_path')
+    if restore_path and os.path.exists(restore_path): os.remove(restore_path)
+    await query.edit_message_text("عملیات بازیابی لغو شد.")
+    context.user_data.clear()
+    return BACKUP_MENU
 
 async def plan_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [["➕ افزودن پلن جدید", "📋 لیست پلن‌ها"], [BTN_BACK_TO_ADMIN_MENU]]
@@ -1002,6 +1058,63 @@ async def show_popular_plans_report(update: Update, context: ContextTypes.DEFAUL
     if not plans: await update.message.reply_text("هنوز هیچ پلنی فروخته نشده است."); return REPORTS_MENU
     text = "🏆 **محبوب‌ترین پلن‌ها**\n\n" + "\n".join([f"{i}. **{plan['name']}** - {plan['sales_count']} بار فروش" for i, plan in enumerate(plans, 1)])
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN); return REPORTS_MENU
+
+async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    card_number = db.get_setting('card_number') or "تنظیم نشده"
+    card_holder = db.get_setting('card_holder') or "تنظیم نشده"
+    text = (f"⚙️ **تنظیمات ربات**\n\n"
+            f"شماره کارت فعلی: `{card_number}`\n"
+            f"صاحب حساب فعلی: `{card_holder}`\n\n"
+            "برای تغییر هر مورد روی دکمه مربوطه کلیک کنید.")
+    keyboard = [
+        [InlineKeyboardButton("ویرایش شماره کارت", callback_data="admin_edit_setting_card_number"),
+         InlineKeyboardButton("ویرایش نام صاحب حساب", callback_data="admin_edit_setting_card_holder")],
+        [InlineKeyboardButton("🔧 تنظیمات لینک پیشنهادی", callback_data="admin_link_settings")]
+    ]
+    
+    if update.callback_query:
+        await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+    else:
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+        
+    return ADMIN_MENU
+
+async def admin_link_settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    recommended_type = db.get_setting('recommended_link_type') or 'auto'
+    
+    def get_check(link_type):
+        return "✅ " if recommended_type == link_type else ""
+
+    keyboard = [
+        [InlineKeyboardButton(f"{get_check('auto')}لینک هوشمند (Auto)", callback_data="set_rec_link_auto")],
+        [InlineKeyboardButton(f"{get_check('sub')}لینک استاندارد (Sub)", callback_data="set_rec_link_sub")],
+        [InlineKeyboardButton(f"{get_check('clash')}لینک Clash", callback_data="set_rec_link_clash")],
+        [InlineKeyboardButton(f"{get_check('clashmeta')}لینک Clash Meta", callback_data="set_rec_link_clashmeta")],
+        [InlineKeyboardButton(f"{get_check('xray')}لینک Xray", callback_data="set_rec_link_xray")],
+        [InlineKeyboardButton("⬅️ بازگشت به تنظیمات", callback_data="back_to_settings")]
+    ]
+    
+    await query.edit_message_text(
+        "لطفاً نوع لینکی که می‌خواهید به کاربران پیشنهاد شود را انتخاب کنید:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def set_recommended_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    link_type = query.data.split('_')[-1]
+    
+    db.set_setting('recommended_link_type', link_type)
+    await query.answer(f"لینک {link_type.capitalize()} به عنوان پیشنهاد انتخاب شد.", show_alert=True)
+    
+    await admin_link_settings_menu(update, context)
+
+async def back_to_settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await settings_menu(query, context)
 
 async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; await query.answer()
@@ -1302,10 +1415,8 @@ def main():
     application.add_handler(CallbackQueryHandler(check_join_callback, pattern="^check_join$"))
     application.add_handler(CallbackQueryHandler(admin_delete_plan_callback, pattern="^admin_delete_plan_"))
     application.add_handler(CallbackQueryHandler(admin_toggle_plan_visibility_callback, pattern="^admin_toggle_plan_"))
-    application.add_handler(CallbackQueryHandler(edit_plan_start, pattern="^admin_edit_plan_"))
     application.add_handler(CallbackQueryHandler(admin_confirm_restore_callback, pattern="^admin_confirm_restore$"))
     application.add_handler(CallbackQueryHandler(admin_cancel_restore_callback, pattern="^admin_cancel_restore$"))
-    
     application.add_handler(CallbackQueryHandler(admin_link_settings_menu, pattern="^admin_link_settings$"))
     application.add_handler(CallbackQueryHandler(set_recommended_link_callback, pattern="^set_rec_link_"))
     application.add_handler(CallbackQueryHandler(back_to_settings_callback, pattern="^back_to_settings$"))
@@ -1313,7 +1424,6 @@ def main():
     application.add_handler(CallbackQueryHandler(get_link_callback, pattern="^getlink_"), group=2)
     application.add_handler(CallbackQueryHandler(show_single_configs_menu, pattern="^single_configs_"), group=2)
     application.add_handler(CallbackQueryHandler(get_single_config, pattern="^get_single_"), group=2)
-    
     application.add_handler(CallbackQueryHandler(view_service_callback, pattern="^view_service_"), group=2)
     application.add_handler(CallbackQueryHandler(back_to_services_callback, pattern="^back_to_services$"), group=2)
     application.add_handler(CallbackQueryHandler(renew_service_handler, pattern="^renew_"), group=2)
