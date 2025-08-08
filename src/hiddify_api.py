@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# hiddify_api.py (بهبود یافته: HTTP/2 فعال، لاگ تمیزتر، استفاده از AsyncClient مشترک در تمدید)
+# hiddify_api.py (HTTP/2 enabled, cleaner logs, shared AsyncClient in renewal)
 
 import httpx
 import uuid
@@ -10,24 +10,17 @@ from config import PANEL_DOMAIN, ADMIN_PATH, API_KEY, SUB_DOMAINS, SUB_PATH
 
 logger = logging.getLogger(__name__)
 
-# --- Helper Functions ---
-
 def _get_base_url():
-    """Returns the base URL for the Hiddify Admin API."""
     return f"https://{PANEL_DOMAIN}/{ADMIN_PATH}/api/v2/admin/"
 
 def _get_api_headers():
-    """Returns the required headers for API requests."""
     return {
         "Hiddify-API-Key": API_KEY,
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
 
-# --- Internal Functions (for renewal) ---
-
 async def _delete_user(user_uuid: str, client: httpx.AsyncClient) -> bool:
-    """Internal function to delete a user. Returns True on success."""
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
     try:
         response = await client.delete(endpoint, headers=_get_api_headers())
@@ -36,13 +29,12 @@ async def _delete_user(user_uuid: str, client: httpx.AsyncClient) -> bool:
         return True
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 404:
-            logger.warning(f"User {user_uuid} was already deleted or not found. Proceeding with creation.")
+            logger.warning(f"User {user_uuid} not found (already deleted). Proceeding.")
             return True
         logger.error(f"Failed to delete user {user_uuid}: {e.response.status_code} - {e.response.text}")
         return False
 
 async def _recreate_user(user_uuid: str, user_name: str, plan_days: int, plan_gb: int, client: httpx.AsyncClient) -> dict:
-    """Internal function to recreate a user with the same UUID. Returns user data on success."""
     endpoint = _get_base_url() + "user/"
     payload = {
         "uuid": user_uuid,
@@ -60,10 +52,7 @@ async def _recreate_user(user_uuid: str, user_name: str, plan_days: int, plan_gb
         logger.error(f"Failed to recreate user {user_uuid}: {e.response.status_code} - {e.response.text}")
         return None
 
-# --- Public API Functions ---
-
 async def create_hiddify_user(plan_days: int, plan_gb: int, user_telegram_id: int = None, custom_name: str = "") -> dict:
-    """Creates a new user in Hiddify panel asynchronously."""
     endpoint = _get_base_url() + "user/"
     user_name = custom_name or f"tg-{user_telegram_id}-{uuid.uuid4().hex[:4]}"
     comment = f"TG ID: {user_telegram_id}" if user_telegram_id else ""
@@ -80,20 +69,18 @@ async def create_hiddify_user(plan_days: int, plan_gb: int, user_telegram_id: in
             user_data = response.json()
             user_uuid = user_data.get('uuid')
             if not user_uuid:
-                logger.error("Hiddify API create_hiddify_user did not return a UUID.")
+                logger.error("Hiddify API did not return a UUID.")
                 return None
             sub_path = SUB_PATH or ADMIN_PATH
             sub_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
             full_link = f"https://{sub_domain}/{sub_path}/{user_uuid}/"
-            logger.info(f"Successfully created Hiddify user '{user_name}' with UUID {user_uuid}")
+            logger.info(f"Created Hiddify user '{user_name}' with UUID {user_uuid}")
             return {"full_link": full_link, "uuid": user_uuid}
     except Exception as e:
-        logger.error(f"An error occurred in create_hiddify_user: {e}", exc_info=True)
+        logger.error(f"create_hiddify_user error: {e}", exc_info=True)
         return None
 
 async def get_user_info(user_uuid: str, client: httpx.AsyncClient = None) -> dict:
-    """Fetches user information from Hiddify panel asynchronously.
-       If a client is provided, it will be reused (recommended)."""
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
     local_client = None
     try:
@@ -101,40 +88,38 @@ async def get_user_info(user_uuid: str, client: httpx.AsyncClient = None) -> dic
             local_client = httpx.AsyncClient(timeout=10.0, http2=True)
         c = client or local_client
         response = await c.get(endpoint, headers=_get_api_headers())
-        logger.debug(f"Hiddify get_user_info for {user_uuid} -> {response.status_code} | {response.text[:1000]}")
+        logger.debug(f"get_user_info {user_uuid} -> {response.status_code} | {response.text[:1000]}")
         response.raise_for_status()
         return response.json()
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 404:
-            logger.warning(f"User with UUID {user_uuid} not found in Hiddify panel (404).")
+            logger.warning(f"User {user_uuid} not found (404).")
         else:
-            logger.error(f"Failed to get Hiddify info for UUID {user_uuid}: {e.response.status_code} - {e.response.text}")
+            logger.error(f"get_user_info failed for {user_uuid}: {e.response.status_code} - {e.response.text}")
         return None
     except Exception as e:
-        logger.error(f"An error occurred in get_user_info: {e}", exc_info=True)
+        logger.error(f"get_user_info error: {e}", exc_info=True)
         return None
     finally:
         if local_client is not None:
             await local_client.aclose()
 
 async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: int) -> dict:
-    """Renews a user's subscription using the delete-and-recreate strategy."""
     try:
         async with httpx.AsyncClient(timeout=30.0, http2=True) as client:
             current_info = await get_user_info(user_uuid, client=client)
             if not current_info:
-                logger.error(f"Cannot renew: User {user_uuid} does not exist. Aborting.")
+                logger.error(f"Cannot renew: user {user_uuid} does not exist.")
                 return None
             user_name = current_info.get("name", f"user-{uuid.uuid4().hex[:4]}")
-            delete_success = await _delete_user(user_uuid, client)
-            if not delete_success:
-                logger.error(f"Renewal failed at delete step for user {user_uuid}.")
+            if not await _delete_user(user_uuid, client):
+                logger.error(f"Renewal failed at delete step for {user_uuid}.")
                 return None
             recreated_user = await _recreate_user(user_uuid, user_name, plan_days, plan_gb, client)
             if not recreated_user:
-                logger.error(f"CRITICAL: Deleted user {user_uuid} but failed to recreate them!")
+                logger.error(f"Deleted {user_uuid} but failed to recreate.")
                 return None
             return recreated_user
     except Exception as e:
-        logger.error(f"An unexpected error occurred in renew_user_subscription: {e}", exc_info=True)
+        logger.error(f"renew_user_subscription error: {e}", exc_info=True)
         return None
