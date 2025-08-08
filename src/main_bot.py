@@ -58,8 +58,9 @@ CMD_SKIP = "/skip"
     MANAGE_USER_AMOUNT, GET_CUSTOM_NAME, REDEEM_GIFT, CHARGE_AMOUNT,
     CHARGE_RECEIPT, SETTINGS_MENU, BACKUP_MENU, BROADCAST_MENU, BROADCAST_MESSAGE,
     BROADCAST_CONFIRM, BROADCAST_TO_USER_ID, BROADCAST_TO_USER_MESSAGE, RESTORE_UPLOAD,
-    AWAIT_SETTING_VALUE, REPORT_CUSTOM_DATE_START, REPORT_CUSTOM_DATE_END
-) = range(30)
+    AWAIT_SETTING_VALUE, REPORT_CUSTOM_DATE_START, REPORT_CUSTOM_DATE_END,
+    EDIT_GUIDE_TEXT
+) = range(32)
 
 
 # --- Force Join Decorator ---
@@ -619,7 +620,10 @@ async def show_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @check_channel_membership
 async def show_guide(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("راهنمای اتصال به سرویس‌ها:\n\n(اینجا می‌توانید آموزش‌های لازم را قرار دهید)")
+    guide_text = db.get_setting('connection_guide_text')
+    if not guide_text:
+        guide_text = "راهنمای اتصال هنوز توسط ادمین تنظیم نشده است."
+    await update.message.reply_text(guide_text, parse_mode=ParseMode.MARKDOWN)
 
 @check_channel_membership
 async def show_referral_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -786,6 +790,7 @@ async def create_service_after_name(message: Update.message, context: ContextTyp
         
     context.user_data.clear()
     return ConversationHandler.END
+
 
 # ====================================================================
 # ADMIN SECTION
@@ -1069,7 +1074,8 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("ویرایش شماره کارت", callback_data="admin_edit_setting_card_number"),
          InlineKeyboardButton("ویرایش نام صاحب حساب", callback_data="admin_edit_setting_card_holder")],
-        [InlineKeyboardButton("🔧 تنظیمات لینک پیشنهادی", callback_data="admin_link_settings")]
+        [InlineKeyboardButton("🔧 تنظیمات لینک پیشنهادی", callback_data="admin_link_settings")],
+        [InlineKeyboardButton("📚 ویرایش راهنمای اتصال", callback_data="admin_edit_guide")]
     ]
     
     if update.callback_query:
@@ -1131,6 +1137,29 @@ async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_T
     db.set_setting(setting_key, update.message.text)
     await update.message.reply_text("✅ تنظیمات با موفقیت به‌روز شد.", reply_markup=get_admin_menu_keyboard())
     context.user_data.clear(); return ConversationHandler.END
+
+async def edit_guide_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.message.delete()
+    current_guide = db.get_setting('connection_guide_text')
+    await query.from_user.send_message(
+        f"لطفاً متن جدید برای راهنمای اتصال را ارسال کنید.\n"
+        f"شما می‌توانید از قالب‌بندی **Markdown** (مثل *bold* یا `code`) استفاده کنید.\n\n"
+        f"**راهنمای فعلی:**\n{current_guide}",
+        reply_markup=ReplyKeyboardMarkup([[CMD_CANCEL]], resize_keyboard=True),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return EDIT_GUIDE_TEXT
+
+async def edit_guide_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    new_guide_text = update.message.text
+    db.set_setting('connection_guide_text', new_guide_text)
+    await update.message.reply_text(
+        "✅ راهنمای اتصال با موفقیت به‌روزرسانی شد.",
+        reply_markup=get_admin_menu_keyboard()
+    )
+    return ConversationHandler.END
 
 async def broadcast_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [["ارسال به همه کاربران", "ارسال به کاربر خاص"], [BTN_BACK_TO_ADMIN_MENU]]
@@ -1304,6 +1333,15 @@ def main():
     admin_filter = filters.User(user_id=ADMIN_ID)
     user_filter = ~admin_filter
     
+    edit_guide_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(edit_guide_start, pattern="^admin_edit_guide$")],
+        states={
+            EDIT_GUIDE_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_guide_received)]
+        },
+        fallbacks=[CommandHandler('cancel', admin_conv_cancel)],
+        per_user=True, per_chat=True
+    )
+    
     buy_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(buy_start, pattern='^user_buy_')],
         states={GET_CUSTOM_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_custom_name), CommandHandler('skip', skip_custom_name)]},
@@ -1408,6 +1446,7 @@ def main():
     application.add_handler(buy_handler, group=1)
     application.add_handler(settings_conv, group=1)
     application.add_handler(edit_plan_conv, group=1)
+    application.add_handler(edit_guide_conv, group=1)
     application.add_handler(admin_conv, group=1)
     
     application.add_handler(CallbackQueryHandler(admin_confirm_charge_callback, pattern="^admin_confirm_charge_"))
