@@ -67,7 +67,7 @@ def get_main_menu_keyboard(user_id):
     user_info = db.get_or_create_user(user_id)
     keyboard = [
         ["🛍️ خرید سرویس", "📋 سرویس‌های من"],
-        ["💰 موجودی و شارژ", "🎁 کد هدیه"],
+        ["👤 اطلاعات حساب", "🎁 کد هدیه"],
         ["🎁 معرفی دوستان"]
     ]
     if TRIAL_ENABLED and user_info and not user_info.get('has_used_trial'):
@@ -92,7 +92,7 @@ def _parse_date_flexible(date_str: str) -> Union[datetime.date, None]:
     if not date_str:
         return None
     date_part = date_str.split('T')[0]
-    formats_to_try = ["%Y-%m-%d", "%Y/%m/%d"]
+    formats_to_try = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d"]
     for fmt in formats_to_try:
         try:
             return datetime.strptime(date_part, fmt).date()
@@ -439,10 +439,31 @@ async def cancel_renewal_callback(update: Update, context: ContextTypes.DEFAULT_
     context.user_data.clear()
 
 # --- Main User Flow Handlers ---
-async def show_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = db.get_or_create_user(update.effective_user.id)
+async def show_account_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_info = db.get_user(user_id)
+    purchase_stats = db.get_user_purchase_stats(user_id)
+    
+    join_date_gregorian = _parse_date_flexible(user_info['join_date'])
+    join_date_jalali = "N/A"
+    if join_date_gregorian:
+        jalali_date = jdatetime.date.fromgregorian(date=join_date_gregorian)
+        join_date_jalali = jalali_date.strftime("%Y/%m/%d")
+
+    text = (
+        f"👤 **اطلاعات حساب شما**\n\n"
+        f"▫️ شناسه کاربری: `{user_id}`\n"
+        f"💰 موجودی کیف پول: **{user_info['balance']:,.0f} تومان**\n\n"
+        f"📈 **آمار خرید شما:**\n"
+        f"- تعداد کل خریدها: {purchase_stats['total_purchases']} عدد\n"
+        f"- مجموع مبلغ خریدها: {purchase_stats['total_spent']:,.0f} تومان\n\n"
+        f"🗓️ تاریخ عضویت شما در ربات: {join_date_jalali}"
+    )
+
     keyboard = [[InlineKeyboardButton("💳 شارژ حساب", callback_data="user_start_charge")]]
-    await update.message.reply_text(f"💰 موجودی فعلی شما: **{user['balance']:.0f}** تومان", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
 
 async def show_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"جهت ارتباط با پشتیبانی به آیدی زیر پیام ارسال کنید:\n@{SUPPORT_USERNAME}")
@@ -640,6 +661,7 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=get_main_menu_keyboard(query.from_user.id)
     )
+
 # ====================================================================
 # ADMIN SECTION
 # ====================================================================
