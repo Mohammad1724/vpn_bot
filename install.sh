@@ -1,331 +1,415 @@
 #!/bin/bash
+# Menu-based installer/manager for vpn_bot (English-only output)
 
-# =================================================================
-# Hiddify Bot Manager
-# A comprehensive script for installing, updating, and managing the bot.
-# =================================================================
+set -Eeuo pipefail
 
-# --- Configuration ---
-PROJECT_NAME="vpn_bot"
-GITHUB_REPO="https://github.com/Mohammad1724/vpn_bot.git" # Your repository
-INSTALL_DIR="/opt/vpn_bot"
-SERVICE_NAME="${PROJECT_NAME}.service"
-SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}"
+SERVICE_NAME="vpn_bot"
+SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+CONF_FILE="/etc/vpn_bot.conf"
 
-# --- Colors for better output ---
-C_RESET='\033[0m'
-C_RED='\033[0;31m'
-C_GREEN='\033[0;32m'
-C_YELLOW='\033[0;33m'
-C_BLUE='\033[0;34m'
-
-# --- Helper Functions ---
 print_color() {
-    echo -e "${!1}${2}${C_RESET}"
+  local COLOR="$1"; shift
+  local TEXT="$*"
+  case "$COLOR" in
+    red)    echo -e "\033[0;31m${TEXT}\033[0m" ;;
+    green)  echo -e "\033[0;32m${TEXT}\033[0m" ;;
+    yellow) echo -e "\033[0;33m${TEXT}\033[0m" ;;
+    blue)   echo -e "\033[0;34m${TEXT}\033[0m" ;;
+    *)      echo "${TEXT}" ;;
+  esac
 }
 
-check_root() {
-    if [ "$(id -u)" -ne "0" ]; then
-        print_color "C_YELLOW" "This script requires root privileges. Re-running with sudo..."
-        exec sudo bash "$0" "$@"
-        exit 1
-    fi
+pause() { read -rp "Press Enter to continue..." _; }
+
+ensure_root() {
+  if [ "$(id -u)" -ne "0" ]; then
+    print_color red "Run as root. Example: sudo bash install.sh"
+    exit 1
+  fi
 }
 
-# --- Pre-execution check ---
-check_root
+escape_sed() { echo "$1" | sed -e 's/[\/&]/\\&/g'; }
 
-# --- Check if bot is installed ---
-is_installed() {
-    if [ -d "$INSTALL_DIR" ] && [ -f "$SERVICE_FILE" ]; then
-        return 0 # True
-    else
-        return 1 # False
-    fi
+ensure_deps() {
+  print_color yellow "Installing system dependencies (python3, venv, git, sqlite3)..."
+  apt-get update -y >/dev/null 2>&1 || true
+  apt-get install -y python3 python3-pip python3-venv curl git sqlite3 >/dev/null 2>&1 || true
 }
 
-# --- Core Management Functions ---
+load_conf() {
+  if [ -f "$CONF_FILE" ]; then
+    # shellcheck disable=SC1090
+    source "$CONF_FILE"
+  fi
+  if [ -z "${INSTALL_DIR:-}" ] && [ -f "$SERVICE_FILE" ]; then
+    INSTALL_DIR="$(grep -E '^WorkingDirectory=' "$SERVICE_FILE" | sed 's/^WorkingDirectory=//')"
+    INSTALL_DIR="${INSTALL_DIR%/src}"
+  fi
+}
 
-function install_bot() {
-    print_color "C_BLUE" "--- Starting Hiddify Bot Installation ---"
+save_conf() {
+  mkdir -p "$(dirname "$CONF_FILE")"
+  cat > "$CONF_FILE" <<EOF
+SERVICE_NAME=${SERVICE_NAME}
+INSTALL_DIR=${INSTALL_DIR}
+GITHUB_REPO=${GITHUB_REPO}
+EOF
+  print_color green "Saved settings to ${CONF_FILE}"
+}
 
-    if is_installed; then
-        print_color "C_YELLOW" "Bot is already installed."
-        read -p "Do you want to remove the existing version and reinstall? (This will delete all previous data) [y/N]: " REINSTALL_CONFIRM
-        if [[ "$REINSTALL_CONFIRM" =~ ^[Yy]$ ]]; then
-            uninstall_bot_silent
-        else
-            print_color "C_YELLOW" "Installation aborted by user."
-            return
-        fi
-    fi
+create_system_user() {
+  if ! id -u vpn-bot >/dev/null 2>&1; then
+    print_color yellow "Creating system user 'vpn-bot'..."
+    useradd --system --home "${INSTALL_DIR}" --shell /usr/sbin/nologin vpn-bot
+  fi
+}
 
-    # 1. Install system dependencies
-    print_color "C_YELLOW" "[1/6] Installing system dependencies (git, python3, pip, venv)..."
-    apt-get update > /dev/null 2>&1
-    apt-get install -y git python3 python3-pip python3-venv > /dev/null 2>&1
-    print_color "C_GREEN" "System dependencies installed."
-
-    # 2. Clone the repository
-    print_color "C_YELLOW" "[2/6] Cloning the bot repository from GitHub..."
-    git clone "$GITHUB_REPO" "$INSTALL_DIR" > /dev/null 2>&1
-    print_color "C_GREEN" "Repository cloned to $INSTALL_DIR."
-
-    # Change to the project directory
-    cd "$INSTALL_DIR"
-
-    # 3. Set up Python virtual environment
-    print_color "C_YELLOW" "[3/6] Setting up Python virtual environment..."
-    python3 -m venv venv
-    print_color "C_YELLOW" "Installing Python dependencies from requirements.txt... (Displaying logs for debugging)"
-    source venv/bin/activate
-    # --- FIX: Removed output redirection to see potential errors ---
-    pip install --upgrade pip
-    pip install -r requirements.txt
-    deactivate
-    print_color "C_GREEN" "Python environment setup complete."
-
-    # 4. Gather configuration details
-    CONFIG_FILE="config.py"
-
-    print_color "C_BLUE" "--- Bot & Panel Configuration ---"
-    read -p "Enter your Telegram Bot Token: " BOT_TOKEN
-    read -p "Enter your numeric Telegram Admin ID: " ADMIN_ID
-    read -p "Enter your support Telegram username (without @): " SUPPORT_USERNAME
-    
-    print_color "C_BLUE" "--- Hiddify Panel Details ---"
-    read -p "Enter panel domain (e.g., mypanel.com): " PANEL_DOMAIN
-    read -p "Enter Hiddify ADMIN secret path: " ADMIN_PATH
-    read -p "Enter Hiddify SUBSCRIPTION secret path (can be same as ADMIN_PATH): " SUB_PATH
-    read -p "Enter Hiddify API Key (if you use one, otherwise leave blank): " API_KEY
-    read -p "Enter alternative subscription domains, comma-separated (e.g., sub1.domain,sub2.domain), or leave blank: " SUB_DOMAINS_INPUT
-    
-    print_color "C_BLUE" "--- Free Trial Configuration ---"
-    read -p "Enable free trial service? [Y/n]: " TRIAL_ENABLED_CHOICE
-    if [[ "$TRIAL_ENABLED_CHOICE" =~ ^[Yy]$ ]] || [ -z "$TRIAL_ENABLED_CHOICE" ]; then
-        TRIAL_ENABLED_VAL="True"
-        read -p "Enter trial duration in days (Default: 1): " -e -i "1" TRIAL_DAYS
-        read -p "Enter trial data limit in GB (Default: 1): " -e -i "1" TRIAL_GB
-    else
-        TRIAL_ENABLED_VAL="False"
-        TRIAL_DAYS=1
-        TRIAL_GB=1
-    fi
-
-    print_color "C_BLUE" "--- Features & Reminders ---"
-    read -p "Enter referral bonus amount in Toman (Default: 5000): " -e -i "5000" REFERRAL_BONUS_AMOUNT
-    read -p "Send expiry reminder how many days before expiration? (Default: 3): " -e -i "3" EXPIRY_REMINDER_DAYS
-    read -p "Send usage limit reminder at what percentage? (e.g., 80 for 80%. Default: 80): " -e -i "80" USAGE_LIMIT_REMINDER_PERCENT
-
-    # Create the config.py file from scratch
-    print_color "C_YELLOW" "[4/6] Creating configuration file (config.py)..."
-    
-    if [ -n "$SUB_DOMAINS_INPUT" ]; then
-        PROCESSED_SUB_DOMAINS=$(echo "$SUB_DOMAINS_INPUT" | sed 's/[^,]\+/"&"/g')
-        SUB_DOMAINS_LINE="SUB_DOMAINS = [${PROCESSED_SUB_DOMAINS}]"
-    else
-        SUB_DOMAINS_LINE="SUB_DOMAINS = []"
-    fi
-
-    cat > "$CONFIG_FILE" << EOL
-# -*- coding: utf-8 -*-
-BOT_TOKEN = "${BOT_TOKEN}"
-ADMIN_ID = ${ADMIN_ID}
-SUPPORT_USERNAME = "${SUPPORT_USERNAME}"
-PANEL_DOMAIN = "${PANEL_DOMAIN}"
-ADMIN_PATH = "${ADMIN_PATH}"
-SUB_PATH = "${SUB_PATH}"
-API_KEY = "${API_KEY}"
-${SUB_DOMAINS_LINE}
-TRIAL_ENABLED = ${TRIAL_ENABLED_VAL}
-TRIAL_DAYS = ${TRIAL_DAYS}
-TRIAL_GB = ${TRIAL_GB}
-REFERRAL_BONUS_AMOUNT = ${REFERRAL_BONUS_AMOUNT}
-EXPIRY_REMINDER_DAYS = ${EXPIRY_REMINDER_DAYS}
-USAGE_LIMIT_REMINDER_PERCENT = ${USAGE_LIMIT_REMINDER_PERCENT}
-EOL
-
-    print_color "C_GREEN" "Configuration file created successfully."
-
-    # 5. Create systemd service
-    print_color "C_YELLOW" "[5/6] Creating systemd service file..."
-    cat > "$SERVICE_FILE" << EOL
+create_service_file() {
+  print_color yellow "Creating/updating systemd service..."
+  cat > "$SERVICE_FILE" << EOL
 [Unit]
-Description=Hiddify Telegram Bot (${PROJECT_NAME})
+Description=Hiddify Telegram Bot Service
 After=network.target
 
 [Service]
-User=root
-Group=root
-WorkingDirectory=${INSTALL_DIR}
-ExecStart=${INSTALL_DIR}/venv/bin/python main.py
+User=vpn-bot
+Group=vpn-bot
+WorkingDirectory=${INSTALL_DIR}/src
+ExecStart=${INSTALL_DIR}/venv/bin/python main_bot.py
 Restart=always
 RestartSec=10
+Environment=PYTHONUNBUFFERED=1
 StandardOutput=journal
 StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
 EOL
-    print_color "C_GREEN" "Service file created at $SERVICE_FILE."
-
-    # 6. Enable and start the service
-    print_color "C_YELLOW" "[6/6] Enabling and starting the bot service..."
-    systemctl daemon-reload
-    systemctl enable "$SERVICE_NAME"
-    systemctl start "$SERVICE_NAME"
-
-    print_color "C_GREEN" "\n--- Installation Complete! ---"
-    print_color "C_BLUE" "The bot is now running as a background service."
-    echo "You can check its status with: ${C_YELLOW}systemctl status ${SERVICE_NAME}${C_RESET}"
+  systemctl daemon-reload
 }
 
-function update_bot() {
-    if ! is_installed; then
-        print_color "C_RED" "Error: Bot is not installed. Please choose option 1 to install it first."
-        return
-    fi
-    print_color "C_BLUE" "--- Starting Bot Update ---"
-    
-    cd "$INSTALL_DIR"
-    print_color "C_YELLOW" "[1/3] Pulling latest changes from GitHub..."
-    git pull
-    
-    print_color "C_YELLOW" "[2/3] Updating Python dependencies..."
-    source venv/bin/activate
-    pip install -r requirements.txt
-    deactivate
-    
-    print_color "C_YELLOW" "[3/3] Restarting the bot service..."
-    systemctl restart "$SERVICE_NAME"
-    
-    print_color "C_GREEN" "--- Update Complete! ---"
-    print_color "C_YELLOW" "Note: If new configurations were added in the update, you may need to reinstall (Option 1) to set them."
+activate_venv() { # shellcheck disable=SC1090
+  source "${INSTALL_DIR}/venv/bin/activate"
 }
 
-function show_status() {
-    if ! is_installed; then
-        print_color "C_RED" "Error: Bot is not installed."
-        return
-    fi
-    print_color "C_BLUE" "--- Bot Service Status ---"
-    systemctl status "$SERVICE_NAME"
+deactivate_venv() {
+  set +u
+  deactivate || true
+  set -u
 }
 
-function show_live_logs() {
-    if ! is_installed; then
-        print_color "C_RED" "Error: Bot is not installed."
-        return
-    fi
-    print_color "C_BLUE" "--- Showing Live Logs (Press CTRL+C to exit) ---"
-    journalctl -u "$SERVICE_NAME" -f
+ensure_install_dir_vars() {
+  local DEFAULT_GITHUB_REPO="https://github.com/Mohammad1724/vpn_bot.git"
+  local DEFAULT_INSTALL_DIR="/opt/vpn-bot"
+  read -rp "GitHub repository URL [${DEFAULT_GITHUB_REPO}]: " GITHUB_REPO_INPUT
+  GITHUB_REPO="${GITHUB_REPO_INPUT:-$DEFAULT_GITHUB_REPO}"
+  read -rp "Installation directory [${DEFAULT_INSTALL_DIR}]: " INSTALL_DIR_INPUT
+  INSTALL_DIR="${INSTALL_DIR_INPUT:-$DEFAULT_INSTALL_DIR}"
 }
 
-function show_all_logs() {
-    if ! is_installed; then
-        print_color "C_RED" "Error: Bot is not installed."
-        return
-    fi
-    print_color "C_BLUE" "--- Showing All Bot Logs ---"
-    journalctl -u "$SERVICE_NAME"
+configure_config_py() {
+  local CONFIG_FILE="${INSTALL_DIR}/src/config.py"
+  local TEMPLATE_FILE="${INSTALL_DIR}/src/config_template.py"
+  if [ ! -f "$TEMPLATE_FILE" ]; then
+    print_color red "Missing template file: ${TEMPLATE_FILE}"
+    exit 1
+  fi
+  cp "$TEMPLATE_FILE" "$CONFIG_FILE"
+
+  read -rp "Telegram Bot Token: " BOT_TOKEN
+  read -rp "Telegram Admin ID (numeric): " ADMIN_ID
+  read -rp "Hiddify panel domain (e.g., mypanel.com): " PANEL_DOMAIN
+  read -rp "Hiddify ADMIN secret path: " ADMIN_PATH
+  read -rp "Hiddify SUBSCRIPTION secret path (can be the same): " SUB_PATH
+  read -rp "Hiddify API Key: " API_KEY
+  read -rp "Support username (without @): " SUPPORT_USERNAME
+
+  echo
+  print_color yellow "Enter subscription domains comma-separated (or leave empty to use PANEL_DOMAIN):"
+  read -rp "Subscription Domains: " SUB_DOMAINS_INPUT
+  local PYTHON_LIST_FORMAT="[]"
+  if [ -n "$SUB_DOMAINS_INPUT" ]; then
+    PYTHON_LIST_FORMAT="[\"$(echo "$SUB_DOMAINS_INPUT" | sed 's/,/\", \"/g')\"]"
+  fi
+
+  echo
+  print_color blue "--- Free Trial ---"
+  read -rp "Enable free trial? [Y/n]: " ENABLE_TRIAL
+  ENABLE_TRIAL=${ENABLE_TRIAL:-Y}
+  local TRIAL_ENABLED_VAL="False"
+  local TRIAL_DAYS_VAL=0
+  local TRIAL_GB_VAL=0
+  if [[ "$ENABLE_TRIAL" =~ ^[Yy]$ ]]; then
+    TRIAL_ENABLED_VAL="True"
+    read -rp "Trial duration (days) [1]: " TRIAL_DAYS_INPUT
+    TRIAL_DAYS_VAL=${TRIAL_DAYS_INPUT:-1}
+    read -rp "Trial data limit (GB) [1]: " TRIAL_GB_INPUT
+    TRIAL_GB_VAL=${TRIAL_GB_INPUT:-1}
+  fi
+
+  echo
+  print_color blue "--- Referral & Reminders ---"
+  read -rp "Referral bonus amount (Toman) [5000]: " REFERRAL_BONUS_INPUT
+  local REFERRAL_BONUS_AMOUNT="${REFERRAL_BONUS_INPUT:-5000}"
+  read -rp "Expiry reminder days before end [3]: " EXPIRY_REMINDER_INPUT
+  local EXPIRY_REMINDER_DAYS="${EXPIRY_REMINDER_INPUT:-3}"
+
+  echo
+  print_color blue "--- Usage Alert ---"
+  read -rp "Low-usage alert threshold (0.0 - 1.0) [0.8]: " USAGE_ALERT_INPUT
+  local USAGE_ALERT_THRESHOLD="${USAGE_ALERT_INPUT:-0.8}"
+
+  # Escape values for sed
+  local BOT_TOKEN_E; BOT_TOKEN_E=$(escape_sed "$BOT_TOKEN")
+  local PANEL_DOMAIN_E; PANEL_DOMAIN_E=$(escape_sed "$PANEL_DOMAIN")
+  local ADMIN_PATH_E; ADMIN_PATH_E=$(escape_sed "$ADMIN_PATH")
+  local SUB_PATH_E; SUB_PATH_E=$(escape_sed "$SUB_PATH")
+  local API_KEY_E; API_KEY_E=$(escape_sed "$API_KEY")
+  local SUPPORT_USERNAME_E; SUPPORT_USERNAME_E=$(escape_sed "$SUPPORT_USERNAME")
+
+  sed -i "s|^BOT_TOKEN = .*|BOT_TOKEN = \"${BOT_TOKEN_E}\"|" "$CONFIG_FILE"
+  sed -i "s|^ADMIN_ID = .*|ADMIN_ID = ${ADMIN_ID}|" "$CONFIG_FILE"
+  sed -i "s|^PANEL_DOMAIN = .*|PANEL_DOMAIN = \"${PANEL_DOMAIN_E}\"|" "$CONFIG_FILE"
+  sed -i "s|^ADMIN_PATH = .*|ADMIN_PATH = \"${ADMIN_PATH_E}\"|" "$CONFIG_FILE"
+  sed -i "s|^SUB_PATH = .*|SUB_PATH = \"${SUB_PATH_E}\"|" "$CONFIG_FILE"
+  sed -i "s|^API_KEY = .*|API_KEY = \"${API_KEY_E}\"|" "$CONFIG_FILE"
+  sed -i "s|^SUPPORT_USERNAME = .*|SUPPORT_USERNAME = \"${SUPPORT_USERNAME_E}\"|" "$CONFIG_FILE"
+  sed -i "s|^SUB_DOMAINS = .*|SUB_DOMAINS = ${PYTHON_LIST_FORMAT}|" "$CONFIG_FILE"
+  sed -i "s|^TRIAL_ENABLED = .*|TRIAL_ENABLED = ${TRIAL_ENABLED_VAL}|" "$CONFIG_FILE"
+  sed -i "s|^TRIAL_DAYS = .*|TRIAL_DAYS = ${TRIAL_DAYS_VAL}|" "$CONFIG_FILE"
+  sed -i "s|^TRIAL_GB = .*|TRIAL_GB = ${TRIAL_GB_VAL}|" "$CONFIG_FILE"
+  sed -i "s|^REFERRAL_BONUS_AMOUNT = .*|REFERRAL_BONUS_AMOUNT = ${REFERRAL_BONUS_AMOUNT}|" "$CONFIG_FILE"
+  sed -i "s|^EXPIRY_REMINDER_DAYS = .*|EXPIRY_REMINDER_DAYS = ${EXPIRY_REMINDER_DAYS}|" "$CONFIG_FILE"
+  sed -i "s|^USAGE_ALERT_THRESHOLD = .*|USAGE_ALERT_THRESHOLD = ${USAGE_ALERT_THRESHOLD}|" "$CONFIG_FILE"
+
+  print_color green "config.py created successfully."
 }
 
-function restart_bot() {
-    if ! is_installed; then
-        print_color "C_RED" "Error: Bot is not installed."
-        return
-    fi
-    print_color "C_BLUE" "--- Restarting Bot Service ---"
-    systemctl restart "$SERVICE_NAME"
-    print_color "C_GREEN" "Bot service restarted successfully."
-    sleep 2
-    show_status
+append_missing_keys_if_any() {
+  local CONFIG_FILE="${INSTALL_DIR}/src/config.py"
+  [ -f "$CONFIG_FILE" ] || return 0
+  local changed=0
+  if ! grep -q '^REFERRAL_BONUS_AMOUNT' "$CONFIG_FILE"; then
+    echo 'REFERRAL_BONUS_AMOUNT = 5000' >> "$CONFIG_FILE"; changed=1
+  fi
+  if ! grep -q '^EXPIRY_REMINDER_DAYS' "$CONFIG_FILE"; then
+    echo 'EXPIRY_REMINDER_DAYS = 3' >> "$CONFIG_FILE"; changed=1
+  fi
+  if ! grep -q '^USAGE_ALERT_THRESHOLD' "$CONFIG_FILE"; then
+    echo 'USAGE_ALERT_THRESHOLD = 0.8' >> "$CONFIG_FILE"; changed=1
+  fi
+  if [ "$changed" -eq 1 ]; then
+    print_color yellow "Added missing config keys to config.py."
+  fi
 }
 
-function uninstall_bot() {
-    if ! is_installed; then
-        print_color "C_RED" "Error: Bot is not installed."
-        return
+install_or_reinstall() {
+  ensure_root
+  ensure_deps
+  ensure_install_dir_vars
+
+  local PREV_EXISTS=0
+  if [ -d "$INSTALL_DIR" ]; then
+    PREV_EXISTS=1
+  fi
+
+  local BACKUP_DIR=""
+  local REUSE_CONFIG="N"
+  if [ "$PREV_EXISTS" -eq 1 ]; then
+    print_color yellow "Previous installation found at ${INSTALL_DIR}."
+    read -rp "Reuse previous config.py and database? [y/N]: " REUSE_CONFIG
+    REUSE_CONFIG=${REUSE_CONFIG:-N}
+    print_color yellow "Stopping existing service (if running)..."
+    systemctl stop "${SERVICE_NAME}.service" || true
+
+    if [[ "$REUSE_CONFIG" =~ ^[Yy]$ ]]; then
+      BACKUP_DIR="/tmp/vpn-bot-backup-$(date +%s)"
+      mkdir -p "$BACKUP_DIR"
+      [ -f "${INSTALL_DIR}/src/config.py" ] && cp "${INSTALL_DIR}/src/config.py" "${BACKUP_DIR}/config.py" || true
+      [ -f "${INSTALL_DIR}/src/vpn_bot.db" ] && cp "${INSTALL_DIR}/src/vpn_bot.db" "${BACKUP_DIR}/vpn_bot.db" || true
+      print_color green "Temporary backup saved to ${BACKUP_DIR}."
     fi
-    
-    print_color "C_RED" "!!! UNINSTALL WARNING !!!"
-    read -p "Are you sure you want to completely uninstall the bot? (This action is irreversible) [y/N]: " UNINSTALL_CONFIRM
-    if [[ "$UNINSTALL_CONFIRM" =~ ^[Yy]$ ]]; then
-        uninstall_bot_silent
-        print_color "C_GREEN" "--- Bot uninstalled successfully. ---"
-    else
-        print_color "C_YELLOW" "Uninstall operation cancelled by user."
-    fi
+
+    print_color yellow "Removing previous installation..."
+    rm -rf "$INSTALL_DIR"
+  fi
+
+  print_color yellow "Cloning repository..."
+  git clone "$GITHUB_REPO" "$INSTALL_DIR"
+  cd "$INSTALL_DIR"
+
+  print_color yellow "Creating Python venv and installing dependencies..."
+  python3 -m venv venv
+  activate_venv
+  pip install --upgrade pip >/dev/null 2>&1
+  if [ ! -f "requirements.txt" ]; then
+    print_color red "requirements.txt not found."
+    deactivate_venv
+    exit 1
+  fi
+  pip install -r requirements.txt >/dev/null 2>&1
+  deactivate_venv
+
+  mkdir -p "${INSTALL_DIR}/backups"
+
+  if [[ "$REUSE_CONFIG" =~ ^[Yy]$ ]] && [ -n "$BACKUP_DIR" ]; then
+    print_color yellow "Restoring previous config and database..."
+    [ -f "${BACKUP_DIR}/config.py" ] && cp "${BACKUP_DIR}/config.py" "${INSTALL_DIR}/src/config.py" || true
+    [ -f "${BACKUP_DIR}/vpn_bot.db" ] && cp "${BACKUP_DIR}/vpn_bot.db" "${INSTALL_DIR}/src/vpn_bot.db" || true
+    append_missing_keys_if_any
+  else
+    print_color blue "--- Bot Configuration ---"
+    configure_config_py
+  fi
+
+  create_system_user
+  chown -R vpn-bot:vpn-bot "${INSTALL_DIR}"
+
+  create_service_file
+
+  print_color yellow "Enabling and starting service..."
+  systemctl enable "${SERVICE_NAME}" >/dev/null 2>&1 || true
+  systemctl start "${SERVICE_NAME}"
+
+  save_conf
+
+  print_color blue "--- Installation Complete ---"
+  print_color green "Service '${SERVICE_NAME}' started."
+  print_color yellow "Status: systemctl status ${SERVICE_NAME}"
+  print_color yellow "Live logs: journalctl -u ${SERVICE_NAME} -f"
 }
 
-function uninstall_bot_silent() {
-    print_color "C_YELLOW" "Stopping and disabling service..."
-    systemctl stop "$SERVICE_NAME" &>/dev/null || true
-    systemctl disable "$SERVICE_NAME" &>/dev/null || true
-    
-    print_color "C_YELLOW" "Removing service file..."
+update_bot() {
+  ensure_root
+  load_conf
+  if [ -z "${INSTALL_DIR:-}" ] || [ ! -d "$INSTALL_DIR" ]; then
+    print_color red "Installation directory not found. Please install first."
+    exit 1
+  fi
+  if [ ! -d "${INSTALL_DIR}/.git" ]; then
+    print_color red "Install dir is not a git repository. Cannot update."
+    exit 1
+  fi
+
+  print_color yellow "Stopping service for update..."
+  systemctl stop "${SERVICE_NAME}" || true
+
+  print_color yellow "Pulling latest changes..."
+  git -C "$INSTALL_DIR" pull --ff-only
+
+  print_color yellow "Updating Python deps..."
+  activate_venv
+  pip install --upgrade pip >/dev/null 2>&1 || true
+  if [ -f "${INSTALL_DIR}/requirements.txt" ]; then
+    pip install -r "${INSTALL_DIR}/requirements.txt" >/dev/null 2>&1 || true
+  fi
+  deactivate_venv
+
+  print_color yellow "Restarting service..."
+  systemctl start "${SERVICE_NAME}"
+
+  print_color green "Update completed."
+}
+
+restart_bot() {
+  ensure_root
+  print_color yellow "Restarting service..."
+  systemctl restart "${SERVICE_NAME}" || true
+  print_color green "Done."
+}
+
+status_bot() {
+  ensure_root
+  print_color yellow "Service status:"
+  systemctl status "${SERVICE_NAME}" --no-pager || true
+}
+
+follow_journal() {
+  ensure_root
+  print_color yellow "Following live journal logs (Ctrl+C to exit)"
+  journalctl -u "${SERVICE_NAME}" -f
+}
+
+follow_bot_log() {
+  ensure_root
+  load_conf
+  local LOG_FILE="${INSTALL_DIR:-/opt/vpn-bot}/src/bot.log"
+  if [ -f "$LOG_FILE" ]; then
+    print_color yellow "Tailing bot.log (last 200 lines, live). Ctrl+C to exit."
+    tail -n 200 -f "$LOG_FILE"
+  else
+    print_color red "bot.log not found at: $LOG_FILE"
+    print_color yellow "Use the Journalctl option instead."
+  fi
+}
+
+uninstall_bot() {
+  ensure_root
+  load_conf
+  print_color red "WARNING: This will remove the service and delete all files."
+  read -rp "Are you sure? [y/N]: " CONFIRM
+  CONFIRM=${CONFIRM:-N}
+  if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+    print_color yellow "Uninstall cancelled."
+    return
+  fi
+
+  print_color yellow "Stopping and disabling service..."
+  systemctl stop "${SERVICE_NAME}" || true
+  systemctl disable "${SERVICE_NAME}" || true
+
+  if [ -f "$SERVICE_FILE" ]; then
+    print_color yellow "Removing service file..."
     rm -f "$SERVICE_FILE"
     systemctl daemon-reload
-    
-    print_color "C_YELLOW" "Removing installation directory..."
-    rm -rf "$INSTALL_DIR"
+  fi
+
+  local DIR="${INSTALL_DIR:-/opt/vpn-bot}"
+  if [ -d "$DIR" ]; then
+    print_color yellow "Removing install directory: ${DIR}"
+    rm -rf "$DIR"
+  fi
+
+  if [ -f "$CONF_FILE" ]; then
+    print_color yellow "Removing saved settings: ${CONF_FILE}"
+    rm -f "$CONF_FILE"
+  fi
+
+  print_color blue "--- Uninstall complete ---"
 }
 
-function show_menu() {
-    clear
-    print_color "C_BLUE" "=========================================="
-    print_color "C_BLUE" "          Hiddify Bot Manager"
-    print_color "C_BLUE" "=========================================="
-    echo ""
-    print_color "C_GREEN" "1. Install / Reinstall Bot"
-    print_color "C_GREEN" "2. Update Bot"
-    print_color "C_GREEN" "3. Show Status"
-    print_color "C_GREEN" "4. Show Live Logs"
-    print_color "C_GREEN" "5. Show All Logs"
-    print_color "C_GREEN" "6. Restart Bot"
-    print_color "C_RED"   "7. Uninstall Bot"
-    echo ""
-    print_color "C_YELLOW" "0. Exit"
-    echo ""
+show_menu() {
+  clear
+  print_color blue "--- VPN Bot Manager ---"
+  echo "1) Install / Reinstall"
+  echo "2) Update"
+  echo "3) Restart"
+  echo "4) Status"
+  echo "5) Journalctl (live logs)"
+  echo "6) bot.log"
+  echo "7) Uninstall"
+  echo "0) Exit"
+  echo
 }
 
-# --- Main Logic ---
-while true; do
+main_loop() {
+  ensure_root
+  load_conf
+  while true; do
     show_menu
-    read -p "Please choose an option [0-7]: " choice
-
-    case $choice in
-        1)
-            install_bot
-            ;;
-        2)
-            update_bot
-            ;;
-        3)
-            show_status
-            ;;
-        4)
-            show_live_logs
-            ;;
-        5)
-            show_all_logs
-            ;;
-        6)
-            restart_bot
-            ;;
-        7)
-            uninstall_bot
-            ;;
-        0)
-            print_color "C_BLUE" "Exiting."
-            exit 0
-            ;;
-        *)
-            print_color "C_RED" "Invalid option. Please enter a number between 0 and 7."
-            ;;
+    read -rp "Choose an option: " CHOICE
+    case "$CHOICE" in
+      1) install_or_reinstall; pause ;;
+      2) update_bot; pause ;;
+      3) restart_bot; pause ;;
+      4) status_bot; pause ;;
+      5) follow_journal ;;
+      6) follow_bot_log ;;
+      7) uninstall_bot; pause ;;
+      0) exit 0 ;;
+      *) print_color red "Invalid option!"; pause ;;
     esac
-    
-    if [[ "$choice" != "0" ]]; then
-        read -p $'\nPress Enter to return to the main menu...'
-    fi
-done
+  done
+}
+
+main_loop
