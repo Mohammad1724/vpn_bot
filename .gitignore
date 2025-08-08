@@ -1,30 +1,47 @@
-# Python virtual environment
+# Python virtual environments
 venv/
-/venv/
 .venv/
-*/venv/
 env/
-/env/
-.env/
+.env
+*/venv/
+*/.venv/
 */env/
 
-# Python cache files
+# Python cache and build artifacts
 __pycache__/
 *.py[cod]
 *$py.class
+build/
+dist/
+*.egg-info/
 
 # IDE and editor directories
 .idea/
 .vscode/
 *.swp
 
-# Bot specific files (IMPORTANT)
+# Project config with secrets (keep only the template in git)
+src/config.py
+
+# SQLite database and journals (current name + generic journals)
+vpn_bot.db
+vpn_bot.db-*
+*.db-wal
+*.db-shm
+
+# Legacy names (kept for safety if existed before)
 bot_database.db
-bot_database.db-journal
-bot_persistence
+bot_database.db-*
+
+# Logs
 bot.log
 *.log
+
+# Backups (matches any backups dir anywhere)
 backups/
+
+# Optional persistence directory (if used)
+bot_persistence/
 
 # OS-specific files
 .DS_Store
