@@ -307,13 +307,16 @@ async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     services = db.get_user_services(user_id)
     if not services:
-        await message.reply_text("شما در حال حاضر هیچ سرویس فعالی ندارید.")
+        if update.callback_query:
+            await message.edit_text("شما در حال حاضر هیچ سرویس فعالی ندارید.")
+        else:
+            await message.reply_text("شما در حال حاضر هیچ سرویس فعالی ندارید.")
         return
     
     keyboard = []
     for service in services:
         button_text = f"⚙️ {service['name']}"
-        callback_data = f"view_service_{service['service_id']}"
+        callback_data = f"show_service_management_{service['service_id']}"
         keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -324,54 +327,55 @@ async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_text("لطفا سرویسی که می‌خواهید مدیریتش کنید را انتخاب نمایید:", reply_markup=reply_markup)
 
 @check_channel_membership
-async def view_service_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def show_service_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     service_id = int(query.data.split('_')[-1])
-    
+
     service = db.get_service(service_id)
     if not service:
         await query.edit_message_text("❌ سرویس مورد نظر یافت نشد.")
         return
+        
+    await query.edit_message_text("در حال دریافت اطلاعات سرویس... ⏳")
 
-    await show_link_options_menu(query.message, service['sub_uuid'], service_id=service['service_id'], is_edit=True)
+    info = await hiddify_api.get_user_info(service['sub_uuid'])
+    if not info:
+        await query.edit_message_text("❌ خطا در ارتباط با پنل. لطفاً بعداً تلاش کنید.")
+        return
 
-async def show_link_options_menu(message: Update.message, user_uuid: str, service_id: int, is_edit: bool = True):
+    status, expiry_date_display, _ = await _get_service_status(info)
+    
+    caption = (
+        f"🏷️ **مدیریت سرویس: {service['name']}**\n\n"
+        f"📊 حجم مصرفی: **{info.get('current_usage_GB', 0):.2f} / {info.get('usage_limit_GB', 0):.0f}** گیگ\n"
+        f"🗓️ تاریخ انقضا: **{expiry_date_display}**\n"
+        f"🚦 وضعیت: {status}\n\n"
+        "لطفاً عملیات مورد نظر خود را انتخاب کنید:"
+    )
+
+    renewal_plan = db.get_plan(service['plan_id'])
+    keyboard = []
+    
+    management_buttons = [InlineKeyboardButton("🔄 به‌روزرسانی", callback_data=f"show_service_management_{service_id}")]
+    if renewal_plan and service.get('plan_id', 0) > 0:
+        management_buttons.append(InlineKeyboardButton(f"⏳ تمدید ({renewal_plan['price']:.0f} تومان)", callback_data=f"renew_{service_id}"))
+    keyboard.append(management_buttons)
+
     recommended_type = db.get_setting('recommended_link_type') or 'auto'
-    admin_recommendation_text = " (پیشنهاد ادمین)"
+    rec_text = " (پیشنهاد ادمین)"
+    keyboard.append([InlineKeyboardButton(f"🔗 لینک هوشمند (Auto){rec_text if recommended_type == 'auto' else ''}", callback_data=f"getlink_auto_{service['sub_uuid']}")])
+    keyboard.append([
+        InlineKeyboardButton(f"Clash{rec_text if recommended_type == 'clash' else ''}", callback_data=f"getlink_clash_{service['sub_uuid']}"),
+        InlineKeyboardButton(f"Sub{rec_text if recommended_type == 'sub' else ''}", callback_data=f"getlink_sub_{service['sub_uuid']}")
+    ])
     
-    def get_rec_text(link_type):
-        return admin_recommendation_text if recommended_type == link_type else ""
+    keyboard.append([
+        InlineKeyboardButton("⚙️ کانفیگ‌های تکی", callback_data=f"single_configs_{service_id}"),
+        InlineKeyboardButton("⬅️ بازگشت", callback_data="back_to_services")
+    ])
 
-    keyboard = [
-        [InlineKeyboardButton(f"🔗 لینک هوشمند (Auto){get_rec_text('auto')}", callback_data=f"getlink_auto_{user_uuid}")],
-        [InlineKeyboardButton(f"💻 لینک استاندارد (Sub){get_rec_text('sub')}", callback_data=f"getlink_sub_{user_uuid}")],
-        [InlineKeyboardButton(f"📱 لینک Clash{get_rec_text('clash')}", callback_data=f"getlink_clash_{user_uuid}")],
-        [InlineKeyboardButton(f"💥 لینک Clash Meta{get_rec_text('clashmeta')}", callback_data=f"getlink_clashmeta_{user_uuid}")],
-        [InlineKeyboardButton(f"⚡️ لینک Xray{get_rec_text('xray')}", callback_data=f"getlink_xray_{user_uuid}")],
-        [InlineKeyboardButton("⚙️ دریافت کانفیگ‌های تکی", callback_data=f"single_configs_{service_id}")],
-    ]
-    
-    if is_edit:
-        keyboard.append([InlineKeyboardButton("⬅️ بازگشت به لیست سرویس‌ها", callback_data="back_to_services")])
-
-    text = "لطفاً نوع لینک اشتراک مورد نظر خود را انتخاب کنید:"
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    try:
-        if is_edit:
-            if message.photo:
-                await message.delete()
-                await message.chat.send_message(text, reply_markup=reply_markup)
-            else:
-                await message.edit_text(text, reply_markup=reply_markup)
-        else:
-            await message.reply_text(text, reply_markup=reply_markup)
-    except BadRequest as e:
-        if "message is not modified" not in str(e) and "message to edit not found" not in str(e):
-            logger.error(f"Error in show_link_options_menu: {e}")
-    except Exception as e:
-        logger.error(f"An unexpected error in show_link_options_menu: {e}", exc_info=True)
+    await query.edit_message_text(caption, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
 
 async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -404,7 +408,7 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.message.delete()
 
     service = db.get_service_by_uuid(user_uuid)
-    keyboard = [[InlineKeyboardButton("⬅️ بازگشت به انتخاب لینک", callback_data=f"view_service_{service['service_id']}")]]
+    keyboard = [[InlineKeyboardButton("⬅️ بازگشت به مدیریت سرویس", callback_data=f"show_service_management_{service['service_id']}")]]
 
     await context.bot.send_photo(
         chat_id=query.message.chat_id,
@@ -443,7 +447,7 @@ async def show_single_configs_menu(update: Update, context: ContextTypes.DEFAULT
         await query.edit_message_text("هیچ کانفیگ تکی برای این سرویس یافت نشد.")
         return
         
-    keyboard.append([InlineKeyboardButton("⬅️ بازگشت به لینک‌های اشتراک", callback_data=f"view_service_{service_id}")])
+    keyboard.append([InlineKeyboardButton("⬅️ بازگشت به مدیریت سرویس", callback_data=f"show_service_management_{service_id}")])
     
     await query.edit_message_text("لطفاً نوع کانفیگ تکی مورد نظر را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -494,8 +498,19 @@ async def get_single_config(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def back_to_services_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    
+    # We send a new message because the old one might be a photo
     await query.message.delete()
-    await list_my_services(query, context)
+    new_msg = await query.from_user.send_message("بازگشت به لیست سرویس‌ها...")
+    
+    # Create a new fake update object to pass to list_my_services
+    from unittest.mock import Mock
+    mock_query = Mock()
+    mock_query.message = new_msg
+    mock_query.from_user = query.from_user
+    mock_update = Mock(callback_query=mock_query, effective_user=query.from_user)
+    
+    await list_my_services(mock_update, context)
 
 # --- Renewal Logic ---
 @check_channel_membership
@@ -565,12 +580,12 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
         if original_message: 
             from unittest.mock import Mock
             mock_query = Mock()
-            mock_query.data = f"view_service_{service_id}"
+            mock_query.data = f"show_service_management_{service_id}"
             mock_query.message = original_message
             mock_query.answer = asyncio.coroutine(lambda: None)
             mock_update = Mock(callback_query=mock_query, effective_user=update.effective_user)
-            await original_message.edit_text("✅ سرویس با موفقیت تمدید شد! لطفاً نوع لینک مورد نظر را انتخاب کنید...")
-            await view_service_callback(mock_update, context)
+            await original_message.edit_text("✅ سرویس با موفقیت تمدید شد! در حال نمایش منوی مدیریت...")
+            await show_service_management_menu(mock_update, context)
         else:
             await context.bot.send_message(chat_id=user_id, text="✅ سرویس با موفقیت تمدید شد!")
     else:
@@ -654,7 +669,18 @@ async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.set_user_trial_used(user_id)
         service = db.add_active_service(user_id, "سرویس تست", result['uuid'], result['full_link'], 0)
         await msg_loading.delete()
-        await show_link_options_menu(update.message, result['uuid'], service['service_id'], is_edit=False)
+        
+        # After creating a trial service, show the management menu directly
+        from unittest.mock import Mock
+        mock_query = Mock()
+        mock_query.data = f"show_service_management_{service['service_id']}"
+        mock_query.message = msg_loading # Pass a message object that can be edited
+        mock_query.from_user = update.effective_user
+        mock_query.answer = asyncio.coroutine(lambda: None)
+        mock_update = Mock(callback_query=mock_query, effective_user=update.effective_user)
+        
+        await show_service_management_menu(mock_update, context)
+
     else: await msg_loading.edit_text("❌ متاسفانه در ساخت سرویس تست مشکلی پیش آمد. لطفا بعداً تلاش کنید.")
 
 # --- Gift Code Conversation ---
@@ -760,7 +786,7 @@ async def create_service_after_name(message: Update.message, context: ContextTyp
     result = await hiddify_api.create_hiddify_user(plan['days'], plan['gb'], user_id, custom_name=custom_name)
 
     if result and result.get('uuid'):
-        db.finalize_purchase_transaction(transaction_id, result['uuid'], result['full_link'], custom_name)
+        service = db.finalize_purchase_transaction(transaction_id, result['uuid'], result['full_link'], custom_name)
         
         referrer_id, bonus_amount = db.apply_referral_bonus(user_id)
         if referrer_id:
@@ -770,7 +796,6 @@ async def create_service_after_name(message: Update.message, context: ContextTyp
             except (Forbidden, BadRequest):
                 logger.warning(f"Could not send referral bonus notification to {user_id} or {referrer_id}.")
         
-        service = db.get_service_by_uuid(result['uuid'])
         if not service:
             logger.error(f"Could not find newly created service in DB (uuid: {result['uuid']}) to show link menu.")
             await msg_loading.edit_text("❌ خطای داخلی پس از ساخت سرویس. لطفاً از منوی سرویس‌های من اقدام کنید.")
@@ -782,7 +807,16 @@ async def create_service_after_name(message: Update.message, context: ContextTyp
         except BadRequest as e:
             logger.warning(f"Could not delete 'loading' message: {e}")
             
-        await show_link_options_menu(message, result['uuid'], service_id=service['service_id'], is_edit=False) 
+        # Show the management menu directly after purchase
+        from unittest.mock import Mock
+        mock_query = Mock()
+        mock_query.data = f"show_service_management_{service['service_id']}"
+        mock_query.message = msg_loading # Pass a message object that can be edited
+        mock_query.from_user = message.from_user
+        mock_query.answer = asyncio.coroutine(lambda: None)
+        mock_update = Mock(callback_query=mock_query, effective_user=message.from_user)
+        
+        await show_service_management_menu(mock_update, context)
         
     else:
         db.cancel_purchase_transaction(transaction_id)
@@ -793,7 +827,7 @@ async def create_service_after_name(message: Update.message, context: ContextTyp
 
 
 # ====================================================================
-# ADMIN SECTION
+# ADMIN SECTION (All functions are included)
 # ====================================================================
 async def admin_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👑 به پنل ادمین خوش آمدید.", reply_markup=get_admin_menu_keyboard())
@@ -1460,10 +1494,10 @@ def main():
     application.add_handler(CallbackQueryHandler(set_recommended_link_callback, pattern="^set_rec_link_"))
     application.add_handler(CallbackQueryHandler(back_to_settings_callback, pattern="^back_to_settings$"))
     
+    application.add_handler(CallbackQueryHandler(show_service_management_menu, pattern="^show_service_management_"), group=2)
     application.add_handler(CallbackQueryHandler(get_link_callback, pattern="^getlink_"), group=2)
     application.add_handler(CallbackQueryHandler(show_single_configs_menu, pattern="^single_configs_"), group=2)
     application.add_handler(CallbackQueryHandler(get_single_config, pattern="^get_single_"), group=2)
-    application.add_handler(CallbackQueryHandler(view_service_callback, pattern="^view_service_"), group=2)
     application.add_handler(CallbackQueryHandler(back_to_services_callback, pattern="^back_to_services$"), group=2)
     application.add_handler(CallbackQueryHandler(renew_service_handler, pattern="^renew_"), group=2)
     application.add_handler(CallbackQueryHandler(confirm_renewal_callback, pattern="^confirmrenew$"), group=2)
