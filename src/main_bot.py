@@ -58,8 +58,8 @@ CMD_SKIP = "/skip"
     MANAGE_USER_AMOUNT, GET_CUSTOM_NAME, REDEEM_GIFT, CHARGE_AMOUNT,
     CHARGE_RECEIPT, SETTINGS_MENU, BACKUP_MENU, BROADCAST_MENU, BROADCAST_MESSAGE,
     BROADCAST_CONFIRM, BROADCAST_TO_USER_ID, BROADCAST_TO_USER_MESSAGE, RESTORE_UPLOAD,
-    AWAIT_SETTING_VALUE, REPORT_CUSTOM_DATE_START, REPORT_CUSTOM_DATE_END
-) = range(30)
+    AWAIT_SETTING_VALUE
+) = range(28)
 
 
 # --- Keyboards ---
@@ -1256,7 +1256,7 @@ def main():
     application.add_handler(CommandHandler("start", start), group=3)
     application.add_handler(MessageHandler(filters.Regex('^🛍️ خرید سرویس$'), buy_service_list), group=3)
     application.add_handler(MessageHandler(filters.Regex('^📋 سرویس‌های من$'), list_my_services), group=3)
-    application.add_handler(MessageHandler(filters.Regex('^💰 موجودی و شارژ$'), show_balance), group=3)
+    application.add_handler(MessageHandler(filters.Regex('^👤 اطلاعات حساب$'), show_account_info), group=3)
     application.add_handler(MessageHandler(filters.Regex('^📞 پشتیبانی$'), show_support), group=3)
     application.add_handler(MessageHandler(filters.Regex('^📚 راهنمای اتصال$'), show_guide), group=3)
     application.add_handler(MessageHandler(filters.Regex('^🧪 دریافت سرویس تست رایگان$'), get_trial_service), group=3)
