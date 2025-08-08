@@ -549,16 +549,15 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
     logger.info(f"Hiddify renewal API returned: {new_hiddify_info}")
 
     if new_hiddify_info:
-        db.finalize_renewal_transaction(transaction_id, plan_id)
+        db.finalize_renewal_transaction(transaction_id, plan['plan_id'])
         if original_message: 
             await original_message.edit_text("✅ سرویس با موفقیت تمدید شد! لطفاً نوع لینک مورد نظر را انتخاب کنید...")
-            # We need to create a dummy query object to pass to view_service_callback
             from unittest.mock import Mock
             mock_query = Mock()
             mock_query.data = f"view_service_{service_id}"
             mock_query.message = original_message
             mock_query.answer = asyncio.coroutine(lambda: None)
-            mock_update = Mock(callback_query=mock_query)
+            mock_update = Mock(callback_query=mock_query, effective_user=update.effective_user)
             await view_service_callback(mock_update, context)
         else:
             await context.bot.send_message(chat_id=user_id, text="✅ سرویس با موفقیت تمدید شد!")
@@ -699,6 +698,34 @@ async def buy_service_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not plans: await update.message.reply_text("متاسفانه در حال حاضر هیچ پلنی برای فروش موجود نیست."); return
     keyboard = [[InlineKeyboardButton(f"{p['name']} - {p['days']} روزه {p['gb']} گیگ - {p['price']:.0f} تومان", callback_data=f"user_buy_{p['plan_id']}")] for p in plans]
     await update.message.reply_text("لطفا سرویس مورد نظر خود را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+@check_channel_membership
+async def buy_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    plan_id = int(query.data.split('_')[-1])
+    transaction_id = db.initiate_purchase_transaction(query.from_user.id, plan_id)
+    if not transaction_id:
+        user = db.get_or_create_user(query.from_user.id)
+        plan = db.get_plan(plan_id)
+        await query.edit_message_text(f"موجودی شما کافی نیست!\nموجودی: {user['balance']:.0f} تومان\nقیمت پلن: {plan['price']:.0f} تومان")
+        return ConversationHandler.END
+    context.user_data['transaction_id'] = transaction_id
+    context.user_data['plan_to_buy_id'] = plan_id
+    await query.edit_message_text(f"✅ پلن شما انتخاب شد.\n\nلطفاً یک نام دلخواه برای این سرویس وارد کنید (مثلاً: گوشی شخصی).\nبرای استفاده از نام پیش‌فرض، دستور {CMD_SKIP} را ارسال کنید.", reply_markup=None)
+    return GET_CUSTOM_NAME
+
+async def get_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    custom_name = update.message.text
+    if len(custom_name) > 50: await update.message.reply_text("نام وارد شده بیش از حد طولانی است."); return GET_CUSTOM_NAME
+    context.user_data['custom_name'] = custom_name
+    await create_service_after_name(update.message, context)
+    return ConversationHandler.END
+
+async def skip_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['custom_name'] = ""
+    await create_service_after_name(update.message, context)
+    return ConversationHandler.END
 
 async def create_service_after_name(message: Update.message, context: ContextTypes.DEFAULT_TYPE):
     user_id = message.chat_id
