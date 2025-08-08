@@ -279,12 +279,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_info = db.get_user(user.id)
     if user_info and user_info.get('is_banned'):
-        await update.message.reply_text("شما از استفاده از این ربات منع شده‌اید.")
+        await update.effective_message.reply_text("شما از استفاده از این ربات منع شده‌اید.")
         return ConversationHandler.END
         
-    msg = update.message or (update.callback_query and update.callback_query.message)
-if msg:
-    await msg.reply_text("👋 به ربات فروش VPN خوش آمدید!", reply_markup=get_main_menu_keyboard(user.id))
+    await update.effective_message.reply_text("👋 به ربات فروش VPN خوش آمدید!", reply_markup=get_main_menu_keyboard(user.id))
     return ConversationHandler.END
 
 async def check_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
