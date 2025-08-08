@@ -58,8 +58,8 @@ CMD_SKIP = "/skip"
     MANAGE_USER_AMOUNT, GET_CUSTOM_NAME, REDEEM_GIFT, CHARGE_AMOUNT,
     CHARGE_RECEIPT, SETTINGS_MENU, BACKUP_MENU, BROADCAST_MENU, BROADCAST_MESSAGE,
     BROADCAST_CONFIRM, BROADCAST_TO_USER_ID, BROADCAST_TO_USER_MESSAGE, RESTORE_UPLOAD,
-    AWAIT_SETTING_VALUE
-) = range(28)
+    AWAIT_SETTING_VALUE, REPORT_CUSTOM_DATE_START, REPORT_CUSTOM_DATE_END
+) = range(30)
 
 
 # --- Keyboards ---
@@ -459,7 +459,7 @@ async def show_referral_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     text = (
         f"🎁 **دوستان خود را دعوت کنید و هدیه بگیرید!**\n\n"
-        f"با این لینک منحصر به فرد، دوستان خود را به ربات دعوت کنید.\n\n"
+        f"با این لینک منحصر به فرد, دوستان خود را به ربات دعوت کنید.\n\n"
         f"🔗 **لینک شما:**\n`{referral_link}`\n\n"
         f"هر دوستی که با لینک شما وارد ربات شود و اولین خرید خود را انجام دهد, "
         f"**{bonus:,.0f} تومان** هدیه به کیف پول شما و **{bonus:,.0f} تومان** به کیف پول دوستتان اضافه خواهد شد!"
@@ -640,7 +640,6 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=get_main_menu_keyboard(query.from_user.id)
     )
-
 # ====================================================================
 # ADMIN SECTION
 # ====================================================================
