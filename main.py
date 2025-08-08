@@ -1,145 +1,160 @@
 # -*- coding: utf-8 -*-
+
 import logging
 import asyncio
-import os
-from datetime import time, timedelta
 
-from telegram import Update
+# <--- FIX: Imports from the new library: python-telegram-bot
+from telegram import Update, ReplyKeyboardRemove
 from telegram.ext import (
     Application,
-    ApplicationBuilder,
     CommandHandler,
     MessageHandler,
+    ConversationHandler,
+    ContextTypes,
     filters,
-    CallbackQueryHandler,
-    PicklePersistence,
-    Defaults
 )
-from telegram.constants import ParseMode
 
 # Import configurations and constants
-from config import BOT_TOKEN, ADMIN_ID
-from constants import *
+try:
+    from config import BOT_TOKEN, ADMIN_ID
+    from constants import (
+        BUTTON_TEXTS,
+        create_main_menu_keyboard,
+        create_services_menu_keyboard,
+        create_back_keyboard,
+        create_cancel_keyboard,
+        SELECTING_ACTION,
+        SELECTING_SERVICE,
+        TYPING_WALLET_AMOUNT,
+    )
+except ImportError:
+    print("Error: config.py or constants.py not found. Please ensure they exist.")
+    exit(1)
 
-# Import modules
-import database as db
-import jobs
 
-# Import handlers from their modules
-from handlers.user_handlers import (
-    start, show_account_info, show_support, show_guide, show_referral_link,
-    get_trial_service, buy_service_list,
-    buy_service_conv, gift_code_conv, charge_account_conv
-)
-from handlers.admin_handlers import (
-    admin_conv, edit_plan_conv, settings_conv, edit_guide_conv
-)
-from handlers.callback_handlers import *
-
-# --- Setup Logging ---
-os.makedirs('backups', exist_ok=True)
+# Enable logging for better debugging
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-    handlers=[
-        logging.FileHandler("bot.log", encoding='utf-8'),
-        logging.StreamHandler()
-    ]
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
-# Reduce verbosity of the HTTPX library used by the bot
-logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
+# --- Handler Functions ---
 
-async def post_init(application: Application):
-    """Initialize the database after the application has been set up."""
-    await db.init_db()
-    logger.info("Database has been initialized.")
-
-
-def main() -> None:
-    """Start the bot."""
-    # --- Persistence ---
-    # This will save user and chat data across bot restarts
-    persistence = PicklePersistence(filepath="bot_persistence")
-
-    # --- Application Setup ---
-    # Set default parse mode for all messages
-    defaults = Defaults(parse_mode=ParseMode.HTML)
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handles the /start command and displays the main menu."""
+    user = update.effective_user
+    logger.info(f"User {user.first_name} ({user.id}) started the bot.")
     
-    application = (
-        ApplicationBuilder()
-        .token(BOT_TOKEN)
-        .persistence(persistence)
-        .post_init(post_init)
-        .defaults(defaults)
-        .build()
+    await update.message.reply_text(
+        f"سلام {user.mention_html()}! به ربات فروش هیدیفای خوش آمدید.",
+        reply_markup=create_main_menu_keyboard(),
+        parse_mode='HTML'
+    )
+    # This is the entry point of our main conversation
+    return SELECTING_ACTION
+
+async def show_services(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Displays the services menu."""
+    await update.message.reply_text(
+        "لطفا یکی از گزینه‌های زیر را انتخاب کنید:",
+        reply_markup=create_services_menu_keyboard()
+    )
+    return SELECTING_ACTION
+
+async def show_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Displays wallet information and options."""
+    # This is a placeholder. You need to implement wallet logic.
+    user_id = update.effective_user.id
+    # Example: balance = db.get_user_balance(user_id)
+    balance = 0 
+    await update.message.reply_text(
+        f"موجودی کیف پول شما: {balance} تومان.\n"
+        "برای افزایش موجودی، لطفا مبلغ مورد نظر را به تومان وارد کنید:",
+        reply_markup=create_back_keyboard()
+    )
+    return TYPING_WALLET_AMOUNT
+
+
+async def handle_wallet_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Processes the amount entered for wallet top-up."""
+    amount_text = update.message.text
+    try:
+        amount = int(amount_text)
+        if amount <= 0:
+            raise ValueError
+        
+        # Placeholder for payment logic
+        await update.message.reply_text(
+            f"درخواست افزایش موجودی به مبلغ {amount} تومان ثبت شد.\n"
+            "لطفا از طریق لینک زیر پرداخت را تکمیل کنید: [لینک پرداخت اینجا قرار می‌گیرد]",
+            reply_markup=create_main_menu_keyboard()
+        )
+        return SELECTING_ACTION
+
+    except ValueError:
+        await update.message.reply_text(
+            "لطفا یک مبلغ معتبر (عدد صحیح و مثبت) وارد کنید.",
+            reply_markup=create_back_keyboard()
+        )
+        return TYPING_WALLET_AMOUNT
+
+
+async def unhandled_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles any text that doesn't match a specific handler."""
+    await update.message.reply_text("متوجه نشدم. لطفا از دکمه‌های زیر استفاده کنید.")
+
+
+async def done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Ends a conversation (e.g., on 'Cancel' or 'Back')."""
+    await update.message.reply_text(
+        "به منوی اصلی بازگشتید.",
+        reply_markup=create_main_menu_keyboard(),
+    )
+    return SELECTING_ACTION
+
+
+async def main() -> None:
+    """Main function to set up and run the bot."""
+    
+    # <--- FIX: Bot initialization using ApplicationBuilder
+    application = Application.builder().token(BOT_TOKEN).build()
+    
+    # --- Conversation Handler Setup ---
+    # This handler manages the user's flow through the bot's menus.
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("start", start)],
+        states={
+            SELECTING_ACTION: [
+                MessageHandler(filters.Regex(f"^{BUTTON_TEXTS['services']}$"), show_services),
+                MessageHandler(filters.Regex(f"^{BUTTON_TEXTS['wallet']}$"), show_wallet),
+                # Add handlers for other main menu buttons here
+            ],
+            TYPING_WALLET_AMOUNT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{BUTTON_TEXTS['back']}$"), handle_wallet_amount),
+            ],
+            # Add more states here, e.g., for purchasing a service
+        },
+        fallbacks=[
+            CommandHandler("start", start),
+            MessageHandler(filters.Regex(f"^{BUTTON_TEXTS['back']}$"), done),
+            MessageHandler(filters.Regex(f"^{BUTTON_TEXTS['cancel']}$"), done),
+        ],
+        conversation_timeout=300 # Timeout in seconds
     )
 
-    # --- Register Handlers ---
-    # The order and grouping of handlers is important.
+    # Add the main conversation handler to the application
+    application.add_handler(conv_handler)
     
-    # Group 1: Conversation Handlers (User and Admin)
-    # These have higher priority to catch user input in the middle of a conversation.
-    application.add_handler(admin_conv, group=1)
-    application.add_handler(edit_plan_conv, group=1)
-    application.add_handler(settings_conv, group=1)
-    application.add_handler(edit_guide_conv, group=1)
-    application.add_handler(buy_service_conv, group=1)
-    application.add_handler(gift_code_conv, group=1)
-    application.add_handler(charge_account_conv, group=1)
+    # Add a handler for any other text that wasn't caught by the conversation
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unhandled_text))
 
-    # Group 2: CallbackQuery Handlers (for inline buttons that are NOT part of a conversation)
-    # Admin callbacks
-    application.add_handler(CallbackQueryHandler(admin_confirm_charge_callback, pattern=f"^{CALLBACK_ADMIN_CONFIRM_CHARGE}"), group=2)
-    application.add_handler(CallbackQueryHandler(admin_reject_charge_callback, pattern=f"^{CALLBACK_ADMIN_REJECT_CHARGE}"), group=2)
-    application.add_handler(CallbackQueryHandler(admin_delete_plan_callback, pattern="^admin_delete_plan_"), group=2)
-    application.add_handler(CallbackQueryHandler(admin_toggle_plan_visibility_callback, pattern="^admin_toggle_plan_"), group=2)
-    application.add_handler(CallbackQueryHandler(admin_confirm_restore_callback, pattern="^admin_confirm_restore$"), group=2)
-    application.add_handler(CallbackQueryHandler(admin_cancel_restore_callback, pattern="^admin_cancel_restore$"), group=2)
-    application.add_handler(CallbackQueryHandler(admin_link_settings_menu, pattern="^admin_link_settings$"), group=2)
-    application.add_handler(CallbackQueryHandler(set_recommended_link_callback, pattern="^set_rec_link_"), group=2)
-    application.add_handler(CallbackQueryHandler(back_to_settings_callback, pattern="^back_to_settings$"), group=2)
-
-    # User callbacks
-    application.add_handler(CallbackQueryHandler(check_join_callback, pattern="^check_join$"), group=2)
-    application.add_handler(CallbackQueryHandler(show_service_management_callback, pattern=f"^{CALLBACK_SHOW_SERVICE}"), group=2)
-    application.add_handler(CallbackQueryHandler(list_my_services_callback, pattern="^back_to_services$"), group=2)
-    application.add_handler(CallbackQueryHandler(get_link_callback, pattern=f"^{CALLBACK_GET_LINK}"), group=2)
-    application.add_handler(CallbackQueryHandler(show_single_configs_menu, pattern="^single_configs_"), group=2)
-    application.add_handler(CallbackQueryHandler(get_single_config, pattern="^get_single_"), group=2)
-    application.add_handler(CallbackQueryHandler(renew_service_handler, pattern=f"^{CALLBACK_RENEW_SERVICE}"), group=2)
-    application.add_handler(CallbackQueryHandler(confirm_renewal_callback, pattern="^confirmrenew$"), group=2)
-    application.add_handler(CallbackQueryHandler(cancel_renewal_callback, pattern="^cancelrenew$"), group=2)
-
-    # Group 3: Regular Commands and Message Handlers
-    # These have lower priority and will only be triggered if no conversation is active.
-    application.add_handler(CommandHandler("start", start), group=3)
-    application.add_handler(MessageHandler(filters.Regex('^🛍️ خرید سرویس$'), buy_service_list), group=3)
-    application.add_handler(MessageHandler(filters.Regex('^📋 سرویس‌های من$'), list_my_services_callback), group=3) # Changed to callback for consistency
-    application.add_handler(MessageHandler(filters.Regex('^👤 اطلاعات حساب$'), show_account_info), group=3)
-    application.add_handler(MessageHandler(filters.Regex('^📞 پشتیبانی$'), show_support), group=3)
-    application.add_handler(MessageHandler(filters.Regex('^📚 راهنمای اتصال$'), show_guide), group=3)
-    application.add_handler(MessageHandler(filters.Regex('^🧪 دریافت سرویس تست رایگان$'), get_trial_service), group=3)
-    application.add_handler(MessageHandler(filters.Regex('^🎁 معرفی دوستان$'), show_referral_link), group=3)
-
-
-    # --- Schedule Jobs ---
-    job_queue = application.job_queue
-    job_queue.run_repeating(jobs.check_low_usage, interval=timedelta(hours=4), first=timedelta(seconds=10))
-    job_queue.run_daily(jobs.check_expiring_services, time=time(hour=9, minute=0))
-
-    logger.info("Bot is starting up with modular structure...")
-    
-    # --- Run the Bot ---
-    # This command starts the bot and keeps it running until you press Ctrl-C
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    logger.info("Bot is starting...")
+    # Run the bot until the user presses Ctrl-C
+    await application.run_polling()
 
 
 if __name__ == "__main__":
-    # Ensure the event loop is created before running main
-    # This is good practice for async applications.
     try:
-        main()
+        asyncio.run(main())
     except Exception as e:
-        logger.critical(f"Bot failed to start: {e}", exc_info=True)
+        logger.error(f"An error occurred in main execution: {e}")
