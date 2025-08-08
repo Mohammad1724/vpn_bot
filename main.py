@@ -4,7 +4,7 @@ import logging
 import asyncio
 
 # <--- FIX: Imports from the new library: python-telegram-bot
-from telegram import Update, ReplyKeyboardRemove
+from telegram import Update
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -22,13 +22,12 @@ try:
         create_main_menu_keyboard,
         create_services_menu_keyboard,
         create_back_keyboard,
-        create_cancel_keyboard,
         SELECTING_ACTION,
-        SELECTING_SERVICE,
         TYPING_WALLET_AMOUNT,
     )
-except ImportError:
-    print("Error: config.py or constants.py not found. Please ensure they exist.")
+except ImportError as e:
+    # Use logging for startup errors as well
+    logging.critical(f"Failed to import config or constants: {e}. Please ensure they exist and are correct.")
     exit(1)
 
 
@@ -36,6 +35,7 @@ except ImportError:
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
+# Use a specific logger for the bot
 logger = logging.getLogger(__name__)
 
 # --- Handler Functions ---
@@ -50,7 +50,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         reply_markup=create_main_menu_keyboard(),
         parse_mode='HTML'
     )
-    # This is the entry point of our main conversation
     return SELECTING_ACTION
 
 async def show_services(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -63,9 +62,8 @@ async def show_services(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 async def show_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Displays wallet information and options."""
-    # This is a placeholder. You need to implement wallet logic.
     user_id = update.effective_user.id
-    # Example: balance = db.get_user_balance(user_id)
+    # This is a placeholder. You need to implement database logic.
     balance = 0 
     await update.message.reply_text(
         f"موجودی کیف پول شما: {balance} تومان.\n"
@@ -73,7 +71,6 @@ async def show_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         reply_markup=create_back_keyboard()
     )
     return TYPING_WALLET_AMOUNT
-
 
 async def handle_wallet_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Processes the amount entered for wallet top-up."""
@@ -86,7 +83,7 @@ async def handle_wallet_amount(update: Update, context: ContextTypes.DEFAULT_TYP
         # Placeholder for payment logic
         await update.message.reply_text(
             f"درخواست افزایش موجودی به مبلغ {amount} تومان ثبت شد.\n"
-            "لطفا از طریق لینک زیر پرداخت را تکمیل کنید: [لینک پرداخت اینجا قرار می‌گیرد]",
+            "پرداخت در حال حاضر پیاده‌سازی نشده است.",
             reply_markup=create_main_menu_keyboard()
         )
         return SELECTING_ACTION
@@ -98,29 +95,34 @@ async def handle_wallet_amount(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return TYPING_WALLET_AMOUNT
 
-
 async def unhandled_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles any text that doesn't match a specific handler."""
-    await update.message.reply_text("متوجه نشدم. لطفا از دکمه‌های زیر استفاده کنید.")
+    await update.message.reply_text(
+        "دستور شما شناسایی نشد. لطفا از دکمه‌های منو استفاده کنید.",
+        reply_markup=create_main_menu_keyboard()
+        )
 
-
-async def done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Ends a conversation (e.g., on 'Cancel' or 'Back')."""
+async def back_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Generic handler for 'Back' button to return to the main menu."""
     await update.message.reply_text(
         "به منوی اصلی بازگشتید.",
         reply_markup=create_main_menu_keyboard(),
     )
+    # By returning SELECTING_ACTION, we go back to the main state of the conversation
     return SELECTING_ACTION
 
-
-async def main() -> None:
+async def main_entry() -> None:
     """Main function to set up and run the bot."""
     
-    # <--- FIX: Bot initialization using ApplicationBuilder
+    # --- FIX: Added a critical check for the bot token ---
+    if not BOT_TOKEN:
+        logger.critical("BOT_TOKEN is not set in config.py. The bot cannot start.")
+        return # Exit the function, causing the script to end.
+
+    # Bot initialization using ApplicationBuilder
     application = Application.builder().token(BOT_TOKEN).build()
     
-    # --- Conversation Handler Setup ---
-    # This handler manages the user's flow through the bot's menus.
+    # Conversation Handler Setup
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
@@ -132,29 +134,28 @@ async def main() -> None:
             TYPING_WALLET_AMOUNT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{BUTTON_TEXTS['back']}$"), handle_wallet_amount),
             ],
-            # Add more states here, e.g., for purchasing a service
         },
         fallbacks=[
             CommandHandler("start", start),
-            MessageHandler(filters.Regex(f"^{BUTTON_TEXTS['back']}$"), done),
-            MessageHandler(filters.Regex(f"^{BUTTON_TEXTS['cancel']}$"), done),
+            MessageHandler(filters.Regex(f"^{BUTTON_TEXTS['back']}$"), back_to_main_menu),
         ],
-        conversation_timeout=300 # Timeout in seconds
+        conversation_timeout=600 # 10 minutes
     )
 
-    # Add the main conversation handler to the application
     application.add_handler(conv_handler)
-    
-    # Add a handler for any other text that wasn't caught by the conversation
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unhandled_text))
 
-    logger.info("Bot is starting...")
+    logger.info("Bot configuration is complete.")
+    # --- FIX: Added a log right before polling starts ---
+    logger.info("Bot is starting to poll for updates...")
+
     # Run the bot until the user presses Ctrl-C
+    # This function is blocking and will run forever.
     await application.run_polling()
 
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        asyncio.run(main_entry())
     except Exception as e:
-        logger.error(f"An error occurred in main execution: {e}")
+        logger.critical(f"An unrecoverable error occurred in main execution: {e}")
