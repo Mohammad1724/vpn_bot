@@ -13,6 +13,7 @@ from telegram.ext import (
 )
 
 try:
+    # These are the only required imports from your local files
     from config import BOT_TOKEN, ADMIN_ID
     from constants import (
         BUTTON_TEXTS,
@@ -25,34 +26,33 @@ try:
         SELECTING_ADMIN_ACTION,
     )
 except ImportError as e:
-    logging.critical(f"Failed to import from config or constants: {e}")
+    logging.critical(f"FATAL: Failed to import from config or constants: {e}. Bot cannot start.")
     exit(1)
 
+# Configure logging for better debugging
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# --- User Handlers ---
+# --- Handler Functions ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handles /start. Differentiates between admin and regular user."""
+    """
+    Handles the /start command.
+    Differentiates between admin and regular users to show the correct menu.
+    """
     user = update.effective_user
     user_id = user.id
-
-    # --- FIX: Added detailed logging for debugging the admin check ---
-    logger.info("--- ADMIN CHECK ---")
-    logger.info(f"User ID from Telegram: {user_id} (Type: {type(user_id)})")
-    logger.info(f"Admin ID from config.py: {ADMIN_ID} (Type: {type(ADMIN_ID)})")
-
-    # --- FIX: Forcing both IDs to be integers before comparison for robustness ---
+    
+    # Robust check for admin status
     try:
+        # Forcing both IDs to be integers before comparison
         is_admin = (int(user_id) == int(ADMIN_ID))
     except (ValueError, TypeError):
-        is_admin = False # If conversion fails, they are not admin.
+        is_admin = False # If conversion fails, they are definitely not admin.
     
-    logger.info(f"Comparison result (is_admin): {is_admin}")
-    logger.info("-------------------")
+    logger.info(f"User {user.first_name} ({user_id}) started. Admin status: {is_admin}")
     
     reply_text = f"سلام {user.mention_html()}! به ربات فروش هیدیفای خوش آمدید."
     if is_admin:
@@ -74,7 +74,7 @@ async def show_services(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     return SELECTING_ACTION
 
 async def show_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Displays wallet information and asks for top-up amount."""
+    """Displays wallet info and asks for top-up amount."""
     balance = 0  # Placeholder for DB logic
     await update.message.reply_text(
         f"موجودی کیف پول شما: {balance} تومان.\n"
@@ -90,7 +90,7 @@ async def handle_wallet_amount(update: Update, context: ContextTypes.DEFAULT_TYP
         if amount <= 0: raise ValueError
         is_admin = (int(update.effective_user.id) == int(ADMIN_ID))
         await update.message.reply_text(
-            f"درخواست افزایش موجودی به مبلغ {amount} تومان ثبت شد. (منطق پرداخت پیاده‌سازی نشده)",
+            f"درخواست افزایش موجودی به مبلغ {amount} تومان ثبت شد. (منطق پرداخت در آینده اضافه خواهد شد)",
             reply_markup=create_main_menu_keyboard(is_admin=is_admin)
         )
         return SELECTING_ACTION
@@ -102,9 +102,8 @@ async def handle_wallet_amount(update: Update, context: ContextTypes.DEFAULT_TYP
         return TYPING_WALLET_AMOUNT
 
 # --- Admin Handlers ---
-
 async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Shows the admin-specific menu."""
+    """Shows the admin-specific menu. Includes a security check."""
     if int(update.effective_user.id) != int(ADMIN_ID):
         return SELECTING_ACTION
 
@@ -114,15 +113,14 @@ async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     )
     return SELECTING_ADMIN_ACTION
 
-async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Placeholder for the broadcast functionality."""
-    await update.message.reply_text("ویژگی ارسال پیام همگانی در حال توسعه است.")
+async def admin_placeholder(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """A placeholder for admin features that are not yet implemented."""
+    await update.message.reply_text("این ویژگی در حال حاضر در دست توسعه است.")
     return SELECTING_ADMIN_ACTION
 
 # --- Common Handlers ---
-
 async def unhandled_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles any text that doesn't match a specific command or button."""
+    """Handles any text that doesn't match a defined command or button."""
     is_admin = (int(update.effective_user.id) == int(ADMIN_ID))
     await update.message.reply_text(
         "دستور شما شناسایی نشد. لطفا از دکمه‌های منو استفاده کنید.",
@@ -130,13 +128,14 @@ async def unhandled_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
 
 def main() -> None:
-    """Main function to set up and run the bot."""
+    """The main function to set up and run the bot."""
     if not BOT_TOKEN:
-        logger.critical("BOT_TOKEN is not set in config.py. The bot cannot start.")
+        logger.critical("FATAL: BOT_TOKEN is not set in config.py. Bot cannot start.")
         return
 
     application = Application.builder().token(BOT_TOKEN).build()
     
+    # This conversation handler manages the entire user flow.
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
@@ -149,7 +148,7 @@ def main() -> None:
                 MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(f"^{BUTTON_TEXTS['back']}$"), handle_wallet_amount),
             ],
             SELECTING_ADMIN_ACTION: [
-                MessageHandler(filters.Regex(f"^{BUTTON_TEXTS['broadcast']}$"), admin_broadcast),
+                MessageHandler(filters.Regex(f"^({BUTTON_TEXTS['user_management']}|{BUTTON_TEXTS['statistics']}|{BUTTON_TEXTS['broadcast']})$"), admin_placeholder),
                 MessageHandler(filters.Regex(f"^{BUTTON_TEXTS['back_to_user_menu']}$"), start),
             ]
         },
@@ -157,13 +156,14 @@ def main() -> None:
             CommandHandler("start", start),
             MessageHandler(filters.Regex(f"^{BUTTON_TEXTS['back']}$"), start),
         ],
-        conversation_timeout=600
+        conversation_timeout=600 # 10 minutes
     )
 
     application.add_handler(conv_handler)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unhandled_text))
 
     logger.info("Bot configuration is complete. Starting to poll for updates...")
+    # This line is blocking and will run the bot indefinitely.
     application.run_polling()
 
 if __name__ == "__main__":
