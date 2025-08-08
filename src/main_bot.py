@@ -77,7 +77,7 @@ def check_channel_membership(func):
         for channel in FORCE_JOIN_CHANNELS:
             try:
                 member = await context.bot.get_chat_member(chat_id=channel, user_id=user_id)
-                if member.status not in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]:
+                if member.status not in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
                     not_joined_channels.append(channel)
             except (BadRequest, Forbidden) as e:
                 logger.error(f"Error checking membership for channel {channel}: {e}")
