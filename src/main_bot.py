@@ -282,7 +282,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("شما از استفاده از این ربات منع شده‌اید.")
         return ConversationHandler.END
         
-    await update.message.reply_text("👋 به ربات فروش VPN خوش آمدید!", reply_markup=get_main_menu_keyboard(user.id))
+    msg = update.message or (update.callback_query and update.callback_query.message)
+if msg:
+    await msg.reply_text("👋 به ربات فروش VPN خوش آمدید!", reply_markup=get_main_menu_keyboard(user.id))
     return ConversationHandler.END
 
 async def check_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
