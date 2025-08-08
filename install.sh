@@ -1,264 +1,144 @@
 #!/bin/bash
 
 # =================================================================
-# Hiddify Advanced Bot Manager - v1.0
-# A professional multi-tool script for managing the bot lifecycle.
+# Hiddify Bot Installer
+# A standalone script for the initial installation of the bot.
+# This script is designed to work in tandem with manager.sh
 # =================================================================
 
-set -o pipefail
+set -e # Exit immediately if a command exits with a non-zero status.
 
 # --- Configuration ---
 PROJECT_NAME="vpn_bot"
-GITHUB_REPO="https://github.com/Mohammad1724/vpn_bot.git"
-DEFAULT_INSTALL_DIR="/opt/vpn-bot"
+GITHUB_REPO="https://github.com/Mohammad1724/vpn_bot.git" # Your repository
+INSTALL_DIR="/opt/vpn_bot"
 SERVICE_NAME="${PROJECT_NAME}.service"
 
-# --- Colors ---
+# --- Colors for better output ---
 C_RESET='\033[0m'
 C_RED='\033[0;31m'
 C_GREEN='\033[0;32m'
 C_YELLOW='\033[0;33m'
 C_BLUE='\033[0;34m'
-C_CYAN='\033[0;36m'
 
 # --- Helper Functions ---
-
 print_color() {
     echo -e "${!1}${2}${C_RESET}"
 }
 
 check_root() {
     if [ "$(id -u)" -ne "0" ]; then
-        print_color "C_YELLOW" "This action requires root privileges. Attempting to re-run with sudo..."
+        print_color "C_YELLOW" "This script requires root privileges. Re-running with sudo..."
+        # Re-execute the script with sudo, passing all original arguments
         exec sudo bash "$0" "$@"
         exit 1
     fi
 }
 
-# --- Core Functions ---
+# --- Main Installation Logic ---
 
-do_install() {
-    print_color "C_BLUE" "--- Starting Full Bot Installation ---"
-    
-    print_color "C_YELLOW" "[1/7] Installing system dependencies..."
-    apt-get update > /dev/null 2>&1
-    apt-get install -y python3 python3-pip python3-venv curl git > /dev/null 2>&1
+# 1. Ensure the script is run as root
+check_root
 
-    INSTALL_DIR=$DEFAULT_INSTALL_DIR
-    if [ -d "$INSTALL_DIR" ]; then
-        print_color "C_YELLOW" "An existing installation was found. Backing up config and removing old directory..."
-        if [ -f "${INSTALL_DIR}/src/config.py" ]; then
-            mv "${INSTALL_DIR}/src/config.py" "/tmp/config.py.bak"
-            print_color "C_GREEN" "Existing config.py backed up to /tmp/config.py.bak"
-        fi
-        systemctl stop "$SERVICE_NAME" || true
+print_color "C_BLUE" "--- Starting Hiddify Bot Installation ---"
+
+# 2. Install required system packages
+print_color "C_YELLOW" "[1/6] Installing system dependencies (git, python3, pip, venv)..."
+apt-get update > /dev/null 2>&1
+apt-get install -y git python3 python3-pip python3-venv > /dev/null 2>&1
+print_color "C_GREEN" "System dependencies installed."
+
+# 3. Clone the repository
+if [ -d "$INSTALL_DIR" ]; then
+    print_color "C_YELLOW" "Existing installation directory found at $INSTALL_DIR."
+    read -p "Do you want to remove it and perform a clean installation? (This will delete existing data inside) [y/N]: " REINSTALL_CONFIRM
+    if [[ "$REINSTALL_CONFIRM" =~ ^[Yy]$ ]]; then
+        print_color "C_RED" "Removing existing directory..."
+        systemctl stop "$SERVICE_NAME" &>/dev/null || true # Stop service if it exists
         rm -rf "$INSTALL_DIR"
-    fi
-
-    print_color "C_YELLOW" "[2/7] Cloning repository..."
-    git clone "$GITHUB_REPO" "$INSTALL_DIR"
-    cd "$INSTALL_DIR"
-
-    print_color "C_YELLOW" "[3/7] Setting up Python environment..."
-    python3 -m venv venv
-    source venv/bin/activate
-    pip install --upgrade pip > /dev/null 2>&1
-    pip install -r requirements.txt > /dev/null 2>&1
-    deactivate
-
-    print_color "C_YELLOW" "[4/7] Creating configuration file..."
-    CONFIG_FILE="src/config.py"
-    cp src/config_template.py "$CONFIG_FILE"
-
-    if [ -f "/tmp/config.py.bak" ]; then
-        read -p "A backup of your previous config was found. Do you want to restore it? [Y/n]: " RESTORE_CONF
-        if [[ "${RESTORE_CONF:-Y}" =~ ^[Yy]$ ]]; then
-            mv "/tmp/config.py.bak" "$CONFIG_FILE"
-            print_color "C_GREEN" "Configuration restored."
-        else
-            collect_config_details "$CONFIG_FILE"
-        fi
     else
-        collect_config_details "$CONFIG_FILE"
+        print_color "C_YELLOW" "Installation aborted by user."
+        exit 0
     fi
+fi
+print_color "C_YELLOW" "[2/6] Cloning the bot repository from GitHub..."
+git clone "$GITHUB_REPO" "$INSTALL_DIR" > /dev/null 2>&1
+print_color "C_GREEN" "Repository cloned to $INSTALL_DIR."
 
-    print_color "C_YELLOW" "[5/7] Creating systemd service..."
-    SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}"
-    create_systemd_service "$INSTALL_DIR" "$SERVICE_FILE"
+# Change to the project directory
+cd "$INSTALL_DIR"
 
-    print_color "C_YELLOW" "[6/7] Reloading and starting the service..."
-    systemctl daemon-reload
-    systemctl enable "$SERVICE_NAME"
-    systemctl start "$SERVICE_NAME"
+# 4. Set up Python virtual environment and install packages
+print_color "C_YELLOW" "[3/6] Setting up Python virtual environment..."
+python3 -m venv venv
+print_color "C_YELLOW" "Installing Python dependencies from requirements.txt..."
+source venv/bin/activate
+pip install --upgrade pip > /dev/null 2>&1
+pip install -r requirements.txt > /dev/null 2>&1
+deactivate
+print_color "C_GREEN" "Python environment is ready."
 
-    print_color "C_GREEN" "\n--- Installation Complete! ---"
-    print_color "C_YELLOW" "The bot is now running. Use 'sudo bash manager.sh' to manage it."
-}
+# 5. Create and populate the configuration file
+print_color "C_YELLOW" "[4/6] Creating configuration file (src/config.py)..."
+CONFIG_FILE="src/config.py"
+# Assuming you have a template file in your repo
+cp src/config_template.py "$CONFIG_FILE" 
 
-collect_config_details() {
-    local CONFIG_FILE=$1
-    print_color "C_BLUE" "Please provide the following details:"
-    read -p "Enter your Telegram Bot Token: " BOT_TOKEN
-    read -p "Enter your numeric Telegram Admin ID: " ADMIN_ID
-    read -p "Enter your Hiddify panel domain (e.g., mypanel.com): " PANEL_DOMAIN
-    read -p "Enter your Hiddify ADMIN secret path: " ADMIN_PATH
-    read -p "Enter your Hiddify SUBSCRIPTION secret path (can be same as ADMIN_PATH): " SUB_PATH
-    read -p "Enter your Hiddify API Key: " API_KEY
-    read -p "Enter your support Telegram username (without @): " SUPPORT_USERNAME
-    read -p "Enter subscription domains, separated by comma: " SUB_DOMAINS_INPUT
-    
-    PYTHON_LIST_FORMAT_DOMAINS="[]"
-    if [ -n "$SUB_DOMAINS_INPUT" ]; then
-        PYTHON_LIST_FORMAT_DOMAINS="[\"$(echo "$SUB_DOMAINS_INPUT" | sed 's/,/\", \"/g')\"]"
-    fi
+print_color "C_BLUE" "Please provide the following details to configure your bot:"
+read -p "Enter your Telegram Bot Token: " BOT_TOKEN
+read -p "Enter your numeric Telegram Admin ID: " ADMIN_ID
+read -p "Enter your support Telegram username (without @): " SUPPORT_USERNAME
 
-    read -p "Enable free trial? [Y/n]: " ENABLE_TRIAL
-    TRIAL_ENABLED_VAL="False"; TRIAL_DAYS_VAL=1; TRIAL_GB_VAL=1
-    if [[ "${ENABLE_TRIAL:-Y}" =~ ^[Yy]$ ]]; then
-        TRIAL_ENABLED_VAL="True"
-        read -p "Trial duration in days [1]: " TRIAL_DAYS_INPUT; TRIAL_DAYS_VAL=${TRIAL_DAYS_INPUT:-1}
-        read -p "Trial data limit in GB [1]: " TRIAL_GB_INPUT; TRIAL_GB_VAL=${TRIAL_GB_INPUT:-1}
-    fi
+print_color "C_BLUE" "Hiddify Panel Details:"
+read -p "Enter panel domain (e.g., mypanel.com): " PANEL_DOMAIN
+read -p "Enter Hiddify ADMIN secret path: " ADMIN_PATH
+read -p "Enter Hiddify SUBSCRIPTION secret path (can be same as ADMIN_PATH): " SUB_PATH
+read -p "Enter Hiddify API Key (if you use one, otherwise leave blank): " API_KEY
 
-    read -p "Referral bonus in Toman [5000]: " REFERRAL_BONUS_INPUT; REFERRAL_BONUS_AMOUNT=${REFERRAL_BONUS_INPUT:-5000}
-    read -p "Send expiry reminder X days before [3]: " EXPIRY_REMINDER_INPUT; EXPIRY_REMINDER_DAYS=${EXPIRY_REMINDER_INPUT:-3}
-    read -p "Send low usage warning at what percentage? (e.g., 80) [80]: " USAGE_THRESHOLD_INPUT; USAGE_ALERT_THRESHOLD_PERCENT=${USAGE_THRESHOLD_INPUT:-80}
-    USAGE_ALERT_THRESHOLD=$(awk "BEGIN {print ${USAGE_ALERT_THRESHOLD_PERCENT}/100}")
+# Apply configurations using sed
+sed -i "s|^BOT_TOKEN = .*|BOT_TOKEN = \"${BOT_TOKEN}\"|" "$CONFIG_FILE"
+sed -i "s|^ADMIN_ID = .*|ADMIN_ID = ${ADMIN_ID}|" "$CONFIG_FILE"
+sed -i "s|^SUPPORT_USERNAME = .*|SUPPORT_USERNAME = \"${SUPPORT_USERNAME}\"|" "$CONFIG_FILE"
+sed -i "s|^PANEL_DOMAIN = .*|PANEL_DOMAIN = \"${PANEL_DOMAIN}\"|" "$CONFIG_FILE"
+sed -i "s|^ADMIN_PATH = .*|ADMIN_PATH = \"${ADMIN_PATH}\"|" "$CONFIG_FILE"
+sed -i "s|^SUB_PATH = .*|SUB_PATH = \"${SUB_PATH}\"|" "$CONFIG_FILE"
+# Only set API_KEY if it's provided
+if [ -n "$API_KEY" ]; then
+    sed -i "s|^API_KEY = .*|API_KEY = \"${API_KEY}\"|" "$CONFIG_FILE"
+fi
 
-    read -p "Enter channel usernames for force join (@ch1,@ch2): " FORCE_JOIN_INPUT
-    PYTHON_LIST_FORMAT_CHANNELS="[]"
-    if [ -n "$FORCE_JOIN_INPUT" ]; then
-        PYTHON_LIST_FORMAT_CHANNELS="[\"$(echo "$FORCE_JOIN_INPUT" | sed 's/,/\", \"/g')\"]"
-    fi
-    
-    sed -i "s|^BOT_TOKEN = .*|BOT_TOKEN = \"${BOT_TOKEN}\"|; \
-            s|^ADMIN_ID = .*|ADMIN_ID = ${ADMIN_ID}|; \
-            s|^SUPPORT_USERNAME = .*|SUPPORT_USERNAME = \"${SUPPORT_USERNAME}\"|; \
-            s|^PANEL_DOMAIN = .*|PANEL_DOMAIN = \"${PANEL_DOMAIN}\"|; \
-            s|^ADMIN_PATH = .*|ADMIN_PATH = \"${ADMIN_PATH}\"|; \
-            s|^SUB_PATH = .*|SUB_PATH = \"${SUB_PATH}\"|; \
-            s|^API_KEY = .*|API_KEY = \"${API_KEY}\"|; \
-            s|^SUB_DOMAINS = .*|SUB_DOMAINS = ${PYTHON_LIST_FORMAT_DOMAINS}|; \
-            s|^TRIAL_ENABLED = .*|TRIAL_ENABLED = ${TRIAL_ENABLED_VAL}|; \
-            s|^TRIAL_DAYS = .*|TRIAL_DAYS = ${TRIAL_DAYS_VAL}|; \
-            s|^TRIAL_GB = .*|TRIAL_GB = ${TRIAL_GB_VAL}|; \
-            s|^REFERRAL_BONUS_AMOUNT = .*|REFERRAL_BONUS_AMOUNT = ${REFERRAL_BONUS_AMOUNT}|; \
-            s|^EXPIRY_REMINDER_DAYS = .*|EXPIRY_REMINDER_DAYS = ${EXPIRY_REMINDER_DAYS}|; \
-            s|^USAGE_ALERT_THRESHOLD = .*|USAGE_ALERT_THRESHOLD = ${USAGE_ALERT_THRESHOLD}|; \
-            s|^FORCE_JOIN_CHANNELS = .*|FORCE_JOIN_CHANNELS = ${PYTHON_LIST_FORMAT_CHANNELS}|" "$CONFIG_FILE"
-}
+print_color "C_GREEN" "Configuration file created successfully."
 
-create_systemd_service() {
-    local INSTALL_DIR=$1
-    local SERVICE_FILE=$2
-    cat > "$SERVICE_FILE" << EOL
+# 6. Create, enable, and start the systemd service
+print_color "C_YELLOW" "[5/6] Creating systemd service file..."
+SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}"
+cat > "$SERVICE_FILE" << EOL
 [Unit]
-Description=Hiddify Telegram Bot Service
+Description=Hiddify Telegram Bot (${PROJECT_NAME})
 After=network.target
+
 [Service]
 User=root
 Group=root
 WorkingDirectory=${INSTALL_DIR}/src
-ExecStart=${INSTALL_DIR}/venv/bin/python main_bot.py
+ExecStart=${INSTALL_DIR}/venv/bin/python main.py
 Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
+
 [Install]
 WantedBy=multi-user.target
 EOL
-}
+print_color "C_GREEN" "Service file created at $SERVICE_FILE."
 
-do_update() {
-    print_color "C_BLUE" "--- Updating Bot ---"
-    cd "$DEFAULT_INSTALL_DIR"
-    print_color "C_YELLOW" "[1/3] Pulling latest changes from GitHub..."
-    git pull origin main
-    
-    print_color "C_YELLOW" "[2/3] Updating Python packages..."
-    source venv/bin/activate
-    pip install -r requirements.txt > /dev/null 2>&1
-    deactivate
-    
-    print_color "C_YELLOW" "[3/3] Restarting the bot service..."
-    systemctl restart "$SERVICE_NAME"
-    
-    print_color "C_GREEN" "\n--- Update Complete! ---"
-}
+print_color "C_YELLOW" "[6/6] Enabling and starting the bot service..."
+systemctl daemon-reload
+systemctl enable "$SERVICE_NAME"
+systemctl start "$SERVICE_NAME"
 
-do_uninstall() {
-    read -p "Are you sure you want to completely uninstall the bot? [y/N]: " CONFIRM
-    if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
-        print_color "C_YELLOW" "Uninstallation cancelled."
-        exit 0
-    fi
-    
-    print_color "C_YELLOW" "Stopping and disabling service..."
-    systemctl stop "$SERVICE_NAME" || true
-    systemctl disable "$SERVICE_NAME" || true
-
-    print_color "C_YELLOW" "Removing files..."
-    rm -f "/etc/systemd/system/${SERVICE_NAME}"
-    rm -rf "$DEFAULT_INSTALL_DIR"
-    systemctl daemon-reload
-    
-    print_color "C_GREEN" "\n--- Uninstallation Complete! ---"
-}
-
-do_status() {
-    systemctl status "$SERVICE_NAME"
-    # Bonus: Check if bot is responsive via Telegram API
-    TOKEN=$(grep -oP 'BOT_TOKEN = "\K[^"]+' ${DEFAULT_INSTALL_DIR}/src/config.py)
-    if [ -n "$TOKEN" ]; then
-        API_URL="https://api.telegram.org/bot${TOKEN}/getMe"
-        if response=$(curl -s $API_URL); then
-            if echo "$response" | grep -q '"ok":true'; then
-                BOT_USERNAME=$(echo "$response" | grep -oP '"username":"\K[^"]+')
-                print_color "C_GREEN" "\nTelegram API check: Bot @${BOT_USERNAME} is responsive."
-            else
-                print_color "C_RED" "\nTelegram API check: Bot token seems invalid or blocked."
-            fi
-        else
-            print_color "C_RED" "\nTelegram API check: Could not connect to Telegram API."
-        fi
-    fi
-}
-
-# --- Main Menu ---
-show_menu() {
-    clear
-    print_color "C_CYAN" "========================================="
-    print_color "C_CYAN" "    Hiddify Advanced Bot Manager v2.0"
-    print_color "C_CYAN" "========================================="
-    echo ""
-    print_color "C_GREEN" "  1. Install / Reinstall Bot"
-    print_color "C_GREEN" "  2. Update Bot"
-    print_color "C_YELLOW" "  3. Restart Service"
-    print_color "C_YELLOW" "  4. Check Service Status"
-    print_color "C_YELLOW" "  5. View Live Logs (journalctl)"
-    print_color "C_YELLOW" "  6. View bot.log File"
-    print_color "C_RED"   "  7. Uninstall Bot"
-    echo ""
-    print_color "C_CYAN" "  0. Exit"
-    print_color "C_CYAN" "-----------------------------------------"
-    read -p "Please enter your choice [0-7]: " choice
-}
-
-# --- Script Logic ---
-if [[ "$1" ]]; then
-    choice=$1
-else
-    show_menu
-fi
-
-case $choice in
-    1) check_root; do_install ;;
-    2) check_root; do_update ;;
-    3) check_root; systemctl restart "$SERVICE_NAME"; print_color "C_GREEN" "Service restarted." ;;
-    4) check_root; do_status ;;
-    5) check_root; journalctl -u "$SERVICE_NAME" -f ;;
-    6) do_view_log_file ;; # No root needed to view log
-    7) check_root; do_uninstall ;;
-    0) print_color "C_BLUE" "Exiting."; exit 0 ;;
-    *) print_color "C_RED" "Invalid choice." ;;
-esac
+print_color "C_GREEN" "\n--- Installation Complete! ---"
+print_color "C_BLUE" "The bot is now running as a background service."
+echo "You can check its status with: ${C_YELLOW}sudo systemctl status ${SERVICE_NAME}${C_RESET}"
+echo "You can view live logs with: ${C_YELLOW}sudo journalctl -u ${SERVICE_NAME} -f${C_RESET}"
+echo "To manage the bot later, you can download and use the manager.sh script."
