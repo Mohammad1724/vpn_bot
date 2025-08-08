@@ -354,12 +354,19 @@ async def show_link_options_menu(message: Update.message, user_uuid: str, servic
     
     try:
         if is_edit:
-            await message.edit_text(text, reply_markup=reply_markup)
+            if message.photo:
+                await message.delete()
+                await message.chat.send_message(text, reply_markup=reply_markup)
+            else:
+                await message.edit_text(text, reply_markup=reply_markup)
         else:
             await message.reply_text(text, reply_markup=reply_markup)
     except BadRequest as e:
-        if "message is not modified" not in str(e):
+        if "message is not modified" not in str(e) and "message to edit not found" not in str(e):
             logger.error(f"Error in show_link_options_menu: {e}")
+    except Exception as e:
+        logger.error(f"An unexpected error in show_link_options_menu: {e}", exc_info=True)
+
 
 async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -551,13 +558,13 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
     if new_hiddify_info:
         db.finalize_renewal_transaction(transaction_id, plan['plan_id'])
         if original_message: 
-            await original_message.edit_text("✅ سرویس با موفقیت تمدید شد! لطفاً نوع لینک مورد نظر را انتخاب کنید...")
             from unittest.mock import Mock
             mock_query = Mock()
             mock_query.data = f"view_service_{service_id}"
             mock_query.message = original_message
             mock_query.answer = asyncio.coroutine(lambda: None)
             mock_update = Mock(callback_query=mock_query, effective_user=update.effective_user)
+            await original_message.edit_text("✅ سرویس با موفقیت تمدید شد! لطفاً نوع لینک مورد نظر را انتخاب کنید...")
             await view_service_callback(mock_update, context)
         else:
             await context.bot.send_message(chat_id=user_id, text="✅ سرویس با موفقیت تمدید شد!")
