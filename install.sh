@@ -86,21 +86,39 @@ function install_bot() {
 
     # 4. Create configuration file
     print_color "C_YELLOW" "[4/6] Creating configuration file (config.py)..."
-    CONFIG_FILE="config.py" # <--- FIX: Removed "src/"
-    cp config_template.py "$CONFIG_FILE" # <--- FIX: Removed "src/"
+    CONFIG_FILE="config.py"
+    cp config_template.py "$CONFIG_FILE"
 
-    print_color "C_BLUE" "Please provide the following details to configure the bot:"
+    print_color "C_BLUE" "--- Bot & Panel Configuration ---"
     read -p "Enter your Telegram Bot Token: " BOT_TOKEN
     read -p "Enter your numeric Telegram Admin ID: " ADMIN_ID
     read -p "Enter your support Telegram username (without @): " SUPPORT_USERNAME
-
-    print_color "C_BLUE" "Hiddify Panel Details:"
+    
+    print_color "C_BLUE" "--- Hiddify Panel Details ---"
     read -p "Enter panel domain (e.g., mypanel.com): " PANEL_DOMAIN
     read -p "Enter Hiddify ADMIN secret path: " ADMIN_PATH
     read -p "Enter Hiddify SUBSCRIPTION secret path (can be same as ADMIN_PATH): " SUB_PATH
     read -p "Enter Hiddify API Key (if you use one, otherwise leave blank): " API_KEY
+    read -p "Enter alternative subscription domains, comma-separated (e.g., sub1.domain,sub2.domain), or leave blank: " SUB_DOMAINS_INPUT
+    
+    print_color "C_BLUE" "--- Free Trial Configuration ---"
+    read -p "Enable free trial service? [Y/n]: " TRIAL_ENABLED_CHOICE
+    if [[ "$TRIAL_ENABLED_CHOICE" =~ ^[Yy]$ ]]; then
+        TRIAL_ENABLED_VAL="True"
+        read -p "Enter trial duration in days (e.g., 1): " TRIAL_DAYS
+        read -p "Enter trial data limit in GB (e.g., 1): " TRIAL_GB
+    else
+        TRIAL_ENABLED_VAL="False"
+        TRIAL_DAYS=1  # Default value, won't be used
+        TRIAL_GB=1    # Default value, won't be used
+    fi
 
-    # Apply configurations using sed
+    print_color "C_BLUE" "--- Features & Reminders ---"
+    read -p "Enter referral bonus amount in Toman (e.g., 5000): " REFERRAL_BONUS_AMOUNT
+    read -p "Send expiry reminder how many days before expiration? (e.g., 3): " EXPIRY_REMINDER_DAYS
+    read -p "Send usage limit reminder at what percentage? (e.g., 80 for 80%): " USAGE_LIMIT_REMINDER_PERCENT
+
+    # --- Apply configurations using sed ---
     sed -i "s|^BOT_TOKEN = .*|BOT_TOKEN = \"${BOT_TOKEN}\"|" "$CONFIG_FILE"
     sed -i "s|^ADMIN_ID = .*|ADMIN_ID = ${ADMIN_ID}|" "$CONFIG_FILE"
     sed -i "s|^SUPPORT_USERNAME = .*|SUPPORT_USERNAME = \"${SUPPORT_USERNAME}\"|" "$CONFIG_FILE"
@@ -110,6 +128,25 @@ function install_bot() {
     if [ -n "$API_KEY" ]; then
         sed -i "s|^API_KEY = .*|API_KEY = \"${API_KEY}\"|" "$CONFIG_FILE"
     fi
+    
+    # Process subdomains into a Python list format
+    if [ -n "$SUB_DOMAINS_INPUT" ]; then
+        PROCESSED_SUB_DOMAINS=$(echo "$SUB_DOMAINS_INPUT" | sed 's/[^,]\+/"&"/g')
+        sed -i "s|^SUB_DOMAINS = .*|SUB_DOMAINS = [${PROCESSED_SUB_DOMAINS}]|" "$CONFIG_FILE"
+    fi
+
+    # Apply new settings
+    sed -i "s|^TRIAL_ENABLED = .*|TRIAL_ENABLED = ${TRIAL_ENABLED_VAL}|" "$CONFIG_FILE"
+    sed -i "s|^TRIAL_DAYS = .*|TRIAL_DAYS = ${TRIAL_DAYS}|" "$CONFIG_FILE"
+    sed -i "s|^TRIAL_GB = .*|TRIAL_GB = ${TRIAL_GB}|" "$CONFIG_FILE"
+    sed -i "s|^REFERRAL_BONUS_AMOUNT = .*|REFERRAL_BONUS_AMOUNT = ${REFERRAL_BONUS_AMOUNT}|" "$CONFIG_FILE"
+    sed -i "s|^EXPIRY_REMINDER_DAYS = .*|EXPIRY_REMINDER_DAYS = ${EXPIRY_REMINDER_DAYS}|" "$CONFIG_FILE"
+    
+    # Add the new usage limit reminder setting to the file
+    # This assumes USAGE_LIMIT_REMINDER_PERCENT is not in the template, so we append it.
+    # If it IS in the template, this line can be changed to a sed -i command like the others.
+    echo "USAGE_LIMIT_REMINDER_PERCENT = ${USAGE_LIMIT_REMINDER_PERCENT}" >> "$CONFIG_FILE"
+
     print_color "C_GREEN" "Configuration file created successfully."
 
     # 5. Create systemd service
@@ -132,9 +169,6 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 EOL
-# <--- FIX: Changed WorkingDirectory from ${INSTALL_DIR}/src to ${INSTALL_DIR}
-# <--- FIX: Changed ExecStart to run main.py from the root of the project.
-    
     print_color "C_GREEN" "Service file created at $SERVICE_FILE."
 
     # 6. Enable and start the service
@@ -168,6 +202,7 @@ function update_bot() {
     systemctl restart "$SERVICE_NAME"
     
     print_color "C_GREEN" "--- Update Complete! ---"
+    print_color "C_YELLOW" "Note: If new configurations were added in the update, you may need to reinstall (Option 1) to set them."
 }
 
 function show_status() {
@@ -228,7 +263,7 @@ function uninstall_bot() {
 function uninstall_bot_silent() {
     print_color "C_YELLOW" "Stopping and disabling service..."
     systemctl stop "$SERVICE_NAME" &>/dev/null || true
-    systemctl disable "$SERVICE_NAME" &>/dev/null || true
+    systemctl disable "$SERVICE_NAME" &>/_dev/null || true
     
     print_color "C_YELLOW" "Removing service file..."
     rm -f "$SERVICE_FILE"
