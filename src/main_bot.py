@@ -79,15 +79,8 @@ def check_channel_membership(func):
                 member = await context.bot.get_chat_member(chat_id=channel, user_id=user_id)
                 if member.status not in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]:
                     not_joined_channels.append(channel)
-            except BadRequest as e:
-                logger.error(f"Error checking membership for channel {channel}: {e}. Is the bot an admin in this channel?")
-                if "chat not found" in str(e).lower():
-                    await context.bot.send_message(ADMIN_ID, f"⚠️ **اخطار ادمین:** ربات نتوانست کانال `{channel}` را پیدا کند. لطفاً یوزرنیم یا آیدی کانال را در `config.py` بررسی کنید.", parse_mode=ParseMode.MARKDOWN)
-                else:
-                    await context.bot.send_message(ADMIN_ID, f"⚠️ **اخطار ادمین:** ربات دسترسی لازم برای چک کردن عضویت در کانال `{channel}` را ندارد. لطفاً ربات را در کانال ادمین کنید.", parse_mode=ParseMode.MARKDOWN)
-                not_joined_channels.append(channel)
-            except Exception as e:
-                logger.error(f"An unexpected error occurred while checking membership for {channel}: {e}")
+            except (BadRequest, Forbidden) as e:
+                logger.error(f"Error checking membership for channel {channel}: {e}")
                 not_joined_channels.append(channel)
         
         if not_joined_channels:
@@ -96,28 +89,22 @@ def check_channel_membership(func):
             for i, channel in enumerate(not_joined_channels, 1):
                 try:
                     chat = await context.bot.get_chat(channel)
-                    invite_link = chat.invite_link
-                    if not invite_link:
-                        invite_link = f"https://t.me/{chat.username}"
+                    invite_link = chat.invite_link or f"https://t.me/{chat.username}"
                     text += f"{i}- {chat.title}\n"
                     keyboard.append([InlineKeyboardButton(f"عضویت در کانال {chat.title}", url=invite_link)])
                 except Exception as e:
                     logger.error(f"Could not get info for channel {channel}: {e}")
-                    text += f"{i}- {channel}\n"
-                    keyboard.append([InlineKeyboardButton(f"عضویت در کانال", url=f"https://t.me/{channel.lstrip('@')}")])
             
             keyboard.append([InlineKeyboardButton("✅ عضو شدم", callback_data="check_join")])
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             if update.callback_query:
                 await update.callback_query.answer("لطفا ابتدا در کانال عضو شوید.", show_alert=True)
+                # Check if the message is a photo, if so, we can't edit text. Send new.
                 if update.effective_message.photo:
-                     await update.effective_message.reply_text(text, reply_markup=reply_markup)
+                    await update.effective_message.reply_text(text, reply_markup=reply_markup)
                 else:
-                    try:
-                        await update.effective_message.edit_text(text, reply_markup=reply_markup)
-                    except BadRequest:
-                        await update.effective_message.reply_text(text, reply_markup=reply_markup)
+                    await update.effective_message.edit_text(text, reply_markup=reply_markup)
             else:
                 await update.message.reply_text(text, reply_markup=reply_markup)
             return
@@ -722,7 +709,6 @@ async def show_link_options_menu(message: Update.message, user_uuid: str, is_edi
     except BadRequest as e:
         if "message is not modified" not in str(e): logger.error(f"Error in show_link_options_menu: {e}")
 
-@check_channel_membership
 async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -753,7 +739,458 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ====================================================================
 # ADMIN SECTION
 # ====================================================================
-# (Admin functions and ConversationHandler definitions are here)
+
+async def admin_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("👑 به پنل ادمین خوش آمدید.", reply_markup=get_admin_menu_keyboard())
+    return ADMIN_MENU
+
+async def exit_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("شما از پنل ادمین خارج شدید.", reply_markup=get_main_menu_keyboard(update.effective_user.id))
+    return ConversationHandler.END
+
+async def back_to_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
+    await update.message.reply_text("به منوی اصلی ادمین بازگشتید.", reply_markup=get_admin_menu_keyboard())
+    return ADMIN_MENU
+
+async def admin_delete_plan_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    plan_id = int(query.data.split('_')[-1])
+    db.delete_plan(plan_id)
+    await query.message.delete()
+    await query.from_user.send_message("پلن با موفقیت حذف شد.")
+    return PLAN_MENU
+
+async def admin_toggle_plan_visibility_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    plan_id = int(query.data.split('_')[-1])
+    db.toggle_plan_visibility(plan_id)
+    await query.answer("وضعیت نمایش پلن تغییر کرد.")
+    await query.message.delete()
+    await query.from_user.send_message("وضعیت نمایش پلن تغییر کرد. برای دیدن تغییرات، لیست را مجددا باز کنید.")
+    return PLAN_MENU
+
+async def admin_confirm_charge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    prefix = "admin_confirm_charge_"
+    try:
+        data_part = query.data[len(prefix):]
+        user_id_str, amount_str = data_part.split('_', 1)
+        target_user_id = int(user_id_str)
+        amount = int(float(amount_str))
+    except (ValueError, IndexError) as e:
+        logger.error(f"Error parsing admin_confirm_charge_callback data: {query.data} | Error: {e}")
+        try:
+            if query.message.photo:
+                await query.edit_message_caption(caption=f"{query.message.caption}\n\n---\n❌ خطا در پردازش اطلاعات دکمه.")
+            else:
+                await query.edit_message_text("❌ خطا در پردازش اطلاعات دکمه.")
+        except Exception as edit_error:
+            logger.error(f"Fallback error message failed to send: {edit_error}")
+        return
+
+    db.update_balance(target_user_id, amount)
+    original_caption = query.message.caption or ""
+    admin_feedback = f"{original_caption}\n\n---\n✅ با موفقیت مبلغ {amount:,} تومان به حساب کاربر `{target_user_id}` اضافه شد."
+    
+    try:
+        await context.bot.send_message(
+            chat_id=target_user_id, 
+            text=f"حساب شما با موفقیت به مبلغ **{amount:,} تومان** شارژ شد!", 
+            parse_mode=ParseMode.MARKDOWN
+        )
+    except (Forbidden, BadRequest):
+        admin_feedback += "\n\n⚠️ **اخطار:** کاربر ربات را بلاک کرده و پیام تایید را دریافت نکرد."
+    
+    try:
+        await query.edit_message_caption(caption=admin_feedback, reply_markup=None, parse_mode=ParseMode.MARKDOWN)
+    except Exception as e:
+        logger.error(f"edit_message_caption failed: {e}. Sending new message as fallback.")
+        await context.bot.send_message(chat_id=ADMIN_ID, text=admin_feedback, parse_mode=ParseMode.MARKDOWN)
+
+async def admin_reject_charge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    try:
+        target_user_id = int(query.data.split('_')[-1])
+    except (ValueError, IndexError) as e:
+        logger.error(f"Error parsing admin_reject_charge_callback data: {query.data} | Error: {e}")
+        try:
+            if query.message.photo:
+                await query.edit_message_caption(caption=f"{query.message.caption}\n\n---\n❌ خطا در پردازش اطلاعات دکمه.")
+            else:
+                await query.edit_message_text("❌ خطا در پردازش اطلاعات دکمه.")
+        except Exception as edit_error:
+            logger.error(f"Fallback error message failed to send: {edit_error}")
+        return
+
+    original_caption = query.message.caption or ""
+    admin_feedback = f"{original_caption}\n\n---\n❌ درخواست شارژ کاربر `{target_user_id}` رد شد."
+    
+    try: 
+        await context.bot.send_message(chat_id=target_user_id, text="متاسفانه درخواست شارژ حساب شما توسط ادمین رد شد.")
+    except (Forbidden, BadRequest): 
+        admin_feedback += "\n\n⚠️ **اخطار:** کاربر ربات را بلاک کرده است."
+    
+    try:
+        await query.edit_message_caption(caption=admin_feedback, reply_markup=None, parse_mode=ParseMode.MARKDOWN)
+    except Exception as e:
+        logger.error(f"edit_message_caption failed: {e}. Sending new message as fallback.")
+        await context.bot.send_message(chat_id=ADMIN_ID, text=admin_feedback, parse_mode=ParseMode.MARKDOWN)
+
+async def admin_confirm_restore_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    restore_path = context.user_data.get('restore_path')
+    if not restore_path or not os.path.exists(restore_path): 
+        await query.edit_message_text("خطا: فایل پشتیبان یافت نشد."); 
+        return BACKUP_MENU
+    try:
+        db.close_db()
+        shutil.move(restore_path, db.DB_NAME)
+        db.init_db()
+        await query.edit_message_text("✅ دیتابیس با موفقیت بازیابی شد.\n\n**مهم:** برای اعمال کامل تغییرات، لطفاً ربات را ری‌استارت کنید.", parse_mode=ParseMode.MARKDOWN)
+    except Exception as e:
+        logger.error(f"Error during DB restore: {e}", exc_info=True)
+        await query.edit_message_text(f"خطا در هنگام جایگزینی فایل دیتابیس: {e}")
+    context.user_data.clear()
+    return BACKUP_MENU
+
+async def admin_cancel_restore_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    restore_path = context.user_data.get('restore_path')
+    if restore_path and os.path.exists(restore_path): os.remove(restore_path)
+    await query.edit_message_text("عملیات بازیابی لغو شد.")
+    context.user_data.clear()
+    return BACKUP_MENU
+
+async def plan_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [["➕ افزودن پلن جدید", "📋 لیست پلن‌ها"], [BTN_BACK_TO_ADMIN_MENU]]
+    await update.message.reply_text("بخش مدیریت پلن‌ها", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)); return PLAN_MENU
+
+async def list_plans_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    plans = db.list_plans()
+    if not plans: 
+        await update.message.reply_text("هیچ پلنی تعریف نشده است."); 
+        return PLAN_MENU
+    await update.message.reply_text("لیست پلن‌های تعریف شده:")
+    for plan in plans:
+        visibility_icon = "👁️" if plan['is_visible'] else "🙈"
+        text = (f"**{plan['name']}** (ID: {plan['plan_id']})\n▫️ قیمت: {plan['price']:.0f} تومان\n▫️ مدت: {plan['days']} روز\n▫️ حجم: {plan['gb']} گیگ\n▫️ وضعیت: {'نمایش' if plan['is_visible'] else 'مخفی'}")
+        keyboard = [[InlineKeyboardButton("✏️ ویرایش", callback_data=f"admin_edit_plan_{plan['plan_id']}"), InlineKeyboardButton(f"{visibility_icon} تغییر وضعیت", callback_data=f"admin_toggle_plan_{plan['plan_id']}"), InlineKeyboardButton("🗑️ حذف", callback_data=f"admin_delete_plan_{plan['plan_id']}")]]
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+    return PLAN_MENU
+
+async def add_plan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("لطفا نام پلن را وارد کنید:", reply_markup=ReplyKeyboardMarkup([[CMD_CANCEL]], resize_keyboard=True)); return PLAN_NAME
+
+async def plan_name_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['plan_name'] = update.message.text
+    await update.message.reply_text("نام ثبت شد. قیمت را به تومان وارد کنید:"); return PLAN_PRICE
+
+async def plan_price_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        context.user_data['plan_price'] = float(update.message.text)
+        await update.message.reply_text("قیمت ثبت شد. تعداد روزهای اعتبار را وارد کنید:"); return PLAN_DAYS
+    except ValueError: 
+        await update.message.reply_text("لطفا قیمت را به صورت عدد وارد کنید."); 
+        return PLAN_PRICE
+
+async def plan_days_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        context.user_data['plan_days'] = int(update.message.text)
+        await update.message.reply_text("تعداد روز ثبت شد. حجم سرویس به گیگابایت را وارد کنید:"); return PLAN_GB
+    except ValueError: 
+        await update.message.reply_text("لطفا تعداد روز را به صورت عدد وارد کنید."); 
+        return PLAN_DAYS
+
+async def plan_gb_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        context.user_data['plan_gb'] = int(update.message.text)
+        db.add_plan(context.user_data['plan_name'], context.user_data['plan_price'], context.user_data['plan_days'], context.user_data['plan_gb'])
+        await update.message.reply_text("✅ پلن جدید اضافه شد!", reply_markup=get_admin_menu_keyboard())
+        context.user_data.clear(); return ADMIN_MENU
+    except ValueError: 
+        await update.message.reply_text("لطفا حجم را به صورت عدد وارد کنید."); 
+        return PLAN_GB
+
+async def edit_plan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query; await query.answer()
+    plan_id = int(query.data.split('_')[-1])
+    plan = db.get_plan(plan_id)
+    if not plan: 
+        await query.edit_message_text("خطا: پلن یافت نشد."); 
+        return ConversationHandler.END
+    context.user_data['edit_plan_id'] = plan_id
+    context.user_data['edit_plan_data'] = {}
+    await query.message.reply_text(f"در حال ویرایش پلن: **{plan['name']}**\n\nلطفا نام جدید را وارد کنید. برای رد شدن، {CMD_SKIP} را بزنید.", parse_mode=ParseMode.MARKDOWN, reply_markup=ReplyKeyboardMarkup([[CMD_SKIP],[CMD_CANCEL]], resize_keyboard=True)); return EDIT_PLAN_NAME
+
+async def edit_plan_name_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['edit_plan_data']['name'] = update.message.text
+    await update.message.reply_text(f"نام جدید ثبت شد. لطفاً قیمت جدید را به تومان وارد کنید (یا {CMD_SKIP})."); return EDIT_PLAN_PRICE
+
+async def skip_edit_plan_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(f"از تغییر نام صرف نظر شد. لطفاً قیمت جدید را به تومان وارد کنید (یا {CMD_SKIP})."); return EDIT_PLAN_PRICE
+
+async def edit_plan_price_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        context.user_data['edit_plan_data']['price'] = float(update.message.text)
+        await update.message.reply_text(f"قیمت جدید ثبت شد. لطفاً تعداد روزهای جدید را وارد کنید (یا {CMD_SKIP})."); return EDIT_PLAN_DAYS
+    except ValueError: 
+        await update.message.reply_text("لطفا قیمت را به صورت عدد وارد کنید."); 
+        return EDIT_PLAN_PRICE
+
+async def skip_edit_plan_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(f"از تغییر قیمت صرف نظر شد. لطفاً تعداد روزهای جدید را وارد کنید (یا {CMD_SKIP})."); return EDIT_PLAN_DAYS
+
+async def edit_plan_days_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        context.user_data['edit_plan_data']['days'] = int(update.message.text)
+        await update.message.reply_text(f"تعداد روز جدید ثبت شد. لطفاً حجم جدید به گیگابایت را وارد کنید (یا {CMD_SKIP})."); return EDIT_PLAN_GB
+    except ValueError: 
+        await update.message.reply_text("لطفا تعداد روز را به صورت عدد وارد کنید."); 
+        return EDIT_PLAN_DAYS
+
+async def skip_edit_plan_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(f"از تغییر تعداد روز صرف نظر شد. لطفاً حجم جدید به گیگابایت را وارد کنید (یا {CMD_SKIP})."); return EDIT_PLAN_GB
+
+async def edit_plan_gb_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        context.user_data['edit_plan_data']['gb'] = int(update.message.text)
+        await finish_plan_edit(update, context)
+        return ConversationHandler.END
+    except ValueError: 
+        await update.message.reply_text("لطفا حجم را به صورت عدد وارد کنید."); 
+        return EDIT_PLAN_GB
+
+async def skip_edit_plan_gb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("از تغییر حجم صرف نظر شد.")
+    await finish_plan_edit(update, context)
+    return ConversationHandler.END
+
+async def finish_plan_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    plan_id = context.user_data.get('edit_plan_id')
+    new_data = context.user_data.get('edit_plan_data')
+    if not new_data: 
+        await update.message.reply_text("هیچ تغییری اعمال نشد.", reply_markup=get_admin_menu_keyboard())
+    else:
+        db.update_plan(plan_id, new_data)
+        await update.message.reply_text("✅ پلن با موفقیت به‌روزرسانی شد!", reply_markup=get_admin_menu_keyboard())
+    context.user_data.clear()
+    return ADMIN_MENU
+
+async def reports_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [["📊 آمار کلی", "📈 گزارش فروش امروز"], ["📅 گزارش فروش ۷ روز اخیر", "🏆 محبوب‌ترین پلن‌ها"], [BTN_BACK_TO_ADMIN_MENU]]
+    await update.message.reply_text("بخش گزارش‌ها و آمار", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)); return REPORTS_MENU
+
+async def show_stats_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    stats = db.get_stats()
+    text = (f"📊 **آمار کلی ربات**\n\n" f"👥 تعداد کل کاربران: {stats.get('total_users', 0)}\n" f"✅ تعداد سرویس‌های فعال: {stats.get('active_services', 0)}\n"
+            f"💰 مجموع فروش کل: {stats.get('total_revenue', 0):,.0f} تومان\n" f"🚫 تعداد کاربران مسدود: {stats.get('banned_users', 0)}")
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN); return REPORTS_MENU
+
+async def show_daily_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    sales = db.get_sales_report(days=1)
+    total_revenue = sum(s['price'] for s in sales)
+    await update.message.reply_text(f"📈 **گزارش فروش امروز**\n\nتعداد فروش: {len(sales)}\nمجموع درآمد: {total_revenue:,.0f} تومان", parse_mode=ParseMode.MARKDOWN); return REPORTS_MENU
+
+async def show_weekly_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    sales = db.get_sales_report(days=7)
+    total_revenue = sum(s['price'] for s in sales)
+    await update.message.reply_text(f"📅 **گزارش فروش ۷ روز اخیر**\n\nتعداد فروش: {len(sales)}\nمجموع درآمد: {total_revenue:,.0f} تومان", parse_mode=ParseMode.MARKDOWN); return REPORTS_MENU
+
+async def show_popular_plans_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    plans = db.get_popular_plans(limit=5)
+    if not plans: await update.message.reply_text("هنوز هیچ پلنی فروخته نشده است."); return REPORTS_MENU
+    text = "🏆 **محبوب‌ترین پلن‌ها**\n\n" + "\n".join([f"{i}. **{plan['name']}** - {plan['sales_count']} بار فروش" for i, plan in enumerate(plans, 1)])
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN); return REPORTS_MENU
+
+async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    card_number = db.get_setting('card_number') or "تنظیم نشده"
+    card_holder = db.get_setting('card_holder') or "تنظیم نشده"
+    text = (f"⚙️ **تنظیمات ربات**\n\n" f"شماره کارت فعلی: `{card_number}`\n" f"صاحب حساب فعلی: `{card_holder}`\n\n" "برای تغییر هر مورد روی دکمه مربوطه کلیک کنید.")
+    keyboard = [[InlineKeyboardButton("ویرایش شماره کارت", callback_data="admin_edit_setting_card_number"), InlineKeyboardButton("ویرایش نام صاحب حساب", callback_data="admin_edit_setting_card_holder")]]
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN); return ADMIN_MENU
+
+async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query; await query.answer()
+    setting_key = query.data.split('admin_edit_setting_')[-1]
+    context.user_data['setting_to_edit'] = setting_key
+    prompt_map = {'card_number': "لطفا شماره کارت جدید را وارد کنید:", 'card_holder': "لطفا نام جدید صاحب حساب را وارد کنید:"}
+    prompt_text = prompt_map.get(setting_key)
+    if not prompt_text: await query.message.edit_text("خطا: تنظیمات ناشناخته."); return ConversationHandler.END
+    await query.message.reply_text(prompt_text, reply_markup=ReplyKeyboardMarkup([[CMD_CANCEL]], resize_keyboard=True)); return AWAIT_SETTING_VALUE
+
+async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    setting_key = context.user_data.get('setting_to_edit')
+    if not setting_key: return await admin_conv_cancel(update, context)
+    db.set_setting(setting_key, update.message.text)
+    await update.message.reply_text("✅ تنظیمات با موفقیت به‌روز شد.", reply_markup=get_admin_menu_keyboard())
+    context.user_data.clear(); return ConversationHandler.END
+
+async def broadcast_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [["ارسال به همه کاربران", "ارسال به کاربر خاص"], [BTN_BACK_TO_ADMIN_MENU]]
+    await update.message.reply_text("بخش ارسال پیام", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)); return BROADCAST_MENU
+
+async def broadcast_to_all_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("لطفا پیام خود را برای ارسال به همه کاربران وارد کنید:", reply_markup=ReplyKeyboardMarkup([[CMD_CANCEL]], resize_keyboard=True)); return BROADCAST_MESSAGE
+
+async def broadcast_to_all_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['broadcast_message'] = update.message
+    total_users = db.get_stats()['total_users']
+    await update.message.reply_text(f"آیا از ارسال این پیام به {total_users} کاربر مطمئن هستید؟", reply_markup=ReplyKeyboardMarkup([["بله، ارسال کن"], ["خیر، لغو کن"]], resize_keyboard=True)); return BROADCAST_CONFIRM
+
+async def broadcast_to_all_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message_to_send = context.user_data.get('broadcast_message')
+    if not message_to_send: await update.message.reply_text("خطا: پیامی برای ارسال یافت نشد.", reply_markup=get_admin_menu_keyboard()); return ADMIN_MENU
+    user_ids = db.get_all_user_ids()
+    sent_count, failed_count = 0, 0
+    await update.message.reply_text(f"در حال ارسال پیام به {len(user_ids)} کاربر...", reply_markup=get_admin_menu_keyboard())
+    for user_id in user_ids:
+        try: 
+            await message_to_send.copy(chat_id=user_id)
+            sent_count += 1
+            await asyncio.sleep(0.1)
+        except (Forbidden, BadRequest): 
+            failed_count += 1
+    await update.message.reply_text(f"✅ پیام همگانی با موفقیت ارسال شد.\n\nتعداد ارسال موفق: {sent_count}\nتعداد ارسال ناموفق: {failed_count}")
+    context.user_data.clear(); return ADMIN_MENU
+
+async def broadcast_to_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("لطفا آیدی عددی کاربر هدف را وارد کنید:", reply_markup=ReplyKeyboardMarkup([[CMD_CANCEL]], resize_keyboard=True)); return BROADCAST_TO_USER_ID
+
+async def broadcast_to_user_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        target_id = int(update.message.text)
+        context.user_data['target_user_id'] = target_id
+        await update.message.reply_text("آیدی ثبت شد. حالا پیامی که می‌خواهید برای این کاربر ارسال کنید را وارد نمایید:"); return BROADCAST_TO_USER_MESSAGE
+    except ValueError: await update.message.reply_text("لطفا یک آیدی عددی معتبر وارد کنید."); return BROADCAST_TO_USER_ID
+
+async def broadcast_to_user_message_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    target_id = context.user_data.get('target_user_id')
+    if not target_id: await update.message.reply_text("خطا: کاربر هدف مشخص نیست.", reply_markup=get_admin_menu_keyboard()); return ADMIN_MENU
+    message_to_send = update.message
+    try:
+        await message_to_send.copy(chat_id=target_id)
+        await update.message.reply_text("✅ پیام با موفقیت به کاربر ارسال شد.", reply_markup=get_admin_menu_keyboard())
+    except (Forbidden, BadRequest): await update.message.reply_text("❌ ارسال پیام ناموفق بود. احتمالا کاربر ربات را بلاک کرده یا آیدی اشتباه است.", reply_markup=get_admin_menu_keyboard())
+    context.user_data.clear(); return ADMIN_MENU
+
+async def user_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("لطفا آیدی عددی یا یوزرنیم تلگرام (با یا بدون @) کاربری که می‌خواهید مدیریت کنید را وارد نمایید:", reply_markup=ReplyKeyboardMarkup([[BTN_BACK_TO_ADMIN_MENU]], resize_keyboard=True)); return MANAGE_USER_ID
+
+async def manage_user_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_input = update.message.text.strip()
+    user_info = None
+    if user_input.isdigit(): 
+        user_info = db.get_user(int(user_input))
+    elif user_input.isalnum() or (user_input.startswith('@') and user_input[1:].isalnum()): 
+        user_info = db.get_user_by_username(user_input)
+    else: 
+        await update.message.reply_text("ورودی نامعتبر است. لطفاً یک آیدی عددی یا یوزرنیم تلگرام وارد کنید."); 
+        return MANAGE_USER_ID
+    if not user_info: 
+        await update.message.reply_text("کاربری با این مشخصات یافت نشد."); 
+        return MANAGE_USER_ID
+    context.user_data['target_user_id'] = user_info['user_id']
+    ban_text = "آزاد کردن کاربر" if user_info['is_banned'] else "مسدود کردن کاربر"
+    keyboard = [["افزایش موجودی", "کاهش موجودی"], ["📜 سوابق خرید", ban_text], [BTN_BACK_TO_ADMIN_MENU]]
+    info_text = (f"👤 مدیریت کاربر: `{user_info['user_id']}`\n" f"🔹 یوزرنیم: @{user_info.get('username', 'N/A')}\n"
+                 f"💰 موجودی: {user_info['balance']:.0f} تومان\n" f"🚦 وضعیت: {'مسدود' if user_info['is_banned'] else 'فعال'}")
+    await update.message.reply_text(info_text, reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True), parse_mode=ParseMode.MARKDOWN); return MANAGE_USER_ACTION
+
+async def manage_user_action_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    action = update.message.text
+    target_user_id = context.user_data.get('target_user_id')
+    if not target_user_id: 
+        await update.message.reply_text("خطا: کاربر هدف مشخص نیست."); 
+        return await back_to_admin_menu(update, context)
+    if action in ["افزایش موجودی", "کاهش موجودی"]:
+        context.user_data['manage_action'] = action
+        await update.message.reply_text("لطفا مبلغ مورد نظر را به تومان وارد کنید:", reply_markup=ReplyKeyboardMarkup([[CMD_CANCEL]], resize_keyboard=True)); return MANAGE_USER_AMOUNT
+    elif "مسدود" in action or "آزاد" in action:
+        user_info = db.get_user(target_user_id)
+        new_ban_status = not user_info['is_banned']
+        db.set_user_ban_status(target_user_id, new_ban_status)
+        await update.message.reply_text(f"✅ وضعیت کاربر با موفقیت به '{'مسدود' if new_ban_status else 'فعال'}' تغییر کرد.")
+        update.message.text = str(target_user_id)
+        return await manage_user_id_received(update, context)
+    elif action == "📜 سوابق خرید":
+        history = db.get_user_sales_history(target_user_id)
+        if not history: 
+            await update.message.reply_text("این کاربر تاکنون خریدی نداشته است."); 
+            return MANAGE_USER_ACTION
+        response_message = "📜 **سوابق خرید کاربر:**\n\n"
+        for sale in history:
+            sale_date = datetime.strptime(sale['sale_date'], '%Y-%m-%d %H:%M:%S').strftime('%Y/%m/%d - %H:%M')
+            response_message += f"🔹 **{sale['plan_name'] or 'پلن حذف شده'}**\n - قیمت: {sale['price']:.0f} تومان\n - تاریخ: {sale_date}\n\n"
+        await update.message.reply_text(response_message, parse_mode=ParseMode.MARKDOWN); return MANAGE_USER_ACTION
+    else: 
+        await update.message.reply_text("دستور نامعتبر است. لطفاً از دکمه‌ها استفاده کنید."); 
+        return MANAGE_USER_ACTION
+
+async def manage_user_amount_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        amount = float(update.message.text)
+        action = context.user_data['manage_action']
+        target_user_id = context.user_data['target_user_id']
+        is_add = True if action == "افزایش موجودی" else False
+        db.update_balance(target_user_id, amount if is_add else -amount)
+        await update.message.reply_text(f"✅ مبلغ {amount:.0f} تومان به حساب کاربر {'اضافه' if is_add else 'کسر'} شد.")
+        update.message.text = str(target_user_id)
+        return await manage_user_id_received(update, context)
+    except (ValueError, TypeError): 
+        await update.message.reply_text("لطفا مبلغ را به صورت عدد وارد کنید."); 
+        return MANAGE_USER_AMOUNT
+
+async def backup_restore_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [["📥 دریافت فایل پشتیبان", "📤 بارگذاری فایل پشتیبان"], [BTN_BACK_TO_ADMIN_MENU]]
+    await update.message.reply_text("بخش پشتیبان‌گیری و بازیابی.", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)); return BACKUP_MENU
+
+async def send_backup_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+    backup_filename = f"backups/backup_{timestamp}.db"
+    try:
+        db.close_db()
+        shutil.copy(db.DB_NAME, backup_filename)
+        db.init_db()
+        await update.message.reply_text("در حال آماده‌سازی فایل پشتیبان...")
+        await context.bot.send_document(chat_id=update.effective_user.id, document=open(backup_filename, 'rb'), caption=f"پشتیبان دیتابیس - {timestamp}")
+    except Exception as e: 
+        await update.message.reply_text(f"خطا در ارسال فایل: {e}")
+        logger.error(f"Backup file sending error: {e}", exc_info=True)
+    finally:
+        if os.path.exists(backup_filename): 
+            os.remove(backup_filename)
+    return BACKUP_MENU
+
+async def restore_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(f"⚠️ **اخطار:** بازیابی دیتابیس تمام اطلاعات فعلی را پاک می‌کند.\n" f"برای ادامه، فایل دیتابیس (`.db`) خود را ارسال کنید. برای لغو {CMD_CANCEL} را بزنید.", parse_mode=ParseMode.MARKDOWN); return RESTORE_UPLOAD
+
+async def restore_receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    document = update.message.document
+    if not document or not document.file_name.endswith('.db'): 
+        await update.message.reply_text("فرمت فایل نامعتبر است. لطفاً یک فایل `.db` ارسال کنید."); 
+        return RESTORE_UPLOAD
+    file = await document.get_file()
+    temp_path = os.path.join("backups", f"restore_temp_{datetime.now().timestamp()}.db")
+    await file.download_to_drive(temp_path)
+    if not is_valid_sqlite(temp_path):
+        await update.message.reply_text("❌ فایل ارسالی یک دیتابیس SQLite معتبر نیست.", reply_markup=get_admin_menu_keyboard())
+        if os.path.exists(temp_path): os.remove(temp_path); 
+        return ADMIN_MENU
+    context.user_data['restore_path'] = temp_path
+    keyboard = [[InlineKeyboardButton("✅ بله، مطمئنم", callback_data="admin_confirm_restore"), InlineKeyboardButton("❌ خیر، لغو کن", callback_data="admin_cancel_restore")]]
+    await update.message.reply_text("**آیا از جایگزینی دیتابیس فعلی کاملاً مطمئن هستید؟ این عمل غیرقابل بازگشت است.**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN); return BACKUP_MENU
+
+async def shutdown_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("ربات در حال خاموش شدن است...")
+    db.close_db()
+    asyncio.create_task(context.application.shutdown())
 
 def main():
     """Start the bot."""
@@ -767,7 +1204,6 @@ def main():
     admin_filter = filters.User(user_id=ADMIN_ID)
     user_filter = ~admin_filter
     
-    # --- Conversation Handlers ---
     buy_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(buy_start, pattern='^user_buy_')],
         states={GET_CUSTOM_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_custom_name), CommandHandler('skip', skip_custom_name)]},
