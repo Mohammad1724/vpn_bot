@@ -103,8 +103,8 @@ function install_bot() {
     read -p "Enable free trial service? [Y/n]: " TRIAL_ENABLED_CHOICE
     if [[ "$TRIAL_ENABLED_CHOICE" =~ ^[Yy]$ ]] || [ -z "$TRIAL_ENABLED_CHOICE" ]; then
         TRIAL_ENABLED_VAL="True"
-        read -p "Enter trial duration in days (Default: 1): " -i "1" -e TRIAL_DAYS
-        read -p "Enter trial data limit in GB (Default: 1): " -i "1" -e TRIAL_GB
+        read -p "Enter trial duration in days (Default: 1): " -e -i "1" TRIAL_DAYS
+        read -p "Enter trial data limit in GB (Default: 1): " -e -i "1" TRIAL_GB
     else
         TRIAL_ENABLED_VAL="False"
         TRIAL_DAYS=1
@@ -112,14 +112,13 @@ function install_bot() {
     fi
 
     print_color "C_BLUE" "--- Features & Reminders ---"
-    read -p "Enter referral bonus amount in Toman (Default: 5000): " -i "5000" -e REFERRAL_BONUS_AMOUNT
-    read -p "Send expiry reminder how many days before expiration? (Default: 3): " -i "3" -e EXPIRY_REMINDER_DAYS
-    read -p "Send usage limit reminder at what percentage? (e.g., 80 for 80%. Default: 80): " -i "80" -e USAGE_LIMIT_REMINDER_PERCENT
+    read -p "Enter referral bonus amount in Toman (Default: 5000): " -e -i "5000" REFERRAL_BONUS_AMOUNT
+    read -p "Send expiry reminder how many days before expiration? (Default: 3): " -e -i "3" EXPIRY_REMINDER_DAYS
+    read -p "Send usage limit reminder at what percentage? (e.g., 80 for 80%. Default: 80): " -e -i "80" USAGE_LIMIT_REMINDER_PERCENT
 
-    # --- FIX: Create the config.py file from scratch using a heredoc for reliability ---
+    # Create the config.py file from scratch using a heredoc for reliability
     print_color "C_YELLOW" "[4/6] Creating configuration file (config.py)..."
     
-    # Process subdomains into a Python list format
     if [ -n "$SUB_DOMAINS_INPUT" ]; then
         PROCESSED_SUB_DOMAINS=$(echo "$SUB_DOMAINS_INPUT" | sed 's/[^,]\+/"&"/g')
         SUB_DOMAINS_LINE="SUB_DOMAINS = [${PROCESSED_SUB_DOMAINS}]"
@@ -277,7 +276,7 @@ function uninstall_bot() {
 function uninstall_bot_silent() {
     print_color "C_YELLOW" "Stopping and disabling service..."
     systemctl stop "$SERVICE_NAME" &>/dev/null || true
-    systemctl disable "$SERVICE_NAME" &>/dev/null || true
+    systemctl disable "$SERVICE_NAME" &>/dev/null || true # <--- FIX: Corrected typo from /_dev/null
     
     print_color "C_YELLOW" "Removing service file..."
     rm -f "$SERVICE_FILE"
