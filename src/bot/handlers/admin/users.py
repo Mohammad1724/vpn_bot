@@ -13,7 +13,7 @@ from bot.keyboards import get_admin_menu_keyboard
 import database as db
 from telegram.error import Forbidden, BadRequest, RetryAfter, TimedOut, NetworkError
 
-# User management
+# -------------------- User management --------------------
 async def user_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "آیدی عددی یا یوزرنیم تلگرام (با یا بدون @) کاربر مورد نظر را وارد کنید:",
@@ -95,8 +95,9 @@ async def manage_user_amount_received(update: Update, context: ContextTypes.DEFA
         await update.message.reply_text("لطفاً مبلغ را به صورت عدد وارد کنید.")
         return MANAGE_USER_AMOUNT
 
-# Admin charge review (from user receipts)
+# -------------------- Admin charge review (from receipts) --------------------
 async def admin_confirm_charge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from telegram.error import Forbidden, BadRequest
     q = update.callback_query
     await q.answer()
     prefix = "admin_confirm_charge_"
@@ -128,6 +129,7 @@ async def admin_confirm_charge_callback(update: Update, context: ContextTypes.DE
         await context.bot.send_message(chat_id=q.from_user.id, text=feedback, parse_mode="Markdown")
 
 async def admin_reject_charge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from telegram.error import Forbidden, BadRequest
     q = update.callback_query
     await q.answer()
     try:
@@ -169,11 +171,11 @@ async def broadcast_to_all_start(update: Update, context: ContextTypes.DEFAULT_T
     return BROADCAST_MESSAGE
 
 async def broadcast_to_all_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # هر نوع پیام را می‌پذیریم و برای کپی ذخیره می‌کنیم
+    # ذخیره هر نوع پیام برای کپی
     context.user_data['broadcast_message'] = update.message
-    total_users = db.get_all_user_ids()
+    users = db.get_all_user_ids()
     await update.message.reply_text(
-        f"آیا از ارسال این پیام به {len(total_users)} کاربر مطمئن هستید؟",
+        f"آیا از ارسال این پیام به {len(users)} کاربر مطمئن هستید؟",
         reply_markup=ReplyKeyboardMarkup([["بله، ارسال کن"], ["خیر، لغو کن"]], resize_keyboard=True)
     )
     return BROADCAST_CONFIRM
@@ -219,7 +221,7 @@ async def broadcast_to_all_send(update: Update, context: ContextTypes.DEFAULT_TY
         except Exception:
             failed += 1
 
-        # ریت‌لیمیت
+        # رعایت ریت‌لیمیت
         await asyncio.sleep(0.05)
 
     await update.message.reply_text(f"✅ ارسال پیام همگانی پایان یافت.\n\nارسال موفق: {sent}\nارسال ناموفق: {failed}")
