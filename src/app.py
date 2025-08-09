@@ -5,8 +5,9 @@ import warnings
 from telegram.warnings import PTBUserWarning
 from telegram.ext import (
     ApplicationBuilder, ConversationHandler, MessageHandler, CallbackQueryHandler,
-    CommandHandler, filters
+    CommandHandler, filters, ContextTypes
 )
+from telegram import Update
 
 from bot import jobs, constants
 from bot.handlers import start as start_h
@@ -23,19 +24,36 @@ from bot.handlers.admin import users as admin_users
 from bot.handlers.trial import get_trial_service as trial_get_trial_service
 from config import BOT_TOKEN, ADMIN_ID
 
-# Suppress noisy PTB user warnings
+# Suppress noisy PTB user warnings (per_message / job_queue etc.)
 warnings.filterwarnings("ignore", category=PTBUserWarning)
 
 logger = logging.getLogger(__name__)
 
+# ====================================================================
+# ERROR HANDLER (FIX for httpx.ReadError)
+# ====================================================================
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Log errors caused by updates and prevent crashes.
+    This function will catch network errors like httpx.ReadError.
+    """
+    logger.error("خطا در هنگام پردازش آپدیت:", exc_info=context.error)
+    # Optional: Log the update object to get context
+    if isinstance(update, Update):
+        logger.error(f"آپدیت مربوطه: {update}")
+
+# ====================================================================
+
 def build_application():
-    # post_init schedules jobs (JobQueue or fallback) and post_shutdown cancels fallback tasks
     application = ApplicationBuilder().token(BOT_TOKEN).post_init(jobs.post_init).post_shutdown(jobs.post_shutdown).build()
+
+    # Register the error handler
+    application.add_error_handler(error_handler)
 
     admin_filter = filters.User(user_id=ADMIN_ID)
     user_filter = ~admin_filter
 
-    # Buy conversation (callback -> message)
+    # Conversations
     buy_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(buy_h.buy_start, pattern='^user_buy_')],
         states={
@@ -48,7 +66,6 @@ def build_application():
         per_user=True, per_chat=True
     )
 
-    # Gift conversation (message-only)
     gift_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^🎁 کد هدیه$') & user_filter, gift_h.gift_code_entry)],
         states={constants.REDEEM_GIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, gift_h.redeem_gift_code)]},
@@ -56,7 +73,6 @@ def build_application():
         per_user=True, per_chat=True
     )
 
-    # Charge conversation (callback -> message/photo)
     charge_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(charge_h.charge_start, pattern='^user_start_charge$')],
         states={
@@ -67,7 +83,6 @@ def build_application():
         per_user=True, per_chat=True
     )
 
-    # Settings (callback -> message)
     settings_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_settings.edit_setting_start, pattern="^admin_edit_setting_")],
         states={constants.AWAIT_SETTING_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_settings.setting_value_received)]},
@@ -75,7 +90,6 @@ def build_application():
         per_user=True, per_chat=True
     )
 
-    # Edit plan (callback -> messages)
     edit_plan_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_plans.edit_plan_start, pattern="^admin_edit_plan_")],
         states={
@@ -100,7 +114,6 @@ def build_application():
         per_user=True, per_chat=True
     )
 
-    # Admin conversation
     admin_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f'^{constants.BTN_ADMIN_PANEL}$') & admin_filter, admin_c.admin_entry)],
         states={
@@ -173,7 +186,7 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # Register conversations
+    # Register handlers
     application.add_handler(charge_conv, group=1)
     application.add_handler(gift_conv, group=1)
     application.add_handler(buy_conv, group=1)
@@ -181,11 +194,9 @@ def build_application():
     application.add_handler(edit_plan_conv, group=1)
     application.add_handler(admin_conv, group=1)
 
-    # Admin callbacks
     application.add_handler(CallbackQueryHandler(admin_users.admin_confirm_charge_callback, pattern="^admin_confirm_charge_"))
     application.add_handler(CallbackQueryHandler(admin_users.admin_reject_charge_callback, pattern="^admin_reject_charge_"))
 
-    # Services callbacks
     application.add_handler(CallbackQueryHandler(us_h.view_service_callback, pattern="^view_service_"), group=2)
     application.add_handler(CallbackQueryHandler(us_h.back_to_services_callback, pattern="^back_to_services$"), group=2)
     application.add_handler(CallbackQueryHandler(us_h.get_link_callback, pattern="^getlink_"), group=2)
@@ -195,7 +206,6 @@ def build_application():
     application.add_handler(CallbackQueryHandler(us_h.cancel_renewal_callback, pattern="^cancelrenew$"), group=2)
     application.add_handler(CallbackQueryHandler(us_h.delete_service_callback, pattern="^delete_service_"), group=2)
 
-    # Commands & menus
     application.add_handler(CommandHandler("start", start_h.start), group=3)
     application.add_handler(MessageHandler(filters.Regex('^🛍️ خرید سرویس$'), buy_h.buy_service_list), group=3)
     application.add_handler(MessageHandler(filters.Regex('^📋 سرویس‌های من$'), us_h.list_my_services), group=3)
