@@ -35,6 +35,7 @@ def close_db():
 def init_db():
     conn = _connect_db()
     cursor = conn.cursor()
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY, username TEXT, balance REAL DEFAULT 0.0,
@@ -53,14 +54,9 @@ def init_db():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS plans (
             plan_id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, price REAL NOT NULL,
-            days INTEGER NOT NULL, gb INTEGER NOT NULL, is_visible INTEGER DEFAULT 1,
-            device_limit INTEGER DEFAULT 0
+            days INTEGER NOT NULL, gb INTEGER NOT NULL, is_visible INTEGER DEFAULT 1
         )''')
-    try:
-        cursor.execute("SELECT device_limit FROM plans LIMIT 1")
-    except sqlite3.OperationalError:
-        cursor.execute("ALTER TABLE plans ADD COLUMN device_limit INTEGER DEFAULT 0")
-
+        
     cursor.execute('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)''')
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS active_services (
@@ -194,11 +190,11 @@ def apply_referral_bonus(user_id: int):
             return referrer_id, bonus_amount
     return None, 0
 
-def add_plan(name: str, price: float, days: int, gb: int, device_limit: int):
+def add_plan(name: str, price: float, days: int, gb: int):
     conn = _connect_db()
     conn.execute(
-        "INSERT INTO plans (name, price, days, gb, device_limit) VALUES (?, ?, ?, ?, ?)",
-        (name, price, days, gb, device_limit)
+        "INSERT INTO plans (name, price, days, gb) VALUES (?, ?, ?, ?)",
+        (name, price, days, gb)
     )
     conn.commit()
 
@@ -220,7 +216,7 @@ def list_plans(only_visible: bool = False) -> list:
 
 def update_plan(plan_id: int, data: dict):
     fields, params = [], []
-    for k in ('name', 'price', 'days', 'gb', 'device_limit'):
+    for k in ('name', 'price', 'days', 'gb'):
         if k in data:
             fields.append(f"{k} = ?")
             params.append(data[k])
@@ -253,7 +249,7 @@ def delete_plan_safe(plan_id: int):
         conn.rollback()
         return None
 
-def add_active_service(user_id: int, name: str, sub_uuid: str, sub_link: str, plan_id: int):
+def add_active_service(user_id: int, name: str, sub_uuid: str, sub_link: str, plan_id: int | None):
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn = _connect_db()
     conn.execute(
