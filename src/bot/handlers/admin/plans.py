@@ -189,7 +189,7 @@ async def admin_delete_plan_callback(update: Update, context: ContextTypes.DEFAU
         await q.edit_message_text("❌ شناسه پلن نامعتبر است.")
         return PLAN_MENU
 
-    # Safe delete (detach references, then delete)
+    # حذف ایمن: ابتدا قطع رفرنس‌ها در active_services و sales_log، سپس حذف پلن
     res = db.delete_plan_safe(plan_id)
     if res is None:
         await q.edit_message_text("❌ حذف پلن ناموفق بود. لطفاً بعداً تلاش کنید.")
@@ -212,16 +212,3 @@ async def admin_delete_plan_callback(update: Update, context: ContextTypes.DEFAU
 async def admin_toggle_plan_visibility_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    try:
-        plan_id = int(q.data.split('_')[-1])
-    except Exception:
-        await q.edit_message_text("❌ شناسه پلن نامعتبر است.")
-        return PLAN_MENU
-
-    db.toggle_plan_visibility(plan_id)
-    try:
-        await q.message.delete()
-    except Exception:
-        pass
-    await q.from_user.send_message("وضعیت نمایش پلن تغییر کرد. برای دیدن تغییرات، لیست را مجدداً باز کنید.")
-    return PLAN_MENU
