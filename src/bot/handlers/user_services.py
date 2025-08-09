@@ -74,6 +74,7 @@ async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
         final_link = f"{base_link}/{default_link_type}/?name={config_name.replace(' ', '_')}"
         img = qrcode.make(final_link)
         bio = io.BytesIO(); bio.name = 'qrcode.png'; img.save(bio, 'PNG'); bio.seek(0)
+
         caption = (
             f"🏷️ نام سرویس: **{service['name']}**\n\n"
             f"📊 حجم مصرفی: **{info.get('current_usage_GB', 0):.2f} / {info.get('usage_limit_GB', 0):.0f}** گیگ\n"
@@ -81,19 +82,24 @@ async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
             f"🚦 وضعیت: {status}\n\n"
             f"🔗 لینک اشتراک (پیش‌فرض):\n`{final_link}`"
         )
+
+        # ساخت کیبورد
         keyboard = [[InlineKeyboardButton("🔄 به‌روزرسانی اطلاعات", callback_data=f"refresh_{service['service_id']}")]]
-        if service.get('plan_id', 0) > 0:
-            plan = db.get_plan(service['plan_id'])
-            if plan:
-                keyboard.append([InlineKeyboardButton(f"⏳ تمدید سرویس ({plan['price']:.0f} تومان)", callback_data=f"renew_{service['service_id']}")])
+
+        # فیکس: اگر plan_id None بود یا پلن حذف شده بود، دکمه تمدید را نشان نده
+        plan = db.get_plan(service.get('plan_id')) if service.get('plan_id') is not None else None
+        if plan:
+            keyboard.append([InlineKeyboardButton(f"⏳ تمدید سرویس ({plan['price']:.0f} تومان)", callback_data=f"renew_{service['service_id']}")])
+
         keyboard.append([InlineKeyboardButton("🔗 دریافت لینک‌های بیشتر", callback_data=f"more_links_{service['sub_uuid']}")])
-        # دکمه حذف سرویس (اضافه‌شده)
         keyboard.append([InlineKeyboardButton("🗑️ حذف سرویس", callback_data=f"delete_service_{service['service_id']}")])
         if is_from_menu:
             keyboard.append([InlineKeyboardButton("⬅️ بازگشت به لیست سرویس‌ها", callback_data="back_to_services")])
+
         if original_message:
             try: await original_message.delete()
             except BadRequest: pass
+
         await context.bot.send_photo(
             chat_id=chat_id, photo=bio, caption=caption, parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(keyboard)
@@ -274,10 +280,10 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
         await context.bot.send_message(chat_id=q.from_user.id, text="✅ سرویس با موفقیت حذف شد.", reply_markup=kb)
         return
 
-    # لغو حذف → بازگردانی صفحه
+    # لغو حذف → برگرداندن صفحه جزئیات
     if data.startswith("delete_service_cancel_"):
         try:
-            await refresh_service_details(update, context)
+            await send_service_details(context, q.from_user.id, service_id, original_message=q.message, is_from_menu=True)
         except Exception:
             pass
         return
@@ -314,7 +320,7 @@ async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TY
     if not service:
         await context.bot.send_message(chat_id=user_id, text="❌ سرویس نامعتبر است.")
         return
-    plan = db.get_plan(service['plan_id'])
+    plan = db.get_plan(service['plan_id']) if service.get('plan_id') is not None else None
     if not plan:
         await context.bot.send_message(chat_id=user_id, text="❌ پلن تمدید برای این سرویس یافت نشد.")
         return
