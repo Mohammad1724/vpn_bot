@@ -5,7 +5,6 @@ from telegram import Update
 import database as db
 import hiddify_api
 from config import TRIAL_ENABLED, TRIAL_DAYS, TRIAL_GB
-from .user_services import show_link_options_menu
 
 async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -21,6 +20,8 @@ async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if result and result.get('uuid'):
         db.set_user_trial_used(user_id)
         db.add_active_service(user_id, "سرویس تست", result['uuid'], result['full_link'], 0)
+        # Lazy import to avoid import-time issues
+        from bot.handlers.user_services import show_link_options_menu
         await show_link_options_menu(update.message, result['uuid'], is_edit=False)
     else:
         await msg_loading.edit_text("❌ ساخت سرویس تست با خطا مواجه شد. لطفاً بعداً تلاش کنید.")
