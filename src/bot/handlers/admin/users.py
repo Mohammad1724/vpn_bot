@@ -2,7 +2,7 @@
 
 import re
 import asyncio
-from telegram.ext import ContextTypes
+from telegram.ext import ContextTypes, ConversationHandler
 from telegram import Update, ReplyKeyboardMarkup
 from bot.constants import (
     MANAGE_USER_ID, MANAGE_USER_ACTION, MANAGE_USER_AMOUNT, CMD_CANCEL,
@@ -11,7 +11,7 @@ from bot.constants import (
 )
 from bot.keyboards import get_admin_menu_keyboard
 import database as db
-from telegram.error import Forbidden, BadRequest
+from telegram.error import Forbidden, BadRequest, RetryAfter, TimedOut, NetworkError
 
 # User management
 async def user_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -153,65 +153,117 @@ async def admin_reject_charge_callback(update: Update, context: ContextTypes.DEF
     except Exception:
         await context.bot.send_message(chat_id=q.from_user.id, text=feedback, parse_mode="Markdown")
 
-# Broadcast
+# -------------------- Broadcast --------------------
 async def broadcast_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [["ارسال به همه کاربران", "ارسال به کاربر خاص"], [BTN_BACK_TO_ADMIN_MENU]]
     await update.message.reply_text("بخش ارسال پیام", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
     return BROADCAST_MENU
 
+# ارسال همگانی
 async def broadcast_to_all_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("متن پیام برای ارسال به همه کاربران را وارد کنید:", reply_markup=ReplyKeyboardMarkup([[CMD_CANCEL]], resize_keyboard=True))
+    context.user_data.clear()
+    await update.message.reply_text(
+        "متن/رسانه پیام برای ارسال به همه کاربران را ارسال کنید:",
+        reply_markup=ReplyKeyboardMarkup([[CMD_CANCEL]], resize_keyboard=True)
+    )
     return BROADCAST_MESSAGE
 
 async def broadcast_to_all_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # هر نوع پیام را می‌پذیریم و برای کپی ذخیره می‌کنیم
     context.user_data['broadcast_message'] = update.message
-    total_users = db.get_stats().get('total_users', 0)
-    await update.message.reply_text(f"آیا از ارسال این پیام به {total_users} کاربر مطمئن هستید؟", reply_markup=ReplyKeyboardMarkup([["بله، ارسال کن"], ["خیر، لغو کن"]], resize_keyboard=True))
+    total_users = db.get_all_user_ids()
+    await update.message.reply_text(
+        f"آیا از ارسال این پیام به {len(total_users)} کاربر مطمئن هستید؟",
+        reply_markup=ReplyKeyboardMarkup([["بله، ارسال کن"], ["خیر، لغو کن"]], resize_keyboard=True)
+    )
     return BROADCAST_CONFIRM
+
+async def broadcast_confirm_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    choice = (update.message.text or "").strip()
+    if choice == "بله، ارسال کن":
+        return await broadcast_to_all_send(update, context)
+    elif choice == "خیر، لغو کن":
+        context.user_data.clear()
+        await update.message.reply_text("ارسال همگانی لغو شد.", reply_markup=get_admin_menu_keyboard())
+        return ConversationHandler.END
+    else:
+        await update.message.reply_text("لطفاً یکی از گزینه‌ها را انتخاب کنید: «بله، ارسال کن» یا «خیر، لغو کن».")
+        return BROADCAST_CONFIRM
 
 async def broadcast_to_all_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = context.user_data.get('broadcast_message')
     if not msg:
         await update.message.reply_text("خطا: پیامی برای ارسال یافت نشد.", reply_markup=get_admin_menu_keyboard())
         return BROADCAST_MENU
+
     user_ids = db.get_all_user_ids()
     sent, failed = 0, 0
-    await update.message.reply_text(f"در حال ارسال پیام به {len(user_ids)} کاربر...", reply_markup=get_admin_menu_keyboard())
+    await update.message.reply_text(f"در حال ارسال پیام به {len(user_ids)} کاربر... ⏳")
+
     for uid in user_ids:
         try:
             await msg.copy_to(chat_id=uid)
             sent += 1
-            await asyncio.sleep(0.1)
+        except RetryAfter as e:
+            await asyncio.sleep(e.retry_after + 1)
+            try:
+                await msg.copy_to(chat_id=uid)
+                sent += 1
+            except Exception:
+                failed += 1
         except (Forbidden, BadRequest):
             failed += 1
+        except (TimedOut, NetworkError):
+            failed += 1
+            await asyncio.sleep(0.5)
+        except Exception:
+            failed += 1
+
+        # ریت‌لیمیت
+        await asyncio.sleep(0.05)
+
     await update.message.reply_text(f"✅ ارسال پیام همگانی پایان یافت.\n\nارسال موفق: {sent}\nارسال ناموفق: {failed}")
     context.user_data.clear()
     return BROADCAST_MENU
 
+# ارسال به کاربر خاص
 async def broadcast_to_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
     await update.message.reply_text("آیدی عددی کاربر هدف را وارد کنید:", reply_markup=ReplyKeyboardMarkup([[CMD_CANCEL]], resize_keyboard=True))
     return BROADCAST_TO_USER_ID
 
 async def broadcast_to_user_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         target_id = int(update.message.text)
-        context.user_data['target_user_id'] = target_id
-        await update.message.reply_text("آیدی ثبت شد. حالا پیام مورد نظر را ارسال کنید:")
-        return BROADCAST_TO_USER_MESSAGE
+        if target_id <= 0:
+            raise ValueError()
     except ValueError:
         await update.message.reply_text("لطفاً یک آیدی عددی معتبر وارد کنید.")
         return BROADCAST_TO_USER_ID
+
+    context.user_data['target_user_id'] = target_id
+    await update.message.reply_text("شناسه ثبت شد. حالا پیام مورد نظر را (متن/رسانه) ارسال کنید:")
+    return BROADCAST_TO_USER_MESSAGE
 
 async def broadcast_to_user_message_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target_id = context.user_data.get('target_user_id')
     if not target_id:
         await update.message.reply_text("خطا: کاربر هدف مشخص نیست.", reply_markup=get_admin_menu_keyboard())
         return BROADCAST_MENU
+
     msg = update.message
     try:
         await msg.copy_to(chat_id=target_id)
         await update.message.reply_text("✅ پیام با موفقیت ارسال شد.", reply_markup=get_admin_menu_keyboard())
     except (Forbidden, BadRequest):
         await update.message.reply_text("❌ ارسال ناموفق بود. احتمالاً کاربر ربات را مسدود کرده یا آیدی اشتباه است.", reply_markup=get_admin_menu_keyboard())
+    except RetryAfter as e:
+        await asyncio.sleep(e.retry_after + 1)
+        try:
+            await msg.copy_to(chat_id=target_id)
+            await update.message.reply_text("✅ پیام با موفقیت ارسال شد.", reply_markup=get_admin_menu_keyboard())
+        except Exception:
+            await update.message.reply_text("❌ ارسال ناموفق بود.", reply_markup=get_admin_menu_keyboard())
+
     context.user_data.clear()
     return BROADCAST_MENU
