@@ -117,30 +117,35 @@ def build_application():
         }
     )
 
-    # NEW: Broadcast conversation
+    # Broadcast conversation (ارسال همگانی/تکی)
     broadcast_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^📩 ارسال پیام$') & admin_filter, admin_users.broadcast_menu)],
         states={
             constants.BROADCAST_MENU: [
-                MessageHandler(filters.Regex('^📢 ارسال به همه کاربران$') & admin_filter, admin_users.broadcast_to_all_start),
-                MessageHandler(filters.Regex('^👤 ارسال به کاربر خاص$') & admin_filter, admin_users.broadcast_to_user_start),
+                MessageHandler(filters.Regex('^ارسال به همه کاربران$') & admin_filter, admin_users.broadcast_to_all_start),
+                MessageHandler(filters.Regex('^ارسال به کاربر خاص$') & admin_filter, admin_users.broadcast_to_user_start),
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.back_to_admin_menu),
             ],
+            # قبول هر نوع پیام (متن/رسانه) برای پیش‌نمایش و تایید
             constants.BROADCAST_MESSAGE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_users.broadcast_message_received),
+                MessageHandler((~filters.COMMAND) & admin_filter, admin_users.broadcast_to_all_confirm),
             ],
+            # تایید/لغو با متن
             constants.BROADCAST_CONFIRM: [
-                CallbackQueryHandler(admin_users.broadcast_confirm_callback, pattern="^broadcast_confirm_(yes|no)$"),
+                MessageHandler(filters.Regex('^(بله، ارسال کن|خیر، لغو کن)$') & admin_filter, admin_users.broadcast_confirm_received),
             ],
             constants.BROADCAST_TO_USER_ID: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_users.broadcast_to_user_id_received),
             ],
             constants.BROADCAST_TO_USER_MESSAGE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_users.broadcast_to_user_message_received),
+                MessageHandler((~filters.COMMAND) & admin_filter, admin_users.broadcast_to_user_message_received),
             ],
         },
         fallbacks=[CommandHandler('cancel', admin_c.admin_conv_cancel)],
-        map_to_parent={ConversationHandler.END: constants.ADMIN_MENU}
+        map_to_parent={
+            constants.ADMIN_MENU: constants.ADMIN_MENU,
+            ConversationHandler.END: constants.ADMIN_MENU
+        }
     )
 
     # --- Main Admin Conversation (Parent) ---
@@ -159,7 +164,7 @@ def build_application():
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.back_to_admin_menu),
                 create_gift_conv,
                 settings_conv,
-                broadcast_conv,  # <-- اضافه شد
+                broadcast_conv,  # ارسال پیام
             ],
             constants.REPORTS_MENU: [
                 MessageHandler(filters.Regex('^📊 آمار کلی$'), admin_reports.show_stats_report),
@@ -193,6 +198,7 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
+    # --- Register handlers ---
     application.add_handler(charge_conv)
     application.add_handler(gift_conv)
     application.add_handler(buy_conv)
