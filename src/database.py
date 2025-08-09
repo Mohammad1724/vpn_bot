@@ -38,14 +38,12 @@ def close_db():
 def init_db():
     conn = _connect_db()
     cursor = conn.cursor()
-
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY, username TEXT, balance REAL DEFAULT 0.0,
             join_date TEXT NOT NULL, is_banned INTEGER DEFAULT 0, has_used_trial INTEGER DEFAULT 0,
             referred_by INTEGER, has_received_referral_bonus INTEGER DEFAULT 0
         )''')
-
     try:
         cursor.execute("SELECT referred_by FROM users LIMIT 1")
     except sqlite3.OperationalError:
@@ -215,18 +213,6 @@ def toggle_plan_visibility(plan_id: int):
     conn = _connect_db()
     conn.execute("UPDATE plans SET is_visible = 1 - is_visible WHERE plan_id = ?", (plan_id,))
     conn.commit()
-
-def set_plan_visibility(plan_id: int, visible: bool):
-    conn = _connect_db()
-    conn.execute("UPDATE plans SET is_visible = ? WHERE user_id = ?", (1 if visible else 0, plan_id))
-    conn.commit()
-
-def get_plan_by_gb_and_days(gb: int, days: int) -> dict:
-    conn = _connect_db()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM plans WHERE gb = ? AND days = ?", (gb, days))
-    row = cur.fetchone()
-    return dict(row) if row else None
 
 def delete_plan_safe(plan_id: int):
     conn = _connect_db()
@@ -421,6 +407,13 @@ def get_all_gift_codes() -> list:
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM gift_codes ORDER BY is_used ASC, code ASC")
     return [dict(row) for row in cursor.fetchall()]
+
+def delete_gift_code(code: str) -> bool:
+    conn = _connect_db()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM gift_codes WHERE code = ?", (code,))
+    conn.commit()
+    return cursor.rowcount > 0
 
 def get_setting(key: str) -> str | None:
     conn = _connect_db()
