@@ -5,7 +5,7 @@ import random
 import qrcode
 import logging
 import httpx
-from telegram.ext import ContextTypes
+from telegram.ext import ContextTypes, ConversationHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from telegram.error import BadRequest
 import database as db
@@ -67,6 +67,7 @@ async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
 
         status, expiry_jalali, _ = get_service_status(info)
         plan = db.get_plan(service['plan_id']) if service['plan_id'] else None
+        
         device_limit = plan.get('device_limit', 0) if plan else 'نامشخص'
         device_limit_text = f"**{device_limit} کاربره**" if isinstance(device_limit, int) and device_limit > 0 else "نامحدود"
         
@@ -150,7 +151,6 @@ async def show_link_options_menu(message: Message, user_uuid: str, service_id: i
             else:
                 await message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
         else:
-            # When creating a new service, message is not a callback query, so we use its context
             await message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     except BadRequest as e:
         if "message is not modified" not in str(e):
@@ -178,14 +178,17 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 response = await client.get(full_config_link)
                 response.raise_for_status()
             configs_bytes = response.content
-            # Send as a file to avoid message length limits
-            await q.message.delete()
-            await context.bot.send_document(
-                chat_id=q.from_user.id,
-                document=io.BytesIO(configs_bytes),
-                filename=f"{config_name}_configs.txt",
-                caption="📄 کانفیگ‌های تکی شما به صورت فایل ارسال شد."
-            )
+            if len(configs_bytes) > 4000: # Telegram message limit
+                await q.message.delete()
+                await context.bot.send_document(
+                    chat_id=q.from_user.id,
+                    document=io.BytesIO(configs_bytes),
+                    filename=f"{config_name}_configs.txt",
+                    caption="📄 کانفیگ‌های تکی شما به صورت فایل ارسال شد."
+                )
+            else:
+                await q.edit_message_text(f"📄 **کانفیگ‌های تکی:**\n\n`{configs_bytes.decode('utf-8')}`", parse_mode="Markdown")
+
         except Exception as e:
             logger.error("Failed to fetch/send full configs: %s", e)
             await q.edit_message_text("❌ دریافت کانفیگ‌های تکی با خطا مواجه شد.")
@@ -280,7 +283,7 @@ async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TY
     msg = await context.bot.send_message(chat_id=user_id, text="در حال بررسی وضعیت سرویس... ⏳")
     info = await hiddify_api.get_user_info(service['sub_uuid'])
     if not info:
-        await msg.edit_message_text("❌ امکان دریافت اطلاعات سرویس از پنل وجود ندارد. لطفاً بعداً تلاش کنید.")
+        await msg.edit_text("❌ امکان دریافت اطلاعات سرویس از پنل وجود ندارد. لطفاً بعداً تلاش کنید.")
         return
 
     _, _, is_expired = get_service_status(info)
