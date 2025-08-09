@@ -27,4 +27,4 @@ async def redeem_gift_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "❌ کد هدیه نامعتبر یا قبلاً استفاده شده است.",
             reply_markup=get_main_menu_keyboard(user_id)
         )
-    return ConversationHandler.END
+    return ConversationHandler.END  # <--- FIX: End conversation here
