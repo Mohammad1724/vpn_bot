@@ -5,7 +5,7 @@ import random
 import qrcode
 import logging
 import httpx
-from telegram.ext import ContextTypes
+from telegram.ext import ContextTypes, ConversationHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from telegram.error import BadRequest
 import database as db
@@ -38,8 +38,11 @@ async def view_service_callback(update: Update, context: ContextTypes.DEFAULT_TY
     q = update.callback_query
     await q.answer()
     service_id = int(q.data.split('_')[-1])
-    await q.edit_message_text("در حال دریافت اطلاعات سرویس... ⏳")
-    await send_service_details(context, q.from_user.id, service_id, original_message=q.message, is_from_menu=True)
+    # Send a new message to avoid edit issues on different message types
+    if q.message:
+        await q.message.delete()
+    msg = await context.bot.send_message(chat_id=q.from_user.id, text="در حال دریافت اطلاعات سرویس... ⏳")
+    await send_service_details(context, q.from_user.id, service_id, original_message=msg, is_from_menu=True)
 
 async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int, service_id: int, original_message=None, is_from_menu: bool = False):
     service = db.get_service(service_id)
@@ -58,14 +61,13 @@ async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
             ]
             text = "❌ اطلاعات این سرویس در پنل یافت نشد. احتمالاً حذف شده است.\nمی‌خواهید این سرویس از ربات هم حذف شود؟"
             if original_message:
-                await original_message.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
+                await original_message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb))
             else:
                 await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=InlineKeyboardMarkup(kb))
             return
 
         status, expiry_jalali, _ = get_service_status(info)
         default_link_type = db.get_setting('default_sub_link_type') or 'sub'
-        
         sub_path = SUB_PATH or ADMIN_PATH
         sub_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
         base_link = f"https://{sub_domain}/{sub_path}/{service['sub_uuid']}"
@@ -82,7 +84,6 @@ async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
             f"🚦 وضعیت: {status}\n\n"
             f"🔗 لینک اشتراک (پیش‌فرض):\n`{final_link}`"
         )
-
         keyboard = [[InlineKeyboardButton("🔄 به‌روزرسانی اطلاعات", callback_data=f"refresh_{service['service_id']}")]]
         if service.get('plan_id', 0) > 0:
             plan = db.get_plan(service['plan_id'])
@@ -138,7 +139,12 @@ async def show_link_options_menu(message: Message, user_uuid: str, service_id: i
     text = "لطفاً نوع لینک اشتراک مورد نظر را انتخاب کنید:"
     try:
         if is_edit:
-            await message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+            # FIX: If message is photo, delete it and send a new text message
+            if message.photo:
+                await message.delete()
+                await context.bot.send_message(chat_id=message.chat_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard))
+            else:
+                await message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
         else:
             await message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     except BadRequest as e:
