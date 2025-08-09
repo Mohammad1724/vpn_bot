@@ -68,9 +68,6 @@ async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
         status, expiry_jalali, _ = get_service_status(info)
         plan = db.get_plan(service['plan_id']) if service['plan_id'] else None
         
-        device_limit = plan.get('device_limit', 0) if plan else 'نامشخص'
-        device_limit_text = f"**{device_limit} کاربره**" if isinstance(device_limit, int) and device_limit > 0 else "نامحدود"
-        
         default_link_type = db.get_setting('default_sub_link_type') or 'sub'
         sub_path = SUB_PATH or ADMIN_PATH
         sub_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
@@ -85,7 +82,6 @@ async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
             f"🏷️ نام سرویس: **{service['name']}**\n\n"
             f"📊 حجم مصرفی: **{info.get('current_usage_GB', 0):.2f} / {info.get('usage_limit_GB', 0):.0f}** گیگ\n"
             f"🗓️ تاریخ انقضا: **{expiry_jalali}**\n"
-            f"👥 محدودیت دستگاه: {device_limit_text}\n"
             f"📱 دستگاه‌های متصل: **{info.get('devices', 0)}**\n"
             f"🚦 وضعیت: {status}\n\n"
             f"🔗 لینک اشتراک (پیش‌فرض):\n`{final_link}`"
@@ -283,7 +279,7 @@ async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TY
     msg = await context.bot.send_message(chat_id=user_id, text="در حال بررسی وضعیت سرویس... ⏳")
     info = await hiddify_api.get_user_info(service['sub_uuid'])
     if not info:
-        await msg.edit_text("❌ امکان دریافت اطلاعات سرویس از پنل وجود ندارد. لطفاً بعداً تلاش کنید.")
+        await msg.edit_message_text("❌ امکان دریافت اطلاعات سرویس از پنل وجود ندارد. لطفاً بعداً تلاش کنید.")
         return
 
     _, _, is_expired = get_service_status(info)
@@ -328,8 +324,8 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
 
     service = db.get_service(service_id)
     plan = db.get_plan(plan_id)
-    device_limit = plan.get('device_limit', 0)
-    new_info = await hiddify_api.renew_user_subscription(service['sub_uuid'], plan['days'], plan['gb'], device_limit)
+    # Since we removed device_limit from API calls, we pass 0
+    new_info = await hiddify_api.renew_user_subscription(service['sub_uuid'], plan['days'], plan['gb'], 0)
 
     if new_info:
         db.finalize_renewal_transaction(txn_id, plan_id)
