@@ -73,7 +73,7 @@ async def manage_user_action_handler(update: Update, context: ContextTypes.DEFAU
         msg = "📜 سوابق خرید کاربر:\n\n"
         from datetime import datetime
         for sale in history:
-            sale_date = datetime.strptime(sale['sale_date'], '%Y-%m-%d %H:%M:%S').strftime('%Y/%m/%d - %H:%م')
+            sale_date = datetime.strptime(sale['sale_date'], '%Y-%m-%d %H:%M:%S').strftime('%Y/%m/%d - %H:%M')
             msg += f"🔹 {sale['plan_name'] or 'پلن حذف شده'} | قیمت: {sale['price']:.0f} تومان | تاریخ: {sale_date}\n"
         await update.message.reply_text(msg, parse_mode="Markdown")
         return MANAGE_USER_ACTION
@@ -97,7 +97,6 @@ async def manage_user_amount_received(update: Update, context: ContextTypes.DEFA
 
 # -------------------- Admin charge review (from receipts) --------------------
 async def admin_confirm_charge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    from telegram.error import Forbidden, BadRequest
     q = update.callback_query
     await q.answer()
     prefix = "admin_confirm_charge_"
@@ -129,7 +128,6 @@ async def admin_confirm_charge_callback(update: Update, context: ContextTypes.DE
         await context.bot.send_message(chat_id=q.from_user.id, text=feedback, parse_mode="Markdown")
 
 async def admin_reject_charge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    from telegram.error import Forbidden, BadRequest
     q = update.callback_query
     await q.answer()
     try:
@@ -204,20 +202,20 @@ async def broadcast_to_all_send(update: Update, context: ContextTypes.DEFAULT_TY
 
     for uid in user_ids:
         try:
-            await msg.copy_to(chat_id=uid)
+            # استفاده از Bot.copy_message (سازگار با PTB)
+            await context.bot.copy_message(chat_id=uid, from_chat_id=msg.chat.id, message_id=msg.message_id)
             sent += 1
         except RetryAfter as e:
             await asyncio.sleep(e.retry_after + 1)
             try:
-                await msg.copy_to(chat_id=uid)
+                await context.bot.copy_message(chat_id=uid, from_chat_id=msg.chat.id, message_id=msg.message_id)
                 sent += 1
             except Exception:
                 failed += 1
-        except (Forbidden, BadRequest):
+        except (Forbidden, BadRequest, TimedOut, NetworkError):
             failed += 1
-        except (TimedOut, NetworkError):
-            failed += 1
-            await asyncio.sleep(0.5)
+            # کمی مکث برای خطاهای موقتی شبکه
+            await asyncio.sleep(0.2)
         except Exception:
             failed += 1
 
@@ -229,7 +227,6 @@ async def broadcast_to_all_send(update: Update, context: ContextTypes.DEFAULT_TY
         reply_markup=get_admin_menu_keyboard()
     )
     context.user_data.clear()
-    # مهم: خروج از کانورسیشن و برگشت به منوی ادمین
     return ConversationHandler.END
 
 # ارسال به کاربر خاص
@@ -259,18 +256,17 @@ async def broadcast_to_user_message_received(update: Update, context: ContextTyp
 
     msg = update.message
     try:
-        await msg.copy_to(chat_id=target_id)
+        await context.bot.copy_message(chat_id=target_id, from_chat_id=msg.chat.id, message_id=msg.message_id)
         await update.message.reply_text("✅ پیام با موفقیت ارسال شد.", reply_markup=get_admin_menu_keyboard())
     except (Forbidden, BadRequest):
         await update.message.reply_text("❌ ارسال ناموفق بود. احتمالاً کاربر ربات را مسدود کرده یا آیدی اشتباه است.", reply_markup=get_admin_menu_keyboard())
     except RetryAfter as e:
         await asyncio.sleep(e.retry_after + 1)
         try:
-            await msg.copy_to(chat_id=target_id)
+            await context.bot.copy_message(chat_id=target_id, from_chat_id=msg.chat.id, message_id=msg.message_id)
             await update.message.reply_text("✅ پیام با موفقیت ارسال شد.", reply_markup=get_admin_menu_keyboard())
         except Exception:
             await update.message.reply_text("❌ ارسال ناموفق بود.", reply_markup=get_admin_menu_keyboard())
 
     context.user_data.clear()
-    # مهم: پایان کانورسیشن و برگشت به منوی ادمین
     return ConversationHandler.END
