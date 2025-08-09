@@ -3,15 +3,15 @@
 import io
 import random
 import qrcode
-from telegram.ext import ContextTypes
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.error import BadRequest
+import logging
+from telegram.ext import ContextTypes, ConversationHandler
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from telegram.error import BadRequest, Forbidden
 import database as db
 import hiddify_api
 from config import SUB_DOMAINS, PANEL_DOMAIN, SUB_PATH, ADMIN_PATH
 from bot.keyboards import get_main_menu_keyboard
 from bot.utils import get_service_status
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -50,13 +50,12 @@ async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
     try:
         info = await hiddify_api.get_user_info(service['sub_uuid'])
         if not info:
-            # Show delete option when panel returns nothing (likely 404)
             kb = [
                 [InlineKeyboardButton("🗑️ حذف سرویس از ربات", callback_data=f"delete_service_{service['service_id']}")],
                 [InlineKeyboardButton("🔄 تلاش مجدد", callback_data=f"refresh_{service['service_id']}")],
                 [InlineKeyboardButton("⬅️ بازگشت به لیست سرویس‌ها", callback_data="back_to_services")]
             ]
-            text = "❌ اطلاعات این سرویس در پنل یافت نشد. احتمالاً حذف شده است.\nمی‌خواهید این سرویس از ربات هم حذف شود؟"
+            text = "❌ اطلاعات این سرویس در پنل یافت نشد. احتمالاً حذف یا منقضی شده است.\nمی‌خواهید این سرویس از ربات هم حذف شود؟"
             if original_message:
                 await original_message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb))
             else:
@@ -82,8 +81,7 @@ async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
 
         keyboard = [[InlineKeyboardButton("🔄 به‌روزرسانی اطلاعات", callback_data=f"refresh_{service['service_id']}")]]
         if service.get('plan_id', 0) > 0:
-            from database import get_plan
-            plan = get_plan(service['plan_id'])
+            plan = db.get_plan(service['plan_id'])
             if plan:
                 keyboard.append([InlineKeyboardButton(f"⏳ تمدید سرویس ({plan['price']:.0f} تومان)", callback_data=f"renew_{service['service_id']}")])
         if is_from_menu:
@@ -142,13 +140,143 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
         return
 
     try:
-        # Use internal connection to remove the stale record safely
         conn = db._connect_db()
         conn.execute("DELETE FROM active_services WHERE service_id = ? AND user_id = ?", (service_id, q.from_user.id))
         conn.commit()
         await q.edit_message_text("🗑️ سرویس از لیست شما حذف شد.")
-        # Show updated list
         await list_my_services(update, context)
     except Exception as e:
         logger.error("Delete service %s failed: %s", service_id, e, exc_info=True)
         await q.edit_message_text("❌ حذف سرویس انجام نشد. لطفاً بعداً دوباره تلاش کنید.")
+
+async def show_link_options_menu(message: Message, user_uuid: str, is_edit: bool = True):
+    keyboard = [
+        [InlineKeyboardButton("🔗 لینک هوشمند (Auto)", callback_data=f"getlink_auto_{user_uuid}")],
+        [InlineKeyboardButton("📱 لینک SingBox", callback_data=f"getlink_singbox_{user_uuid}")],
+        [InlineKeyboardButton("💻 لینک استاندارد (V2ray)", callback_data=f"getlink_sub_{user_uuid}")]
+    ]
+    text = "سرویس شما ساخته شد. لطفاً نوع لینک اشتراک مورد نظر را انتخاب کنید:"
+    try:
+        if is_edit:
+            await message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            await message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    except BadRequest as e:
+        if "message is not modified" not in str(e):
+            logger.error("show_link_options_menu error: %s", e)
+
+async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    _, link_type, user_uuid = q.data.split('_')
+    await q.message.edit_text("در حال ساخت لینک و QR Code... ⏳")
+    sub_path = SUB_PATH or ADMIN_PATH
+    sub_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
+    base_link = f"https://{sub_domain}/{sub_path}/{user_uuid}"
+    info = await hiddify_api.get_user_info(user_uuid)
+    config_name = info.get('name', 'config') if info else 'config'
+    final_link = f"{base_link}/" if link_type == "auto" else f"{base_link}/{link_type}/"
+    final_link_with_fragment = f"{final_link}?name={config_name.replace(' ', '_')}"
+    img = qrcode.make(final_link_with_fragment)
+    bio = io.BytesIO(); bio.name = 'qrcode.png'; img.save(bio, 'PNG'); bio.seek(0)
+    caption = (
+        f"نام کانفیگ: **{config_name}**\n\n"
+        f"با اسکن QR یا استفاده از لینک زیر متصل شوید:\n\n"
+        f"`{final_link_with_fragment}`"
+    )
+    await q.message.delete()
+    await context.bot.send_photo(
+        chat_id=q.message.chat_id,
+        photo=bio,
+        caption=caption,
+        parse_mode="Markdown",
+        reply_markup=get_main_menu_keyboard(q.from_user.id)
+    )
+
+# Renewal flow
+async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    await q.message.delete()
+    service_id = int(q.data.split('_')[1])
+    user_id = q.from_user.id
+
+    service = db.get_service(service_id)
+    if not service:
+        await context.bot.send_message(chat_id=user_id, text="❌ سرویس نامعتبر است.")
+        return
+    plan = db.get_plan(service['plan_id'])
+    if not plan:
+        await context.bot.send_message(chat_id=user_id, text="❌ پلن تمدید برای این سرویس یافت نشد.")
+        return
+    user = db.get_or_create_user(user_id)
+    if user['balance'] < plan['price']:
+        await context.bot.send_message(chat_id=user_id, text=f"موجودی برای تمدید کافی نیست! (نیاز به {plan['price']:.0f} تومان)")
+        return
+
+    msg = await context.bot.send_message(chat_id=user_id, text="در حال بررسی وضعیت سرویس... ⏳")
+    info = await hiddify_api.get_user_info(service['sub_uuid'])
+    if not info:
+        await msg.edit_text("❌ امکان دریافت اطلاعات سرویس از پنل وجود ندارد. لطفاً بعداً تلاش کنید.")
+        return
+
+    _, _, is_expired = get_service_status(info)
+    context.user_data['renewal_service_id'] = service_id
+    context.user_data['renewal_plan_id'] = plan['plan_id']
+
+    if is_expired:
+        await proceed_with_renewal(update, context, original_message=msg)
+    else:
+        kb = [
+            [InlineKeyboardButton("✅ بله، تمدید کن", callback_data="confirmrenew")],
+            [InlineKeyboardButton("❌ خیر، لغو کن", callback_data="cancelrenew")]
+        ]
+        await msg.edit_text(
+            "⚠️ هشدار مهم\n\nسرویس شما هنوز اعتبار دارد. تمدید در حال حاضر باعث می‌شود اعتبار زمانی و حجمی باقیمانده شما از بین برود و دوره جدید از امروز شروع شود.\n\nآیا ادامه می‌دهید؟",
+            reply_markup=InlineKeyboardMarkup(kb),
+            parse_mode="Markdown"
+        )
+
+async def confirm_renewal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    await proceed_with_renewal(update, context, original_message=q.message)
+
+async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYPE, original_message=None):
+    q = update.callback_query
+    user_id = q.from_user.id if q else update.effective_user.id
+    service_id = context.user_data.get('renewal_service_id')
+    plan_id = context.user_data.get('renewal_plan_id')
+    if not service_id or not plan_id:
+        if original_message: await original_message.edit_text("❌ خطای داخلی: اطلاعات تمدید یافت نشد.")
+        return
+
+    if original_message:
+        await original_message.edit_text("در حال ارسال درخواست تمدید به پنل... ⏳")
+
+    txn_id = db.initiate_renewal_transaction(user_id, service_id, plan_id)
+    if not txn_id:
+        if original_message:
+            await original_message.edit_text("❌ مشکلی در شروع فرآیند تمدید پیش آمد (مثلاً عدم موجودی).")
+        return
+
+    service = db.get_service(service_id)
+    plan = db.get_plan(plan_id)
+    new_info = await hiddify_api.renew_user_subscription(service['sub_uuid'], plan['days'], plan['gb'])
+
+    if new_info:
+        db.finalize_renewal_transaction(txn_id, plan_id)
+        if original_message:
+            await original_message.edit_text("✅ سرویس با موفقیت تمدید شد! در حال نمایش اطلاعات جدید...")
+        await send_service_details(context, user_id, service_id, original_message=original_message, is_from_menu=True)
+    else:
+        db.cancel_renewal_transaction(txn_id)
+        if original_message:
+            await original_message.edit_text("❌ خطا در تمدید سرویس. مشکلی در ارتباط با پنل وجود دارد. لطفاً به پشتیبانی اطلاع دهید.")
+
+    context.user_data.clear()
+
+async def cancel_renewal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    await q.edit_message_text("عملیات تمدید لغو شد.")
