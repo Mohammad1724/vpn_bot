@@ -41,12 +41,12 @@ async def get_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return GET_CUSTOM_NAME
     context.user_data['custom_name'] = custom_name
     await create_service_after_name(update.message, context)
-    return ConversationHandler.END  # <--- FIX: End conversation here
+    return ConversationHandler.END
 
 async def skip_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['custom_name'] = ""
     await create_service_after_name(update.message, context)
-    return ConversationHandler.END  # <--- FIX: End conversation here
+    return ConversationHandler.END
 
 async def create_service_after_name(message: Update.message, context: ContextTypes.DEFAULT_TYPE):
     user_id = message.chat_id
@@ -66,6 +66,14 @@ async def create_service_after_name(message: Update.message, context: ContextTyp
 
     if result and result.get('uuid'):
         db.finalize_purchase_transaction(transaction_id, result['uuid'], result['full_link'], custom_name)
+        
+        # <<< FIX: Get the newly created service from DB to pass its ID
+        new_service = db.get_service_by_uuid(result['uuid'])
+        if not new_service:
+            await msg_loading.edit_text("❌ خطایی در ثبت سرویس در دیتابیس رخ داد. لطفاً به پشتیبانی اطلاع دهید.")
+            context.user_data.clear()
+            return
+        
         referrer_id, bonus_amount = db.apply_referral_bonus(user_id)
         if referrer_id:
             try:
@@ -77,8 +85,10 @@ async def create_service_after_name(message: Update.message, context: ContextTyp
             await msg_loading.delete()
         except BadRequest:
             pass
+        
         from .user_services import show_link_options_menu
-        await show_link_options_menu(message, result['uuid'], is_edit=False)
+        # <<< FIX: Pass the required service_id
+        await show_link_options_menu(message, result['uuid'], new_service['service_id'], is_edit=False)
     else:
         db.cancel_purchase_transaction(transaction_id)
         await msg_loading.edit_text("❌ ساخت سرویس ناموفق بود. لطفاً به پشتیبانی اطلاع دهید.")
