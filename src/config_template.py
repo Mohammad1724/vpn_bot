@@ -14,9 +14,6 @@ PANEL_DOMAIN = "your_panel_domain.com"
 ADMIN_PATH = "your_admin_secret_path"
 SUB_PATH = "your_subscription_secret_path"
 API_KEY = "your_hiddify_api_key_here"
-
-# Optional list of subscription domains. If empty, PANEL_DOMAIN will be used.
-# Example: ["sub1.example.com", "sub2.example.com"]
 SUB_DOMAINS = []
 
 # ===============================================================
@@ -29,14 +26,12 @@ TRIAL_GB = 1
 # ===============================================================
 # REFERRAL & REMINDERS CONFIGURATION
 # ===============================================================
-# Bonus amount (Toman) for both referrer and new user after the first purchase
 REFERRAL_BONUS_AMOUNT = 5000
-
-# Days before expiry to send reminder
 EXPIRY_REMINDER_DAYS = 3
 
 # ===============================================================
-# USAGE ALERT CONFIGURATION
+# USAGE & DEVICE LIMITS CONFIGURATION
 # ===============================================================
-# Send a low-usage alert when (current_usage_GB / usage_limit_GB) >= threshold (0.0 - 1.0)
 USAGE_ALERT_THRESHOLD = 0.8
+# Enable or disable the job that warns users when they reach their device limit.
+DEVICE_LIMIT_ALERT_ENABLED = True
