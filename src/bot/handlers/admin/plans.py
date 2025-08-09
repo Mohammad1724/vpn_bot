@@ -212,3 +212,16 @@ async def admin_delete_plan_callback(update: Update, context: ContextTypes.DEFAU
 async def admin_toggle_plan_visibility_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
+    try:
+        plan_id = int(q.data.split('_')[-1])
+    except Exception:
+        await q.edit_message_text("❌ شناسه پلن نامعتبر است.")
+        return PLAN_MENU
+
+    db.toggle_plan_visibility(plan_id)
+    try:
+        await q.message.delete()
+    except Exception:
+        pass
+    await q.from_user.send_message("وضعیت نمایش پلن تغییر کرد. برای دیدن تغییرات، لیست را مجدداً باز کنید.")
+    return PLAN_MENU
