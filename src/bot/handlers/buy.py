@@ -14,16 +14,27 @@ async def buy_service_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("متأسفانه در حال حاضر هیچ پلنی موجود نیست.")
         return
     
+    message_text = "🛍️ **لیست سرویس‌های موجود**\n\n"
     keyboard = []
+    
     for p in plans:
         limit = p.get('device_limit', 0)
         limit_text = f"{limit} کاربره" if limit and limit > 0 else "نامحدود"
-        button_text = (
-            f"{p['name']} - {p['days']} روزه {p['gb']} گیگ - {limit_text} - {p['price']:,.0f} تومان"
+        
+        message_text += (
+            f"🔹 **{p['name']}**\n"
+            f"   - 🗓️ مدت: {p['days']} روز\n"
+            f"   - 💾 حجم: {p['gb']} گیگابایت\n"
+            f"   - 👥 تعداد کاربر: {limit_text}\n"
+            f"   - 💳 قیمت: **{p['price']:,.0f} تومان**\n\n"
         )
+        
+        button_text = f"🛒 خرید پلن «{p['name']}»"
         keyboard.append([InlineKeyboardButton(button_text, callback_data=f"user_buy_{p['plan_id']}")])
 
-    await update.message.reply_text("لطفاً پلن مورد نظر خود را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
+    message_text += "لطفاً سرویس مورد نظر خود را از دکمه‌های زیر انتخاب کنید:"
+    
+    await update.message.reply_text(message_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 async def buy_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -105,6 +116,6 @@ async def create_service_after_name(message: Update.message, context: ContextTyp
             await msg_loading.delete()
         except BadRequest:
             pass
-        await context.bot.send_message(chat_id=user_id, text="❌ ساخت سرویس ناموفق بود. لطفاً به پشتیبانی اطلاع دهید.")
+        await context.bot.send_message(chat_id=user_id, text="❌ ساخت سرویس ناموفق بود. لطفاً به پشتیبانی اطلاع دهید. ممکن است نام کاربری تکراری باشد.")
 
     context.user_data.clear()
