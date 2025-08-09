@@ -7,7 +7,7 @@ from telegram.constants import ParseMode
 from bot.constants import (
     CMD_CANCEL, CMD_SKIP, PLAN_MENU, PLAN_NAME, PLAN_PRICE, PLAN_DAYS, PLAN_GB, PLAN_DEVICE_LIMIT,
     EDIT_PLAN_NAME, EDIT_PLAN_PRICE, EDIT_PLAN_DAYS, EDIT_PLAN_GB, EDIT_DEVICE_LIMIT,
-    BTN_BACK_TO_ADMIN_MENU, ADMIN_MENU
+    BTN_BACK_TO_ADMIN_MENU
 )
 from bot.keyboards import get_admin_menu_keyboard
 import database as db
@@ -89,7 +89,11 @@ async def plan_device_limit_received(update: Update, context: ContextTypes.DEFAU
             context.user_data['plan_days'], context.user_data['plan_gb'],
             context.user_data['plan_device_limit']
         )
-        await update.message.reply_text("✅ پلن جدید با موفقیت اضافه شد!", reply_markup=get_admin_menu_keyboard())
+        keyboard = [["➕ افزودن پلن جدید", "📋 لیست پلن‌ها"], [BTN_BACK_TO_ADMIN_MENU]]
+        await update.message.reply_text(
+            "✅ پلن جدید با موفقیت اضافه شد!",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
         context.user_data.clear()
         return ConversationHandler.END
     except (ValueError, TypeError):
@@ -115,11 +119,11 @@ async def edit_plan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def edit_plan_name_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['edit_plan_data']['name'] = update.message.text.strip()
-    await update.message.reply_text(f"قیمت جدید (تومان) را وارد کنید (یا {CMD_SKIP}).")
+    await update.message.reply_text(f"قیمت جدید را به تومان وارد کنید (یا {CMD_SKIP}).")
     return EDIT_PLAN_PRICE
 
 async def skip_edit_plan_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"از تغییر نام صرف‌نظر شد. قیمت جدید (تومان) را وارد کنید (یا {CMD_SKIP}).")
+    await update.message.reply_text(f"از تغییر نام صرف‌نظر شد. قیمت جدید را به تومان وارد کنید (یا {CMD_SKIP}).")
     return EDIT_PLAN_PRICE
 
 async def edit_plan_price_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
