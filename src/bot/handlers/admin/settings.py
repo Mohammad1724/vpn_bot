@@ -3,7 +3,7 @@
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from bot.keyboards import get_admin_menu_keyboard
-from bot.constants import AWAIT_SETTING_VALUE, CMD_CANCEL
+from bot.constants import AWAIT_SETTING_VALUE, CMD_CANCEL, ADMIN_MENU
 import database as db
 from config import REFERRAL_BONUS_AMOUNT
 
@@ -16,7 +16,7 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"شماره کارت: `{card_number}`\n"
         f"صاحب حساب: `{card_holder}`\n"
         f"هدیه معرفی (تومان): `{referral_bonus}`\n\n"
-        "برای تغییر هر مورد، از دکمه‌ها استفاده کنید."
+        "برای تغییر هر مورد، روی دکمه‌ی مربوطه کلیک کنید."
     )
     kb = [
         [InlineKeyboardButton("ویرایش شماره کارت", callback_data="admin_edit_setting_card_number"),
@@ -24,7 +24,8 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("ویرایش مبلغ هدیه معرفی", callback_data="admin_edit_setting_referral_bonus_amount")]
     ]
     await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
-    return ConversationHandler.END
+    # This handler is not part of a conversation, so it shouldn't return a state.
+    # It simply displays the menu. The callback will trigger a new conversation.
 
 async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -58,4 +59,5 @@ async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_T
     db.set_setting(key, value)
     await update.message.reply_text("✅ تنظیمات با موفقیت به‌روزرسانی شد.", reply_markup=get_admin_menu_keyboard())
     context.user_data.clear()
-    return ConversationHandler.END
+    # <<< FIX: Return to the main admin menu state within the admin conversation
+    return ADMIN_MENU
