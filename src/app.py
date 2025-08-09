@@ -6,11 +6,11 @@ from telegram.ext import (
     CommandHandler, filters
 )
 from bot import jobs, constants
+# تغییر: ایمپورت‌ها را تا حد امکان از زیرماژول انجام می‌دهیم
 from bot.handlers import start as start_h
 from bot.handlers import gift as gift_h
 from bot.handlers import charge as charge_h
 from bot.handlers import buy as buy_h
-from bot.handlers import trial as trial_h
 from bot.handlers import user_services as us_h
 from bot.handlers.admin import common as admin_c
 from bot.handlers.admin import plans as admin_plans
@@ -18,6 +18,9 @@ from bot.handlers.admin import reports as admin_reports
 from bot.handlers.admin import settings as admin_settings
 from bot.handlers.admin import backup as admin_backup
 from bot.handlers.admin import users as admin_users
+# این خط را جایگزین ایمپورت قبلی trial کن:
+from bot.handlers.trial import get_trial_service as trial_get_trial_service
+
 from config import BOT_TOKEN, ADMIN_ID
 
 logger = logging.getLogger(__name__)
@@ -28,7 +31,6 @@ def build_application():
     admin_filter = filters.User(user_id=ADMIN_ID)
     user_filter = ~admin_filter
 
-    # Conversations
     buy_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(buy_h.buy_start, pattern='^user_buy_')],
         states={
@@ -104,7 +106,7 @@ def build_application():
             ],
             constants.REPORTS_MENU: [
                 MessageHandler(filters.Regex('^📊 آمار کلی$'), admin_reports.show_stats_report),
-                MessageHandler(filters.Regex('^📈 گزارش فروش امروز$'), admin_reports.show_daily_report),
+                MessageHandler(filters.Regex('^📈 گزارش‌ها و آمار$'), admin_reports.show_daily_report),
                 MessageHandler(filters.Regex('^📅 گزارش فروش ۷ روز اخیر$'), admin_reports.show_weekly_report),
                 MessageHandler(filters.Regex('^🏆 محبوب‌ترین پلن‌ها$'), admin_reports.show_popular_plans_report),
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.back_to_admin_menu),
@@ -161,7 +163,6 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # register
     application.add_handler(charge_conv, group=1)
     application.add_handler(gift_conv, group=1)
     application.add_handler(buy_conv, group=1)
@@ -169,11 +170,9 @@ def build_application():
     application.add_handler(edit_plan_conv, group=1)
     application.add_handler(admin_conv, group=1)
 
-    # admin charge decision callbacks
     application.add_handler(CallbackQueryHandler(admin_users.admin_confirm_charge_callback, pattern="^admin_confirm_charge_"))
     application.add_handler(CallbackQueryHandler(admin_users.admin_reject_charge_callback, pattern="^admin_reject_charge_"))
 
-    # user services callbacks
     application.add_handler(CallbackQueryHandler(us_h.view_service_callback, pattern="^view_service_"), group=2)
     application.add_handler(CallbackQueryHandler(us_h.back_to_services_callback, pattern="^back_to_services$"), group=2)
     application.add_handler(CallbackQueryHandler(us_h.get_link_callback, pattern="^getlink_"), group=2)
@@ -182,14 +181,14 @@ def build_application():
     application.add_handler(CallbackQueryHandler(us_h.confirm_renewal_callback, pattern="^confirmrenew$"), group=2)
     application.add_handler(CallbackQueryHandler(us_h.cancel_renewal_callback, pattern="^cancelrenew$"), group=2)
 
-    # main commands and menu
     application.add_handler(CommandHandler("start", start_h.start), group=3)
     application.add_handler(MessageHandler(filters.Regex('^🛍️ خرید سرویس$'), buy_h.buy_service_list), group=3)
     application.add_handler(MessageHandler(filters.Regex('^📋 سرویس‌های من$'), us_h.list_my_services), group=3)
     application.add_handler(MessageHandler(filters.Regex('^💰 موجودی و شارژ$'), start_h.show_balance), group=3)
     application.add_handler(MessageHandler(filters.Regex('^📞 پشتیبانی$'), start_h.show_support), group=3)
     application.add_handler(MessageHandler(filters.Regex('^📚 راهنمای اتصال$'), start_h.show_guide), group=3)
-    application.add_handler(MessageHandler(filters.Regex('^🧪 دریافت سرویس تست رایگان$'), trial_h.get_trial_service), group=3)
+    # تغییر: استفاده مستقیم از تابع ایمپورت‌شده
+    application.add_handler(MessageHandler(filters.Regex('^🧪 دریافت سرویس تست رایگان$'), trial_get_trial_service), group=3)
     application.add_handler(MessageHandler(filters.Regex('^🎁 معرفی دوستان$'), start_h.show_referral_link), group=3)
 
     return application
