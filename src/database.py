@@ -4,11 +4,8 @@ import sqlite3
 import logging
 from datetime import datetime, timedelta
 
-# Setup
 DB_NAME = "vpn_bot.db"
 logger = logging.getLogger(__name__)
-
-# Connection holder (singleton)
 _db_connection = None
 
 def _get_connection():
@@ -38,12 +35,14 @@ def close_db():
 def init_db():
     conn = _connect_db()
     cursor = conn.cursor()
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY, username TEXT, balance REAL DEFAULT 0.0,
             join_date TEXT NOT NULL, is_banned INTEGER DEFAULT 0, has_used_trial INTEGER DEFAULT 0,
             referred_by INTEGER, has_received_referral_bonus INTEGER DEFAULT 0
         )''')
+
     try:
         cursor.execute("SELECT referred_by FROM users LIMIT 1")
     except sqlite3.OperationalError:
@@ -90,6 +89,9 @@ def init_db():
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_holder', 'نام صاحب حساب'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('referral_bonus_amount', '5000'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('default_sub_link_type', 'sub'))
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('daily_report_enabled', '1'))
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('weekly_report_enabled', '1'))
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('auto_backup_interval_hours', '24'))
 
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_services_user ON active_services(user_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_services_uuid ON active_services(sub_uuid)")
@@ -151,6 +153,14 @@ def get_all_user_ids() -> list:
     conn = _connect_db()
     cur = conn.execute("SELECT user_id FROM users WHERE is_banned = 0")
     return [row['user_id'] for row in cur.fetchall()]
+
+def get_new_users_count(days: int) -> int:
+    conn = _connect_db()
+    start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(user_id) FROM users WHERE join_date >= ?", (start_date,))
+    count = cursor.fetchone()[0]
+    return count or 0
 
 def set_referrer(user_id: int, referrer_id: int):
     user = get_user(user_id)
