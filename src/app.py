@@ -80,9 +80,7 @@ def build_application():
             constants.PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_gb_received)],
         },
         fallbacks=[CommandHandler('cancel', admin_c.admin_conv_cancel)],
-        map_to_parent={
-            ConversationHandler.END: constants.PLAN_MENU,
-        }
+        map_to_parent={ConversationHandler.END: constants.PLAN_MENU}
     )
 
     edit_plan_conv = ConversationHandler(
@@ -106,9 +104,7 @@ def build_application():
             admin_gift.CREATE_GIFT_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_gift.create_gift_amount_received)]
         },
         fallbacks=[CommandHandler('cancel', admin_c.admin_conv_cancel)],
-        map_to_parent={
-            ConversationHandler.END: constants.ADMIN_MENU
-        }
+        map_to_parent={ConversationHandler.END: constants.ADMIN_MENU}
     )
 
     settings_conv = ConversationHandler(
@@ -121,6 +117,32 @@ def build_application():
         }
     )
 
+    # NEW: Broadcast conversation
+    broadcast_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex('^📩 ارسال پیام$') & admin_filter, admin_users.broadcast_menu)],
+        states={
+            constants.BROADCAST_MENU: [
+                MessageHandler(filters.Regex('^📢 ارسال به همه کاربران$') & admin_filter, admin_users.broadcast_to_all_start),
+                MessageHandler(filters.Regex('^👤 ارسال به کاربر خاص$') & admin_filter, admin_users.broadcast_to_user_start),
+                MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.back_to_admin_menu),
+            ],
+            constants.BROADCAST_MESSAGE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_users.broadcast_message_received),
+            ],
+            constants.BROADCAST_CONFIRM: [
+                CallbackQueryHandler(admin_users.broadcast_confirm_callback, pattern="^broadcast_confirm_(yes|no)$"),
+            ],
+            constants.BROADCAST_TO_USER_ID: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_users.broadcast_to_user_id_received),
+            ],
+            constants.BROADCAST_TO_USER_MESSAGE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_users.broadcast_to_user_message_received),
+            ],
+        },
+        fallbacks=[CommandHandler('cancel', admin_c.admin_conv_cancel)],
+        map_to_parent={ConversationHandler.END: constants.ADMIN_MENU}
+    )
+
     # --- Main Admin Conversation (Parent) ---
     admin_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f'^{constants.BTN_ADMIN_PANEL}$') & admin_filter, admin_c.admin_entry)],
@@ -130,7 +152,6 @@ def build_application():
                 MessageHandler(filters.Regex('^📈 گزارش‌ها و آمار$'), admin_reports.reports_menu),
                 MessageHandler(filters.Regex('^⚙️ تنظیمات$'), admin_settings.settings_menu),
                 MessageHandler(filters.Regex('^💾 پشتیبان‌گیری$'), admin_backup.backup_restore_menu),
-                MessageHandler(filters.Regex('^📩 ارسال پیام$'), admin_users.broadcast_menu),
                 MessageHandler(filters.Regex('^👥 مدیریت کاربران$'), admin_users.user_management_menu),
                 MessageHandler(filters.Regex('^🛑 خاموش کردن ربات$'), admin_c.shutdown_bot),
                 MessageHandler(filters.Regex('^🎁 مدیریت کد هدیه$'), admin_gift.gift_code_management_menu),
@@ -138,6 +159,7 @@ def build_application():
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.back_to_admin_menu),
                 create_gift_conv,
                 settings_conv,
+                broadcast_conv,  # <-- اضافه شد
             ],
             constants.REPORTS_MENU: [
                 MessageHandler(filters.Regex('^📊 آمار کلی$'), admin_reports.show_stats_report),
