@@ -11,16 +11,35 @@ logger = logging.getLogger(__name__)
 def parse_date_flexible(date_str: str) -> Union[datetime.date, None]:
     if not date_str:
         return None
-    date_part = date_str.split('T')[0]
-    for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
-        try:
-            return datetime.strptime(date_part, fmt).date()
-        except (ValueError, TypeError):
-            continue
+    s = str(date_str).strip()
+
+    # Try multiple candidates (raw, split by 'T', split by whitespace)
+    candidates = {s}
+    if 'T' in s:
+        candidates.add(s.split('T', 1)[0])
+    if ' ' in s:
+        candidates.add(s.split(' ', 1)[0])
+
+    # Supported formats (date-only and date+time)
+    fmts = [
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y/%m/%d %H:%M:%S",
+    ]
+
+    for cand in candidates:
+        for fmt in fmts:
+            try:
+                dt = datetime.strptime(cand, fmt)
+                return dt.date()
+            except (ValueError, TypeError):
+                continue
+
     logger.error(f"Date parse failed for '{date_str}'.")
     return None
 
-def get_service_status(hiddify_info):
+def get_service_status(hiddify_info: dict):
     # returns (status_text_persian, jalali_expiry_str, is_expired)
     date_keys = ['start_date', 'last_reset_time', 'created_at']
     start_date_str = next((hiddify_info.get(k) for k in date_keys if hiddify_info.get(k)), None)
@@ -41,7 +60,7 @@ def get_service_status(hiddify_info):
     status = "🔴 منقضی شده" if is_expired else "🟢 فعال"
     return status, jalali_display_str, is_expired
 
-def is_valid_sqlite(filepath):
+def is_valid_sqlite(filepath: str) -> bool:
     try:
         with sqlite3.connect(filepath) as conn:
             cur = conn.cursor()
