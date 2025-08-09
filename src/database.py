@@ -32,6 +32,51 @@ def close_db():
         _db_connection = None
         logger.info("Database connection closed.")
 
+def _remove_device_limit_alert_column_if_exists(conn: sqlite3.Connection):
+    cur = conn.cursor()
+    try:
+        cur.execute("PRAGMA table_info(active_services)")
+        cols = [row["name"] for row in cur.fetchall()]
+        if "device_limit_alert_sent" not in cols:
+            return  # nothing to do
+
+        version_tuple = tuple(map(int, sqlite3.sqlite_version.split(".")))
+        if version_tuple >= (3, 35, 0):
+            # SQLite جدید: حذف مستقیم ستون
+            cur.execute("ALTER TABLE active_services DROP COLUMN device_limit_alert_sent")
+            conn.commit()
+            logger.info("Removed column device_limit_alert_sent from active_services (SQLite >= 3.35).")
+        else:
+            # SQLite قدیمی: بازسازی جدول بدون ستون
+            logger.info("Rebuilding active_services to drop device_limit_alert_sent (SQLite < 3.35).")
+            cur.execute("BEGIN")
+            cur.execute('''
+                CREATE TABLE IF NOT EXISTS active_services_new (
+                    service_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, name TEXT,
+                    sub_uuid TEXT NOT NULL UNIQUE, sub_link TEXT NOT NULL, plan_id INTEGER,
+                    created_at TEXT NOT NULL, low_usage_alert_sent INTEGER DEFAULT 0,
+                    FOREIGN KEY(user_id) REFERENCES users(user_id),
+                    FOREIGN KEY(plan_id) REFERENCES plans(plan_id) ON DELETE SET NULL
+                )
+            ''')
+            cur.execute('''
+                INSERT INTO active_services_new (
+                    service_id, user_id, name, sub_uuid, sub_link, plan_id, created_at, low_usage_alert_sent
+                )
+                SELECT service_id, user_id, name, sub_uuid, sub_link, plan_id, created_at, low_usage_alert_sent
+                FROM active_services
+            ''')
+            cur.execute("DROP TABLE active_services")
+            cur.execute("ALTER TABLE active_services_new RENAME TO active_services")
+            conn.commit()
+            # ایندکس‌ها را دوباره بساز
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_active_services_user ON active_services(user_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_active_services_uuid ON active_services(sub_uuid)")
+            conn.commit()
+            logger.info("Rebuild completed; device_limit_alert_sent removed.")
+    except Exception as e:
+        logger.warning(f"Couldn't remove device_limit_alert_sent column: {e}")
+
 def init_db():
     conn = _connect_db()
     cursor = conn.cursor()
@@ -56,21 +101,21 @@ def init_db():
             plan_id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, price REAL NOT NULL,
             days INTEGER NOT NULL, gb INTEGER NOT NULL, is_visible INTEGER DEFAULT 1
         )''')
-        
+
     cursor.execute('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)''')
+
+    # active_services بدون device_limit_alert_sent
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS active_services (
             service_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, name TEXT,
             sub_uuid TEXT NOT NULL UNIQUE, sub_link TEXT NOT NULL, plan_id INTEGER,
             created_at TEXT NOT NULL, low_usage_alert_sent INTEGER DEFAULT 0,
-            device_limit_alert_sent INTEGER DEFAULT 0,
             FOREIGN KEY(user_id) REFERENCES users(user_id),
             FOREIGN KEY(plan_id) REFERENCES plans(plan_id) ON DELETE SET NULL
         )''')
-    try:
-        cursor.execute("SELECT device_limit_alert_sent FROM active_services LIMIT 1")
-    except sqlite3.OperationalError:
-        cursor.execute("ALTER TABLE active_services ADD COLUMN device_limit_alert_sent INTEGER DEFAULT 0")
+
+    # ستون device_limit_alert_sent اگر در دیتابیس‌های قدیمی وجود دارد، حذفش کن
+    _remove_device_limit_alert_column_if_exists(conn)
 
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS sales_log (
@@ -289,9 +334,9 @@ def set_low_usage_alert_sent(service_id: int, status=True):
     conn.commit()
 
 def set_device_limit_alert_sent(service_id: int, status: bool = True):
-    conn = _connect_db()
-    conn.execute("UPDATE active_services SET device_limit_alert_sent = ? WHERE service_id = ?", (1 if status else 0, service_id))
-    conn.commit()
+    # حذف ویژگی device limit: این تابع عملاً کاری انجام نمی‌دهد و برای سازگاری نگه داشته شده است.
+    logger.debug("set_device_limit_alert_sent() is deprecated and ignored (device limit feature removed).")
+    return
 
 def delete_service(service_id: int):
     conn = _connect_db()
@@ -381,7 +426,8 @@ def finalize_renewal_transaction(transaction_id: int, new_plan_id: int):
         if not txn:
             raise ValueError("Renewal transaction not found or not pending.")
         cur.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (txn['amount'], txn['user_id']))
-        cur.execute("UPDATE active_services SET plan_id = ?, low_usage_alert_sent = 0, device_limit_alert_sent = 0 WHERE service_id = ?", (new_plan_id, txn['service_id']))
+        # ریست فقط low_usage_alert_sent؛ device_limit حذف شد
+        cur.execute("UPDATE active_services SET plan_id = ?, low_usage_alert_sent = 0 WHERE service_id = ?", (new_plan_id, txn['service_id']))
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cur.execute("INSERT INTO sales_log (user_id, plan_id, price, sale_date) VALUES (?, ?, ?, ?)", (txn['user_id'], txn['plan_id'], txn['amount'], now_str))
         cur.execute("UPDATE transactions SET status = 'completed', updated_at = ? WHERE transaction_id = ?", (now_str, transaction_id))
