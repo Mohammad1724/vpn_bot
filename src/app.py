@@ -40,7 +40,6 @@ def build_application():
     admin_filter = filters.User(user_id=ADMIN_ID)
     user_filter = ~admin_filter
 
-    # --- User-facing Conversations (Top-level) ---
     buy_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(buy_h.buy_start, pattern='^user_buy_')],
         states={
@@ -52,14 +51,12 @@ def build_application():
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
         per_user=True, per_chat=True
     )
-
     gift_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^🎁 کد هدیه$') & user_filter, gift_h.gift_code_entry)],
         states={constants.REDEEM_GIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, gift_h.redeem_gift_code)]},
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
         per_user=True, per_chat=True
     )
-
     charge_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(charge_h.charge_start, pattern='^user_start_charge$')],
         states={
@@ -69,8 +66,6 @@ def build_application():
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
         per_user=True, per_chat=True
     )
-
-    # --- Admin Nested Conversations ---
     settings_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_settings.edit_setting_start, pattern="^admin_edit_setting_")],
         states={constants.AWAIT_SETTING_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_settings.setting_value_received)]},
@@ -81,7 +76,6 @@ def build_application():
             ConversationHandler.END: constants.ADMIN_MENU
         }
     )
-
     edit_plan_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_plans.edit_plan_start, pattern="^admin_edit_plan_")],
         states={
@@ -97,7 +91,6 @@ def build_application():
             ConversationHandler.END: constants.PLAN_MENU
         }
     )
-
     create_gift_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^➕ ساخت کد هدیه جدید$') & admin_filter, admin_gift.create_gift_code_start)],
         states={
@@ -108,8 +101,6 @@ def build_application():
             ConversationHandler.END: constants.ADMIN_MENU
         }
     )
-
-    # --- Main Admin Conversation (Parent) ---
     admin_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f'^{constants.BTN_ADMIN_PANEL}$') & admin_filter, admin_c.admin_entry)],
         states={
@@ -124,7 +115,6 @@ def build_application():
                 MessageHandler(filters.Regex('^🎁 مدیریت کد هدیه$'), admin_gift.gift_code_management_menu),
                 MessageHandler(filters.Regex('^📋 لیست کدهای هدیه$'), admin_gift.list_gift_codes),
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.back_to_admin_menu),
-                # Nested conversations are part of this state's handlers
                 create_gift_conv,
                 settings_conv,
             ],
@@ -141,7 +131,7 @@ def build_application():
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.back_to_admin_menu),
                 CallbackQueryHandler(admin_plans.admin_delete_plan_callback, pattern="^admin_delete_plan_"),
                 CallbackQueryHandler(admin_plans.admin_toggle_plan_visibility_callback, pattern="^admin_toggle_plan_"),
-                edit_plan_conv, # Nested conversation for editing a plan
+                edit_plan_conv,
             ],
             constants.MANAGE_USER_ID: [
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.back_to_admin_menu),
@@ -152,6 +142,11 @@ def build_application():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, admin_users.manage_user_action_handler)
             ],
             constants.MANAGE_USER_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_users.manage_user_amount_received)],
+            constants.BROADCAST_MENU: [
+                MessageHandler(filters.Regex('^ارسال به همه کاربران$'), admin_users.broadcast_to_all_start),
+                MessageHandler(filters.Regex('^ارسال به کاربر خاص$'), admin_users.broadcast_to_user_start),
+                MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.back_to_admin_menu)
+            ],
         },
         fallbacks=[
             MessageHandler(filters.Regex(f'^{constants.BTN_EXIT_ADMIN_PANEL}$'), admin_c.exit_admin_panel),
@@ -160,7 +155,6 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # Register handlers
     application.add_handler(charge_conv)
     application.add_handler(gift_conv)
     application.add_handler(buy_conv)
@@ -171,7 +165,8 @@ def build_application():
     application.add_handler(CallbackQueryHandler(admin_settings.edit_default_link_start, pattern="^edit_default_link_type$"))
     application.add_handler(CallbackQueryHandler(admin_settings.set_default_link_type, pattern="^set_default_link_"))
     application.add_handler(CallbackQueryHandler(admin_settings.settings_menu, pattern="^back_to_settings$"))
-    
+    application.add_handler(CallbackQueryHandler(admin_gift.delete_gift_code_callback, pattern="^delete_gift_code_"))
+
     application.add_handler(CallbackQueryHandler(us_h.view_service_callback, pattern="^view_service_"), group=2)
     application.add_handler(CallbackQueryHandler(us_h.back_to_services_callback, pattern="^back_to_services$"), group=2)
     application.add_handler(CallbackQueryHandler(us_h.get_link_callback, pattern="^getlink_"), group=2)
