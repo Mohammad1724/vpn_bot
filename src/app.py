@@ -24,7 +24,7 @@ from bot.handlers.admin import users as admin_users
 from bot.handlers.trial import get_trial_service as trial_get_trial_service
 from config import BOT_TOKEN, ADMIN_ID
 
-# Suppress noisy PTB user warnings (per_message / job_queue etc.)
+# Suppress noisy PTB user warnings
 warnings.filterwarnings("ignore", category=PTBUserWarning)
 
 logger = logging.getLogger(__name__)
