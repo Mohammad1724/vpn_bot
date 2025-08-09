@@ -35,14 +35,12 @@ def close_db():
 def init_db():
     conn = _connect_db()
     cursor = conn.cursor()
-
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY, username TEXT, balance REAL DEFAULT 0.0,
             join_date TEXT NOT NULL, is_banned INTEGER DEFAULT 0, has_used_trial INTEGER DEFAULT 0,
             referred_by INTEGER, has_received_referral_bonus INTEGER DEFAULT 0
         )''')
-
     try:
         cursor.execute("SELECT referred_by FROM users LIMIT 1")
     except sqlite3.OperationalError:
@@ -55,17 +53,29 @@ def init_db():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS plans (
             plan_id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, price REAL NOT NULL,
-            days INTEGER NOT NULL, gb INTEGER NOT NULL, is_visible INTEGER DEFAULT 1
+            days INTEGER NOT NULL, gb INTEGER NOT NULL, is_visible INTEGER DEFAULT 1,
+            device_limit INTEGER DEFAULT 0
         )''')
+    try:
+        cursor.execute("SELECT device_limit FROM plans LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute("ALTER TABLE plans ADD COLUMN device_limit INTEGER DEFAULT 0")
+
     cursor.execute('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)''')
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS active_services (
             service_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, name TEXT,
             sub_uuid TEXT NOT NULL UNIQUE, sub_link TEXT NOT NULL, plan_id INTEGER,
             created_at TEXT NOT NULL, low_usage_alert_sent INTEGER DEFAULT 0,
+            device_limit_alert_sent INTEGER DEFAULT 0,
             FOREIGN KEY(user_id) REFERENCES users(user_id),
             FOREIGN KEY(plan_id) REFERENCES plans(plan_id) ON DELETE SET NULL
         )''')
+    try:
+        cursor.execute("SELECT device_limit_alert_sent FROM active_services LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute("ALTER TABLE active_services ADD COLUMN device_limit_alert_sent INTEGER DEFAULT 0")
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS sales_log (
             sale_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, plan_id INTEGER,
@@ -184,9 +194,12 @@ def apply_referral_bonus(user_id: int):
             return referrer_id, bonus_amount
     return None, 0
 
-def add_plan(name: str, price: float, days: int, gb: int):
+def add_plan(name: str, price: float, days: int, gb: int, device_limit: int):
     conn = _connect_db()
-    conn.execute("INSERT INTO plans (name, price, days, gb) VALUES (?, ?, ?, ?)", (name, price, days, gb))
+    conn.execute(
+        "INSERT INTO plans (name, price, days, gb, device_limit) VALUES (?, ?, ?, ?, ?)",
+        (name, price, days, gb, device_limit)
+    )
     conn.commit()
 
 def get_plan(plan_id: int) -> dict:
@@ -207,7 +220,7 @@ def list_plans(only_visible: bool = False) -> list:
 
 def update_plan(plan_id: int, data: dict):
     fields, params = [], []
-    for k in ('name', 'price', 'days', 'gb'):
+    for k in ('name', 'price', 'days', 'gb', 'device_limit'):
         if k in data:
             fields.append(f"{k} = ?")
             params.append(data[k])
@@ -277,6 +290,11 @@ def get_all_active_services() -> list:
 def set_low_usage_alert_sent(service_id: int, status=True):
     conn = _connect_db()
     conn.execute("UPDATE active_services SET low_usage_alert_sent = ? WHERE service_id = ?", (1 if status else 0, service_id))
+    conn.commit()
+
+def set_device_limit_alert_sent(service_id: int, status: bool = True):
+    conn = _connect_db()
+    conn.execute("UPDATE active_services SET device_limit_alert_sent = ? WHERE service_id = ?", (1 if status else 0, service_id))
     conn.commit()
 
 def delete_service(service_id: int):
@@ -367,7 +385,7 @@ def finalize_renewal_transaction(transaction_id: int, new_plan_id: int):
         if not txn:
             raise ValueError("Renewal transaction not found or not pending.")
         cur.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (txn['amount'], txn['user_id']))
-        cur.execute("UPDATE active_services SET plan_id = ?, low_usage_alert_sent = 0 WHERE service_id = ?", (new_plan_id, txn['service_id']))
+        cur.execute("UPDATE active_services SET plan_id = ?, low_usage_alert_sent = 0, device_limit_alert_sent = 0 WHERE service_id = ?", (new_plan_id, txn['service_id']))
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cur.execute("INSERT INTO sales_log (user_id, plan_id, price, sale_date) VALUES (?, ?, ?, ?)", (txn['user_id'], txn['plan_id'], txn['amount'], now_str))
         cur.execute("UPDATE transactions SET status = 'completed', updated_at = ? WHERE transaction_id = ?", (now_str, transaction_id))
@@ -409,7 +427,7 @@ def create_gift_code(code: str, amount: float):
         conn.execute("INSERT INTO gift_codes (code, amount) VALUES (?, ?)", (code.upper(), amount))
         conn.commit()
         return True
-    except sqlite3.IntegrityError: # Code already exists
+    except sqlite3.IntegrityError:
         return False
 
 def get_all_gift_codes() -> list:
