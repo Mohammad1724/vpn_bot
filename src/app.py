@@ -1,10 +1,13 @@
 # -*- coding: utf-8 -*-
 
 import logging
+import warnings
+from telegram.warnings import PTBUserWarning
 from telegram.ext import (
     ApplicationBuilder, ConversationHandler, MessageHandler, CallbackQueryHandler,
     CommandHandler, filters
 )
+
 from bot import jobs, constants
 from bot.handlers import start as start_h
 from bot.handlers import gift as gift_h
@@ -20,6 +23,9 @@ from bot.handlers.admin import users as admin_users
 from bot.handlers.trial import get_trial_service as trial_get_trial_service
 from config import BOT_TOKEN, ADMIN_ID
 
+# Suppress PTB user warnings (per_message / job_queue etc.)
+warnings.filterwarnings("ignore", category=PTBUserWarning)
+
 logger = logging.getLogger(__name__)
 
 def build_application():
@@ -28,7 +34,7 @@ def build_application():
     admin_filter = filters.User(user_id=ADMIN_ID)
     user_filter = ~admin_filter
 
-    # Buy conversation
+    # Buy conversation (entry via callback, next via message)
     buy_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(buy_h.buy_start, pattern='^user_buy_')],
         states={
@@ -38,18 +44,18 @@ def build_application():
             ],
         },
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
-        per_user=True, per_chat=True, per_message=True  # set True to avoid warnings with callbacks
+        per_user=True, per_chat=True
     )
 
-    # Gift conversation
+    # Gift conversation (pure message)
     gift_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^🎁 کد هدیه$') & user_filter, gift_h.gift_code_entry)],
         states={constants.REDEEM_GIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, gift_h.redeem_gift_code)]},
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
-        per_user=True, per_chat=True, per_message=True
+        per_user=True, per_chat=True
     )
 
-    # Charge conversation
+    # Charge conversation (callback then message/photo)
     charge_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(charge_h.charge_start, pattern='^user_start_charge$')],
         states={
@@ -57,18 +63,18 @@ def build_application():
             constants.CHARGE_RECEIPT: [MessageHandler(filters.PHOTO, charge_h.charge_receipt_received)]
         },
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
-        per_user=True, per_chat=True, per_message=True
+        per_user=True, per_chat=True
     )
 
-    # Settings conversation
+    # Settings (callback then message)
     settings_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_settings.edit_setting_start, pattern="^admin_edit_setting_")],
         states={constants.AWAIT_SETTING_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_settings.setting_value_received)]},
         fallbacks=[CommandHandler('cancel', admin_c.admin_conv_cancel)],
-        per_user=True, per_chat=True, per_message=True
+        per_user=True, per_chat=True
     )
 
-    # Edit plan conversation
+    # Edit plan (callback then messages)
     edit_plan_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_plans.edit_plan_start, pattern="^admin_edit_plan_")],
         states={
@@ -90,10 +96,10 @@ def build_application():
             ],
         },
         fallbacks=[CommandHandler('cancel', admin_c.admin_conv_cancel)],
-        per_user=True, per_chat=True, per_message=True
+        per_user=True, per_chat=True
     )
 
-    # Admin conversation
+    # Admin conversation (mostly message-based, includes some callbacks)
     admin_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f'^{constants.BTN_ADMIN_PANEL}$') & admin_filter, admin_c.admin_entry)],
         states={
@@ -163,7 +169,7 @@ def build_application():
             MessageHandler(filters.Regex(f'^{constants.BTN_EXIT_ADMIN_PANEL}$'), admin_c.exit_admin_panel),
             CommandHandler('cancel', admin_c.admin_generic_cancel),
         ],
-        per_user=True, per_chat=True, allow_reentry=True, per_message=True
+        per_user=True, per_chat=True, allow_reentry=True
     )
 
     # Register conversations
