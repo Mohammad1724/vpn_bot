@@ -13,28 +13,8 @@ async def buy_service_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not plans:
         await update.message.reply_text("متأسفانه در حال حاضر هیچ پلنی موجود نیست.")
         return
-    
-    message_text = "🛍️ **لیست سرویس‌های موجود**\n\n"
-    keyboard = []
-    
-    for p in plans:
-        limit = p.get('device_limit', 0)
-        limit_text = f"{limit} کاربره" if limit and limit > 0 else "نامحدود"
-        
-        message_text += (
-            f"🔹 **{p['name']}**\n"
-            f"   - 🗓️ مدت: {p['days']} روز\n"
-            f"   - 💾 حجم: {p['gb']} گیگابایت\n"
-            f"   - 👥 تعداد کاربر: {limit_text}\n"
-            f"   - 💳 قیمت: **{p['price']:,.0f} تومان**\n\n"
-        )
-        
-        button_text = f"🛒 خرید پلن «{p['name']}»"
-        keyboard.append([InlineKeyboardButton(button_text, callback_data=f"user_buy_{p['plan_id']}")])
-
-    message_text += "لطفاً سرویس مورد نظر خود را از دکمه‌های زیر انتخاب کنید:"
-    
-    await update.message.reply_text(message_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    keyboard = [[InlineKeyboardButton(f"{p['name']} - {p['days']} روزه {p['gb']} گیگ - {p['price']:.0f} تومان", callback_data=f"user_buy_{p['plan_id']}")] for p in plans]
+    await update.message.reply_text("لطفاً پلن مورد نظر خود را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def buy_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -80,18 +60,17 @@ async def create_service_after_name(message: Update.message, context: ContextTyp
 
     plan = db.get_plan(plan_id)
     custom_name = custom_name_input if custom_name_input else f"سرویس {plan['gb']} گیگ"
-    device_limit = plan.get('device_limit', 0)
 
     msg_loading = await message.reply_text("در حال ساخت سرویس... ⏳", reply_markup=get_main_menu_keyboard(user_id))
-    result = await hiddify_api.create_hiddify_user(plan['days'], plan['gb'], device_limit, user_id, custom_name=custom_name)
+    result = await hiddify_api.create_hiddify_user(plan['days'], plan['gb'], user_id, custom_name=custom_name)
 
     if result and result.get('uuid'):
         db.finalize_purchase_transaction(transaction_id, result['uuid'], result['full_link'], custom_name)
         
+        # <<< FIX: Get the newly created service from DB to pass its ID
         new_service = db.get_service_by_uuid(result['uuid'])
         if not new_service:
-            await msg_loading.delete()
-            await context.bot.send_message(chat_id=user_id, text="❌ خطایی در ثبت سرویس در دیتابیس رخ داد. لطفاً به پشتیبانی اطلاع دهید.")
+            await msg_loading.edit_text("❌ خطایی در ثبت سرویس در دیتابیس رخ داد. لطفاً به پشتیبانی اطلاع دهید.")
             context.user_data.clear()
             return
         
@@ -108,14 +87,10 @@ async def create_service_after_name(message: Update.message, context: ContextTyp
             pass
         
         from .user_services import show_link_options_menu
-        await show_link_options_menu(message, result['uuid'], new_service['service_id'], is_edit=False, context=context)
+        # <<< FIX: Pass the required service_id
+        await show_link_options_menu(message, result['uuid'], new_service['service_id'], is_edit=False)
     else:
         db.cancel_purchase_transaction(transaction_id)
-        # <<< FIX: Delete and send new message instead of editing
-        try:
-            await msg_loading.delete()
-        except BadRequest:
-            pass
-        await context.bot.send_message(chat_id=user_id, text="❌ ساخت سرویس ناموفق بود. لطفاً به پشتیبانی اطلاع دهید. ممکن است نام کاربری تکراری باشد.")
+        await msg_loading.edit_text("❌ ساخت سرویس ناموفق بود. لطفاً به پشتیبانی اطلاع دهید.")
 
     context.user_data.clear()
