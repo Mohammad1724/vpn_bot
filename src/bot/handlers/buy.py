@@ -60,20 +60,19 @@ async def create_service_after_name(message: Update.message, context: ContextTyp
 
     plan = db.get_plan(plan_id)
     custom_name = custom_name_input if custom_name_input else f"سرویس {plan['gb']} گیگ"
+    device_limit = plan.get('device_limit', 0)
 
     msg_loading = await message.reply_text("در حال ساخت سرویس... ⏳", reply_markup=get_main_menu_keyboard(user_id))
-    result = await hiddify_api.create_hiddify_user(plan['days'], plan['gb'], user_id, custom_name=custom_name)
+    result = await hiddify_api.create_hiddify_user(plan['days'], plan['gb'], device_limit, user_id, custom_name=custom_name)
 
     if result and result.get('uuid'):
         db.finalize_purchase_transaction(transaction_id, result['uuid'], result['full_link'], custom_name)
-        
-        # <<< FIX: Get the newly created service from DB to pass its ID
         new_service = db.get_service_by_uuid(result['uuid'])
         if not new_service:
             await msg_loading.edit_text("❌ خطایی در ثبت سرویس در دیتابیس رخ داد. لطفاً به پشتیبانی اطلاع دهید.")
             context.user_data.clear()
             return
-        
+
         referrer_id, bonus_amount = db.apply_referral_bonus(user_id)
         if referrer_id:
             try:
@@ -87,8 +86,7 @@ async def create_service_after_name(message: Update.message, context: ContextTyp
             pass
         
         from .user_services import show_link_options_menu
-        # <<< FIX: Pass the required service_id
-        await show_link_options_menu(message, result['uuid'], new_service['service_id'], is_edit=False)
+        await show_link_options_menu(message, result['uuid'], new_service['service_id'], is_edit=False, context=context)
     else:
         db.cancel_purchase_transaction(transaction_id)
         await msg_loading.edit_text("❌ ساخت سرویس ناموفق بود. لطفاً به پشتیبانی اطلاع دهید.")
