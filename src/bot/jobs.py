@@ -2,22 +2,44 @@
 
 import asyncio
 import logging
+import shutil
+import os
 from datetime import datetime, timedelta, time
 from types import SimpleNamespace
-from typing import List
 from telegram.ext import Application, ContextTypes
 from telegram.error import Forbidden, BadRequest
 
 import database as db
 import hiddify_api
-from config import USAGE_ALERT_THRESHOLD, EXPIRY_REMINDER_DAYS
+from config import USAGE_ALERT_THRESHOLD, EXPIRY_REMINDER_DAYS, ADMIN_ID
 from bot.utils import get_service_status
+from bot.handlers.admin.reports import send_daily_summary, send_weekly_summary
 
 logger = logging.getLogger(__name__)
 
-# Global stop flag and tasks registry for clean shutdown
-_STOP_EVENT = asyncio.Event()
-_BG_TASKS: List[asyncio.Task] = []
+# Global list to hold fallback tasks for clean shutdown
+_BG_TASKS = []
+
+async def auto_backup_job(context: ContextTypes.DEFAULT_TYPE):
+    logger.info("Job: running auto-backup...")
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+    backup_filename = f"backups/auto_backup_{timestamp}.db"
+    try:
+        shutil.copy(db.DB_NAME, backup_filename)
+        await context.bot.send_document(
+            chat_id=ADMIN_ID,
+            document=open(backup_filename, 'rb'),
+            caption=f"پشتیبان خودکار دیتابیس - {timestamp}"
+        )
+    except Exception as e:
+        logger.error(f"Auto-backup failed: {e}", exc_info=True)
+        try:
+            await context.bot.send_message(chat_id=ADMIN_ID, text=f"⚠️ بکاپ خودکار با خطا مواجه شد:\n{e}")
+        except Exception:
+            pass # Avoid error loops if bot can't send message to admin
+    finally:
+        if os.path.exists(backup_filename):
+            os.remove(backup_filename)
 
 async def check_low_usage(context: ContextTypes.DEFAULT_TYPE):
     logger.info("Job: checking low-usage services...")
@@ -26,7 +48,6 @@ async def check_low_usage(context: ContextTypes.DEFAULT_TYPE):
             continue
         try:
             info = await hiddify_api.get_user_info(service['sub_uuid'])
-            # Auto-clean if 404 sentinel
             if isinstance(info, dict) and info.get('_not_found'):
                 await _remove_stale_service(service, context)
                 continue
@@ -95,9 +116,7 @@ async def check_expiring_services(context: ContextTypes.DEFAULT_TYPE):
 
 async def _remove_stale_service(service: dict, context: ContextTypes.DEFAULT_TYPE):
     try:
-        conn = db._connect_db()
-        conn.execute("DELETE FROM active_services WHERE service_id = ?", (service['service_id'],))
-        conn.commit()
+        db.delete_service(service['service_id'])
         await context.bot.send_message(
             chat_id=service['user_id'],
             text=f"🗑️ سرویس {f'({service['name']})' if service['name'] else ''} در پنل یافت نشد و از لیست شما حذف شد."
@@ -130,7 +149,6 @@ async def _daily_expiry_loop(app: Application, hour: int = 9, minute: int = 0):
             try:
                 await asyncio.wait_for(_STOP_EVENT.wait(), timeout=wait_sec)
             except asyncio.TimeoutError:
-                # time reached
                 ctx = SimpleNamespace(bot=app.bot)
                 try:
                     await check_expiring_services(ctx)
@@ -140,33 +158,45 @@ async def _daily_expiry_loop(app: Application, hour: int = 9, minute: int = 0):
         pass
 
 async def post_init(app: Application):
-    # Try optional JobQueue without touching app.job_queue (prevents PTB warnings)
     try:
-        from telegram.ext import JobQueue  # optional extra
+        from telegram.ext import JobQueue
         jq = JobQueue()
         jq.set_application(app)
-        jq.start()
+
         jq.run_repeating(check_low_usage, interval=timedelta(hours=4), first=10)
-        jq.run_daily(check_expiring_services, time=time(hour=9, minute=0))
-        logger.info("Internal JobQueue started and jobs scheduled.")
+        
+        if db.get_setting('daily_report_enabled') == '1':
+            jq.run_daily(send_daily_summary, time=time(hour=23, minute=50))
+            logger.info("Daily report job scheduled.")
+        if db.get_setting('weekly_report_enabled') == '1':
+            jq.run_daily(send_weekly_summary, time=time(hour=22, minute=0), days=(4,)) # Friday
+            logger.info("Weekly report job scheduled.")
+            
+        backup_interval = int(db.get_setting('auto_backup_interval_hours') or 0)
+        if backup_interval > 0:
+            jq.run_repeating(auto_backup_job, interval=timedelta(hours=backup_interval), first=timedelta(hours=1))
+            logger.info(f"Auto-backup job scheduled every {backup_interval} hours.")
+
+        jq.start()
+        logger.info("Internal JobQueue started and all jobs scheduled.")
         return
     except Exception as e:
-        logger.info("JobQueue not available (%s). Using asyncio fallback.", e)
+        logger.info("JobQueue not available (%s). Falling back to asyncio loops.", e)
 
-    # Fallback with clean shutdown support
-    _STOP_EVENT.clear()
+    global _STOP_EVENT
+    _STOP_EVENT = asyncio.Event()
     loop = asyncio.get_event_loop()
     _BG_TASKS.clear()
     _BG_TASKS.append(loop.create_task(_low_usage_loop(app)))
     _BG_TASKS.append(loop.create_task(_daily_expiry_loop(app)))
 
 async def post_shutdown(app: Application):
-    # Trigger stop event and cancel tasks; await them to avoid 'Task destroyed' warnings
-    if _BG_TASKS:
-        _STOP_EVENT.set()
-        for t in _BG_TASKS:
-            t.cancel()
-        try:
-            await asyncio.gather(*_BG_TASKS, return_exceptions=True)
-        finally:
-            _BG_TASKS.clear()
+    if not _BG_TASKS:
+        return
+    _STOP_EVENT.set()
+    for t in _BG_TASKS:
+        t.cancel()
+    try:
+        await asyncio.gather(*_BG_TASKS, return_exceptions=True)
+    finally:
+        _BG_TASKS.clear()
