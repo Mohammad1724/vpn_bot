@@ -21,6 +21,7 @@ from bot.handlers.admin import reports as admin_reports
 from bot.handlers.admin import settings as admin_settings
 from bot.handlers.admin import backup as admin_backup
 from bot.handlers.admin import users as admin_users
+from bot.handlers.admin import gift_codes as admin_gift
 from bot.handlers.trial import get_trial_service as trial_get_trial_service
 from config import BOT_TOKEN, ADMIN_ID
 
@@ -94,6 +95,16 @@ def build_application():
         fallbacks=[CommandHandler('cancel', admin_c.admin_conv_cancel)],
         per_user=True, per_chat=True
     )
+    create_gift_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex('^➕ ساخت کد هدیه جدید$') & admin_filter, admin_gift.create_gift_code_start)],
+        states={
+            admin_gift.CREATE_GIFT_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_gift.create_gift_amount_received)]
+        },
+        fallbacks=[CommandHandler('cancel', admin_c.admin_conv_cancel)],
+        map_to_parent={
+            ConversationHandler.END: constants.ADMIN_MENU
+        }
+    )
     admin_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f'^{constants.BTN_ADMIN_PANEL}$') & admin_filter, admin_c.admin_entry)],
         states={
@@ -105,6 +116,9 @@ def build_application():
                 MessageHandler(filters.Regex('^📩 ارسال پیام$'), admin_users.broadcast_menu),
                 MessageHandler(filters.Regex('^👥 مدیریت کاربران$'), admin_users.user_management_menu),
                 MessageHandler(filters.Regex('^🛑 خاموش کردن ربات$'), admin_c.shutdown_bot),
+                MessageHandler(filters.Regex('^🎁 مدیریت کد هدیه$'), admin_gift.gift_code_management_menu),
+                MessageHandler(filters.Regex('^📋 لیست کدهای هدیه$'), admin_gift.list_gift_codes),
+                create_gift_conv,
                 CallbackQueryHandler(admin_settings.edit_setting_start, pattern="^admin_edit_setting_"),
             ],
             constants.REPORTS_MENU: [
