@@ -126,11 +126,9 @@ def build_application():
                 MessageHandler(filters.Regex('^ارسال به کاربر خاص$') & admin_filter, admin_users.broadcast_to_user_start),
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.back_to_admin_menu),
             ],
-            # قبول هر نوع پیام (متن/رسانه) برای پیش‌نمایش و تایید
             constants.BROADCAST_MESSAGE: [
                 MessageHandler((~filters.COMMAND) & admin_filter, admin_users.broadcast_to_all_confirm),
             ],
-            # تایید/لغو با متن
             constants.BROADCAST_CONFIRM: [
                 MessageHandler(filters.Regex('^(بله، ارسال کن|خیر، لغو کن)$') & admin_filter, admin_users.broadcast_confirm_received),
             ],
@@ -164,7 +162,7 @@ def build_application():
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.back_to_admin_menu),
                 create_gift_conv,
                 settings_conv,
-                broadcast_conv,  # ارسال پیام
+                broadcast_conv,
             ],
             constants.REPORTS_MENU: [
                 MessageHandler(filters.Regex('^📊 آمار کلی$'), admin_reports.show_stats_report),
@@ -181,6 +179,19 @@ def build_application():
                 CallbackQueryHandler(admin_plans.admin_delete_plan_callback, pattern="^admin_delete_plan_"),
                 CallbackQueryHandler(admin_plans.admin_toggle_plan_visibility_callback, pattern="^admin_toggle_plan_"),
             ],
+            # Backup/Restore submenu states
+            constants.BACKUP_MENU: [
+                MessageHandler(filters.Regex('^📥 دریافت فایل پشتیبان$') & admin_filter, admin_backup.send_backup_file),
+                MessageHandler(filters.Regex('^📤 بارگذاری فایل پشتیبان$') & admin_filter, admin_backup.restore_start),
+                MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.back_to_admin_menu),
+                CallbackQueryHandler(admin_backup.admin_confirm_restore_callback, pattern="^admin_confirm_restore$"),
+                CallbackQueryHandler(admin_backup.admin_cancel_restore_callback, pattern="^admin_cancel_restore$"),
+            ],
+            constants.RESTORE_UPLOAD: [
+                MessageHandler(filters.Document.ALL & admin_filter, admin_backup.restore_receive_file),
+                MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.back_to_admin_menu),
+            ],
+            # User management states
             constants.MANAGE_USER_ID: [
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.back_to_admin_menu),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, admin_users.manage_user_id_received)
@@ -204,6 +215,7 @@ def build_application():
     application.add_handler(buy_conv)
     application.add_handler(admin_conv)
 
+    # Admin callbacks
     application.add_handler(CallbackQueryHandler(admin_users.admin_confirm_charge_callback, pattern="^admin_confirm_charge_"))
     application.add_handler(CallbackQueryHandler(admin_users.admin_reject_charge_callback, pattern="^admin_reject_charge_"))
     application.add_handler(CallbackQueryHandler(admin_settings.edit_default_link_start, pattern="^edit_default_link_type$"))
@@ -214,6 +226,7 @@ def build_application():
     application.add_handler(CallbackQueryHandler(admin_settings.edit_auto_backup_start, pattern="^edit_auto_backup$"))
     application.add_handler(CallbackQueryHandler(admin_settings.set_backup_interval, pattern="^set_backup_interval_"))
 
+    # User services callbacks (group 2 to avoid conflicts)
     application.add_handler(CallbackQueryHandler(us_h.view_service_callback, pattern="^view_service_"), group=2)
     application.add_handler(CallbackQueryHandler(us_h.back_to_services_callback, pattern="^back_to_services$"), group=2)
     application.add_handler(CallbackQueryHandler(us_h.get_link_callback, pattern="^getlink_"), group=2)
@@ -224,6 +237,7 @@ def build_application():
     application.add_handler(CallbackQueryHandler(us_h.cancel_renewal_callback, pattern="^cancelrenew$"), group=2)
     application.add_handler(CallbackQueryHandler(us_h.delete_service_callback, pattern="^delete_service_"), group=2)
 
+    # Main commands and menus
     application.add_handler(CommandHandler("start", start_h.start), group=3)
     application.add_handler(MessageHandler(filters.Regex('^🛍️ خرید سرویس$'), buy_h.buy_service_list), group=3)
     application.add_handler(MessageHandler(filters.Regex('^📋 سرویس‌های من$'), us_h.list_my_services), group=3)
