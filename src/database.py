@@ -16,7 +16,6 @@ def _get_connection():
     if _db_connection is None:
         conn = sqlite3.connect(DB_NAME, check_same_thread=False)
         conn.row_factory = sqlite3.Row
-        # Pragmas for stability/performance
         try:
             conn.execute("PRAGMA foreign_keys = ON")
             conn.execute("PRAGMA journal_mode = WAL")
@@ -36,24 +35,17 @@ def close_db():
         _db_connection = None
         logger.info("Database connection closed.")
 
-# Initialization
 def init_db():
     conn = _connect_db()
     cursor = conn.cursor()
 
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            username TEXT,
-            balance REAL DEFAULT 0.0,
-            join_date TEXT NOT NULL,
-            is_banned INTEGER DEFAULT 0,
-            has_used_trial INTEGER DEFAULT 0,
-            referred_by INTEGER,
-            has_received_referral_bonus INTEGER DEFAULT 0
+            user_id INTEGER PRIMARY KEY, username TEXT, balance REAL DEFAULT 0.0,
+            join_date TEXT NOT NULL, is_banned INTEGER DEFAULT 0, has_used_trial INTEGER DEFAULT 0,
+            referred_by INTEGER, has_received_referral_bonus INTEGER DEFAULT 0
         )''')
 
-    # Backward-compatible alters
     try:
         cursor.execute("SELECT referred_by FROM users LIMIT 1")
     except sqlite3.OperationalError:
@@ -65,107 +57,67 @@ def init_db():
 
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS plans (
-            plan_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            price REAL NOT NULL,
-            days INTEGER NOT NULL,
-            gb INTEGER NOT NULL,
-            is_visible INTEGER DEFAULT 1
+            plan_id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, price REAL NOT NULL,
+            days INTEGER NOT NULL, gb INTEGER NOT NULL, is_visible INTEGER DEFAULT 1
         )''')
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        )''')
-
+    cursor.execute('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)''')
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS active_services (
-            service_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            name TEXT,
-            sub_uuid TEXT NOT NULL UNIQUE,
-            sub_link TEXT NOT NULL,
-            plan_id INTEGER,
-            created_at TEXT NOT NULL,
-            low_usage_alert_sent INTEGER DEFAULT 0,
+            service_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, name TEXT,
+            sub_uuid TEXT NOT NULL UNIQUE, sub_link TEXT NOT NULL, plan_id INTEGER,
+            created_at TEXT NOT NULL, low_usage_alert_sent INTEGER DEFAULT 0,
             FOREIGN KEY(user_id) REFERENCES users(user_id),
-            FOREIGN KEY(plan_id) REFERENCES plans(plan_id)
+            FOREIGN KEY(plan_id) REFERENCES plans(plan_id) ON DELETE SET NULL
         )''')
-
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS sales_log (
-            sale_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            plan_id INTEGER,
-            price REAL NOT NULL,
-            sale_date TEXT NOT NULL,
+            sale_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, plan_id INTEGER,
+            price REAL NOT NULL, sale_date TEXT NOT NULL,
             FOREIGN KEY(user_id) REFERENCES users(user_id),
-            FOREIGN KEY(plan_id) REFERENCES plans(plan_id)
+            FOREIGN KEY(plan_id) REFERENCES plans(plan_id) ON DELETE SET NULL
         )''')
-
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS gift_codes (
-            code TEXT PRIMARY KEY,
-            amount REAL NOT NULL,
-            is_used INTEGER DEFAULT 0,
-            used_by INTEGER,
-            used_date TEXT,
-            FOREIGN KEY(used_by) REFERENCES users(user_id)
+            code TEXT PRIMARY KEY, amount REAL NOT NULL, is_used INTEGER DEFAULT 0,
+            used_by INTEGER, used_date TEXT, FOREIGN KEY(used_by) REFERENCES users(user_id)
         )''')
-
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS transactions (
-            transaction_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            plan_id INTEGER,
-            service_id INTEGER,
-            type TEXT NOT NULL,
-            amount REAL NOT NULL,
-            status TEXT NOT NULL DEFAULT 'pending',
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            FOREIGN KEY(user_id) REFERENCES users(user_id)
+            transaction_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, plan_id INTEGER,
+            service_id INTEGER, type TEXT NOT NULL, amount REAL NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL, FOREIGN KEY(user_id) REFERENCES users(user_id)
         )''')
 
-    # Defaults
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_number', '0000-0000-0000-0000'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_holder', 'نام صاحب حساب'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('referral_bonus_amount', '5000'))
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('default_sub_link_type', 'sub'))
 
-    # Indexes
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_services_user ON active_services(user_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_services_uuid ON active_services(sub_uuid)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_sales_log_user ON sales_log(user_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_sales_log_plan ON sales_log(plan_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions(status)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
-
     conn.commit()
     logger.info("Database initialized successfully.")
 
-# User Management
 def get_or_create_user(user_id: int, username: str = None) -> dict:
     conn = _connect_db()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
     user = cursor.fetchone()
-
     norm_username = (username or "").lstrip('@') if username else None
-
     if not user:
         join_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        cursor.execute(
-            "INSERT INTO users (user_id, username, join_date) VALUES (?, ?, ?)",
-            (user_id, norm_username, join_date)
-        )
+        cursor.execute("INSERT INTO users (user_id, username, join_date) VALUES (?, ?, ?)", (user_id, norm_username, join_date))
         conn.commit()
         cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
         user = cursor.fetchone()
     elif user['username'] != norm_username and username is not None:
         cursor.execute("UPDATE users SET username = ? WHERE user_id = ?", (norm_username, user_id))
         conn.commit()
-
     return dict(user) if user else None
 
 def get_user(user_id: int) -> dict:
@@ -202,14 +154,12 @@ def get_all_user_ids() -> list:
     cur = conn.execute("SELECT user_id FROM users WHERE is_banned = 0")
     return [row['user_id'] for row in cur.fetchall()]
 
-# Referral
 def set_referrer(user_id: int, referrer_id: int):
     user = get_user(user_id)
     if user and not user.get('referred_by'):
         conn = _connect_db()
         conn.execute("UPDATE users SET referred_by = ? WHERE user_id = ?", (referrer_id, user_id))
         conn.commit()
-        logger.info("User %s referred_by set to %s", user_id, referrer_id)
 
 def apply_referral_bonus(user_id: int):
     user = get_user(user_id)
@@ -223,11 +173,9 @@ def apply_referral_bonus(user_id: int):
             conn.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (bonus_amount, referrer_id))
             conn.execute("UPDATE users SET has_received_referral_bonus = 1 WHERE user_id = ?", (user_id,))
             conn.commit()
-            logger.info("Applied referral bonus %.2f to %s and %s", bonus_amount, user_id, referrer_id)
             return referrer_id, bonus_amount
     return None, 0
 
-# Plan Management
 def add_plan(name: str, price: float, days: int, gb: int):
     conn = _connect_db()
     conn.execute("INSERT INTO plans (name, price, days, gb) VALUES (?, ?, ?, ?)", (name, price, days, gb))
@@ -263,12 +211,6 @@ def update_plan(plan_id: int, data: dict):
     conn.execute(q, tuple(params))
     conn.commit()
 
-def delete_plan(plan_id: int):
-    """Simple delete (may fail if FK references exist)."""
-    conn = _connect_db()
-    conn.execute("DELETE FROM plans WHERE plan_id = ?", (plan_id,))
-    conn.commit()
-
 def toggle_plan_visibility(plan_id: int):
     conn = _connect_db()
     conn.execute("UPDATE plans SET is_visible = 1 - is_visible WHERE plan_id = ?", (plan_id,))
@@ -276,7 +218,7 @@ def toggle_plan_visibility(plan_id: int):
 
 def set_plan_visibility(plan_id: int, visible: bool):
     conn = _connect_db()
-    conn.execute("UPDATE plans SET is_visible = ? WHERE plan_id = ?", (1 if visible else 0, plan_id))
+    conn.execute("UPDATE plans SET is_visible = ? WHERE user_id = ?", (1 if visible else 0, plan_id))
     conn.commit()
 
 def get_plan_by_gb_and_days(gb: int, days: int) -> dict:
@@ -287,20 +229,12 @@ def get_plan_by_gb_and_days(gb: int, days: int) -> dict:
     return dict(row) if row else None
 
 def delete_plan_safe(plan_id: int):
-    """
-    Safely delete a plan by detaching references in active_services and sales_log first.
-    Returns (detached_active_services_count, detached_sales_logs_count) or None on failure.
-    """
     conn = _connect_db()
     cursor = conn.cursor()
     try:
         conn.execute("BEGIN")
-        detached_active = cursor.execute(
-            "UPDATE active_services SET plan_id = NULL WHERE plan_id = ?", (plan_id,)
-        ).rowcount
-        detached_sales = cursor.execute(
-            "UPDATE sales_log SET plan_id = NULL WHERE plan_id = ?", (plan_id,)
-        ).rowcount
+        detached_active = cursor.execute("UPDATE active_services SET plan_id = NULL WHERE plan_id = ?", (plan_id,)).rowcount
+        detached_sales = cursor.execute("UPDATE sales_log SET plan_id = NULL WHERE plan_id = ?", (plan_id,)).rowcount
         cursor.execute("DELETE FROM plans WHERE plan_id = ?", (plan_id,))
         conn.commit()
         logger.info("Plan %s deleted safely. Detached active=%s, sales=%s", plan_id, detached_active, detached_sales)
@@ -310,7 +244,6 @@ def delete_plan_safe(plan_id: int):
         conn.rollback()
         return None
 
-# Service Management
 def add_active_service(user_id: int, name: str, sub_uuid: str, sub_link: str, plan_id: int):
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn = _connect_db()
@@ -324,6 +257,13 @@ def get_service(service_id: int) -> dict:
     conn = _connect_db()
     cur = conn.cursor()
     cur.execute("SELECT * FROM active_services WHERE service_id = ?", (service_id,))
+    row = cur.fetchone()
+    return dict(row) if row else None
+
+def get_service_by_uuid(uuid: str) -> dict:
+    conn = _connect_db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM active_services WHERE sub_uuid = ?", (uuid,))
     row = cur.fetchone()
     return dict(row) if row else None
 
@@ -343,20 +283,11 @@ def set_low_usage_alert_sent(service_id: int, status=True):
     conn.execute("UPDATE active_services SET low_usage_alert_sent = ? WHERE service_id = ?", (1 if status else 0, service_id))
     conn.commit()
 
-def update_service_after_renewal(service_id: int, new_plan_id: int):
-    conn = _connect_db()
-    conn.execute(
-        "UPDATE active_services SET plan_id = ?, low_usage_alert_sent = 0 WHERE service_id = ?",
-        (new_plan_id, service_id)
-    )
-    conn.commit()
-
 def delete_service(service_id: int):
     conn = _connect_db()
     conn.execute("DELETE FROM active_services WHERE service_id = ?", (service_id,))
     conn.commit()
 
-# Transactions: Purchase & Renewal
 def initiate_purchase_transaction(user_id: int, plan_id: int) -> int | None:
     conn = _connect_db()
     cur = conn.cursor()
@@ -455,7 +386,6 @@ def cancel_renewal_transaction(transaction_id: int):
     conn.execute("UPDATE transactions SET status = 'failed', updated_at = ? WHERE transaction_id = ?", (now_str, transaction_id))
     conn.commit()
 
-# Gift Codes
 def use_gift_code(code: str, user_id: int) -> float | None:
     conn = _connect_db()
     cur = conn.cursor()
@@ -477,7 +407,6 @@ def use_gift_code(code: str, user_id: int) -> float | None:
         conn.rollback()
         return None
 
-# Settings
 def get_setting(key: str) -> str | None:
     conn = _connect_db()
     cur = conn.execute("SELECT value FROM settings WHERE key = ?", (key,))
@@ -489,7 +418,6 @@ def set_setting(key: str, value: str):
     conn.execute("REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
     conn.commit()
 
-# Reports & Stats
 def get_stats() -> dict:
     conn = _connect_db()
     total_users = conn.execute("SELECT COUNT(user_id) FROM users").fetchone()[0]
@@ -513,11 +441,8 @@ def get_sales_report(days=1) -> list:
 def get_popular_plans(limit=5) -> list:
     query = """
         SELECT p.name, COUNT(s.sale_id) as sales_count
-        FROM plans p
-        JOIN sales_log s ON p.plan_id = s.plan_id
-        GROUP BY p.plan_id
-        ORDER BY sales_count DESC
-        LIMIT ?
+        FROM plans p JOIN sales_log s ON p.plan_id = s.plan_id
+        GROUP BY p.plan_id ORDER BY sales_count DESC LIMIT ?
     """
     conn = _connect_db()
     cur = conn.cursor()
@@ -527,10 +452,8 @@ def get_popular_plans(limit=5) -> list:
 def get_user_sales_history(user_id: int) -> list:
     query = """
         SELECT s.sale_date, s.price, p.name as plan_name
-        FROM sales_log s
-        LEFT JOIN plans p ON s.plan_id = p.plan_id
-        WHERE s.user_id = ?
-        ORDER BY s.sale_id DESC
+        FROM sales_log s LEFT JOIN plans p ON s.plan_id = p.plan_id
+        WHERE s.user_id = ? ORDER BY s.sale_id DESC
     """
     conn = _connect_db()
     cur = conn.cursor()
