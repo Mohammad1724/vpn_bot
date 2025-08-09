@@ -78,7 +78,6 @@ def build_application():
             constants.PLAN_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_price_received)],
             constants.PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_days_received)],
             constants.PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_gb_received)],
-            constants.PLAN_DEVICE_LIMIT: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_device_limit_received)],
         },
         fallbacks=[CommandHandler('cancel', admin_c.admin_conv_cancel)],
         map_to_parent={
@@ -93,7 +92,6 @@ def build_application():
             constants.EDIT_PLAN_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_price_received), CommandHandler('skip', admin_plans.skip_edit_plan_price)],
             constants.EDIT_PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_days_received), CommandHandler('skip', admin_plans.skip_edit_plan_days)],
             constants.EDIT_PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_gb_received), CommandHandler('skip', admin_plans.skip_edit_plan_gb)],
-            constants.EDIT_DEVICE_LIMIT: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_device_limit_received), CommandHandler('skip', admin_plans.skip_edit_device_limit)],
         },
         fallbacks=[CommandHandler('cancel', admin_c.admin_conv_cancel)],
         map_to_parent={
@@ -172,7 +170,7 @@ def build_application():
         ],
         per_user=True, per_chat=True, allow_reentry=True
     )
-    
+
     application.add_handler(charge_conv)
     application.add_handler(gift_conv)
     application.add_handler(buy_conv)
@@ -187,7 +185,7 @@ def build_application():
     application.add_handler(CallbackQueryHandler(admin_settings.toggle_report_setting, pattern="^toggle_report_"))
     application.add_handler(CallbackQueryHandler(admin_settings.edit_auto_backup_start, pattern="^edit_auto_backup$"))
     application.add_handler(CallbackQueryHandler(admin_settings.set_backup_interval, pattern="^set_backup_interval_"))
-    
+
     application.add_handler(CallbackQueryHandler(us_h.view_service_callback, pattern="^view_service_"), group=2)
     application.add_handler(CallbackQueryHandler(us_h.back_to_services_callback, pattern="^back_to_services$"), group=2)
     application.add_handler(CallbackQueryHandler(us_h.get_link_callback, pattern="^getlink_"), group=2)
