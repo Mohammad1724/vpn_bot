@@ -166,6 +166,9 @@ def build_application():
     application.add_handler(CallbackQueryHandler(admin_settings.set_default_link_type, pattern="^set_default_link_"))
     application.add_handler(CallbackQueryHandler(admin_settings.settings_menu, pattern="^back_to_settings$"))
     application.add_handler(CallbackQueryHandler(admin_gift.delete_gift_code_callback, pattern="^delete_gift_code_"))
+    application.add_handler(CallbackQueryHandler(admin_settings.toggle_report_setting, pattern="^toggle_report_"))
+    application.add_handler(CallbackQueryHandler(admin_settings.edit_auto_backup_start, pattern="^edit_auto_backup$"))
+    application.add_handler(CallbackQueryHandler(admin_settings.set_backup_interval, pattern="^set_backup_interval_"))
 
     application.add_handler(CallbackQueryHandler(us_h.view_service_callback, pattern="^view_service_"), group=2)
     application.add_handler(CallbackQueryHandler(us_h.back_to_services_callback, pattern="^back_to_services$"), group=2)
