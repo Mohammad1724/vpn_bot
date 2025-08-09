@@ -16,7 +16,6 @@ async def buy_service_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     keyboard = []
     for p in plans:
-        # <<< NEW: Add device limit info to the button text
         limit = p.get('device_limit', 0)
         limit_text = f"{limit} کاربره" if limit and limit > 0 else "نامحدود"
         button_text = (
@@ -80,7 +79,8 @@ async def create_service_after_name(message: Update.message, context: ContextTyp
         
         new_service = db.get_service_by_uuid(result['uuid'])
         if not new_service:
-            await msg_loading.edit_text("❌ خطایی در ثبت سرویس در دیتابیس رخ داد. لطفاً به پشتیبانی اطلاع دهید.")
+            await msg_loading.delete()
+            await context.bot.send_message(chat_id=user_id, text="❌ خطایی در ثبت سرویس در دیتابیس رخ داد. لطفاً به پشتیبانی اطلاع دهید.")
             context.user_data.clear()
             return
         
@@ -100,6 +100,11 @@ async def create_service_after_name(message: Update.message, context: ContextTyp
         await show_link_options_menu(message, result['uuid'], new_service['service_id'], is_edit=False, context=context)
     else:
         db.cancel_purchase_transaction(transaction_id)
-        await msg_loading.edit_text("❌ ساخت سرویس ناموفق بود. لطفاً به پشتیبانی اطلاع دهید.")
+        # <<< FIX: Delete and send new message instead of editing
+        try:
+            await msg_loading.delete()
+        except BadRequest:
+            pass
+        await context.bot.send_message(chat_id=user_id, text="❌ ساخت سرویس ناموفق بود. لطفاً به پشتیبانی اطلاع دهید.")
 
     context.user_data.clear()
