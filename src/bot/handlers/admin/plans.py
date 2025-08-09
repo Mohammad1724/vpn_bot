@@ -43,7 +43,10 @@ async def list_plans_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return PLAN_MENU
 
 async def add_plan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("نام پلن را وارد کنید:", reply_markup=ReplyKeyboardMarkup([[CMD_CANCEL]], resize_keyboard=True))
+    await update.message.reply_text(
+        "لطفاً نام پلن جدید را وارد کنید:",
+        reply_markup=ReplyKeyboardMarkup([[CMD_CANCEL]], resize_keyboard=True)
+    )
     return PLAN_NAME
 
 async def plan_name_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -78,10 +81,13 @@ async def plan_gb_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['plan_days'],
             context.user_data['plan_gb']
         )
-        await update.message.reply_text("✅ پلن جدید اضافه شد!", reply_markup=get_admin_menu_keyboard())
+        keyboard = [["➕ افزودن پلن جدید", "📋 لیست پلن‌ها"], [BTN_BACK_TO_ADMIN_MENU]]
+        await update.message.reply_text(
+            "✅ پلن جدید با موفقیت اضافه شد!",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
         context.user_data.clear()
-        # <<< FIX: Return to the main admin menu to correctly end the sub-conversation
-        return ADMIN_MENU
+        return ConversationHandler.END
     except ValueError:
         await update.message.reply_text("حجم را به صورت عدد وارد کنید.")
         return PLAN_GB
