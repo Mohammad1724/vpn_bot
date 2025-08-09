@@ -407,6 +407,21 @@ def use_gift_code(code: str, user_id: int) -> float | None:
         conn.rollback()
         return None
 
+def create_gift_code(code: str, amount: float):
+    conn = _connect_db()
+    try:
+        conn.execute("INSERT INTO gift_codes (code, amount) VALUES (?, ?)", (code.upper(), amount))
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError: # Code already exists
+        return False
+
+def get_all_gift_codes() -> list:
+    conn = _connect_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM gift_codes ORDER BY is_used ASC, code ASC")
+    return [dict(row) for row in cursor.fetchall()]
+
 def get_setting(key: str) -> str | None:
     conn = _connect_db()
     cur = conn.execute("SELECT value FROM settings WHERE key = ?", (key,))
