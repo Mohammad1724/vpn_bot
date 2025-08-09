@@ -27,7 +27,7 @@ async def create_hiddify_user(plan_days: int, plan_gb: int, device_limit: int, u
     endpoint = _get_base_url() + "user/"
     
     # <<< FIX for 422 Error: Ensure username is unique >>>
-    # Append a short random hex to the name to avoid conflicts if the user buys multiple services with the same name.
+    # Append a short random hex to the name to avoid conflicts.
     random_suffix = uuid.uuid4().hex[:4]
     base_name = custom_name if custom_name else f"tg-{user_telegram_id}"
     unique_user_name = f"{base_name}-{random_suffix}"
@@ -49,6 +49,11 @@ async def create_hiddify_user(plan_days: int, plan_gb: int, device_limit: int, u
             resp = await client.post(endpoint, json=payload, headers=_get_api_headers())
             resp.raise_for_status()
             user_data = resp.json()
+    except httpx.HTTPStatusError as e:
+        # Provide more details for 422 errors
+        error_details = e.response.text if e.response.status_code == 422 else str(e)
+        logger.error("create_hiddify_user error: %s - Details: %s", e, error_details, exc_info=True)
+        return None
     except Exception as e:
         logger.error("create_hiddify_user error: %s", e, exc_info=True)
         return None
