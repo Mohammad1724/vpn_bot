@@ -26,8 +26,6 @@ async def _make_client(timeout: float = 20.0, force_h1: bool = False) -> httpx.A
 async def create_hiddify_user(plan_days: int, plan_gb: int, device_limit: int, user_telegram_id: int = None, custom_name: str = "") -> dict | None:
     endpoint = _get_base_url() + "user/"
     
-    # <<< FIX for 422 Error: Ensure username is unique >>>
-    # Append a short random hex to the name to avoid conflicts.
     random_suffix = uuid.uuid4().hex[:4]
     base_name = custom_name if custom_name else f"tg-{user_telegram_id}"
     unique_user_name = f"{base_name}-{random_suffix}"
@@ -36,21 +34,18 @@ async def create_hiddify_user(plan_days: int, plan_gb: int, device_limit: int, u
         "name": unique_user_name,
         "package_days": int(plan_days),
         "usage_limit_GB": int(plan_gb),
-        "device_limit": int(device_limit) if device_limit > 0 else 0,
         "comment": f"TG ID: {user_telegram_id}" if user_telegram_id else ""
     }
+    # <<< FIX: Remove device_limit if your Hiddify panel version is old
+    # if device_limit > 0:
+    #     payload["device_limit"] = int(device_limit)
+    
     try:
         async with await _make_client(timeout=20.0) as client:
             resp = await client.post(endpoint, json=payload, headers=_get_api_headers())
             resp.raise_for_status()
             user_data = resp.json()
-    except ImportError:
-        async with await _make_client(timeout=20.0, force_h1=True) as client:
-            resp = await client.post(endpoint, json=payload, headers=_get_api_headers())
-            resp.raise_for_status()
-            user_data = resp.json()
     except httpx.HTTPStatusError as e:
-        # Provide more details for 422 errors
         error_details = e.response.text if e.response.status_code == 422 else str(e)
         logger.error("create_hiddify_user error: %s - Details: %s", e, error_details, exc_info=True)
         return None
@@ -73,11 +68,6 @@ async def get_user_info(user_uuid: str) -> dict | None:
             resp = await client.get(endpoint, headers=_get_api_headers())
             resp.raise_for_status()
             return resp.json()
-    except ImportError:
-        async with await _make_client(timeout=10.0, force_h1=True) as client:
-            resp = await client.get(endpoint, headers=_get_api_headers())
-            resp.raise_for_status()
-            return resp.json()
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 404:
             return {"_not_found": True}
@@ -97,7 +87,15 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: int, 
 
     async def _recreate(u: str, name: str, days: int, gb: int, limit: int, client: httpx.AsyncClient) -> dict | None:
         url = _get_base_url() + "user/"
-        payload = {"uuid": u, "name": name, "package_days": int(days), "usage_limit_GB": int(gb), "device_limit": int(limit) if limit > 0 else 0}
+        payload = {
+            "uuid": u, "name": name, 
+            "package_days": int(days), 
+            "usage_limit_GB": int(gb),
+        }
+        # <<< FIX: Remove device_limit if your Hiddify panel version is old
+        # if limit > 0:
+        #     payload["device_limit"] = int(limit)
+            
         try: r = await client.post(url, json=payload, headers=_get_api_headers()); r.raise_for_status(); return r.json()
         except httpx.HTTPStatusError as e:
             logger.error("recreate user %s failed: %s - %s", u, e.response.status_code, e.response.text); return None
