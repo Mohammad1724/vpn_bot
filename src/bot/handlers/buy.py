@@ -41,12 +41,12 @@ async def get_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return GET_CUSTOM_NAME
     context.user_data['custom_name'] = custom_name
     await create_service_after_name(update.message, context)
-    return ConversationHandler.END
+    return ConversationHandler.END  # <--- FIX: End conversation here
 
 async def skip_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['custom_name'] = ""
     await create_service_after_name(update.message, context)
-    return ConversationHandler.END
+    return ConversationHandler.END  # <--- FIX: End conversation here
 
 async def create_service_after_name(message: Update.message, context: ContextTypes.DEFAULT_TYPE):
     user_id = message.chat_id
@@ -84,4 +84,3 @@ async def create_service_after_name(message: Update.message, context: ContextTyp
         await msg_loading.edit_text("❌ ساخت سرویس ناموفق بود. لطفاً به پشتیبانی اطلاع دهید.")
 
     context.user_data.clear()
-    return ConversationHandler.END
