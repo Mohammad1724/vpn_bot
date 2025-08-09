@@ -4,6 +4,10 @@ from telegram.ext import ContextTypes
 from telegram import Update, ReplyKeyboardMarkup
 from bot.constants import REPORTS_MENU, BTN_BACK_TO_ADMIN_MENU
 import database as db
+from config import ADMIN_ID
+import logging
+
+logger = logging.getLogger(__name__)
 
 async def reports_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
@@ -24,7 +28,7 @@ async def show_stats_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🚫 کاربران مسدود: {stats.get('banned_users', 0)}"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
-    return REPORTS_MENU  # <<< FIX: Stay in the reports menu
+    return REPORTS_MENU
 
 async def show_daily_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sales = db.get_sales_report(days=1)
@@ -33,7 +37,7 @@ async def show_daily_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📈 **گزارش فروش امروز**\n\nتعداد فروش: {len(sales)}\nمجموع درآمد: {total_revenue:,.0f} تومان",
         parse_mode="Markdown"
     )
-    return REPORTS_MENU  # <<< FIX: Stay in the reports menu
+    return REPORTS_MENU
 
 async def show_weekly_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sales = db.get_sales_report(days=7)
@@ -42,7 +46,7 @@ async def show_weekly_report(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"📅 **گزارش فروش ۷ روز اخیر**\n\nتعداد فروش: {len(sales)}\nمجموع درآمد: {total_revenue:,.0f} تومان",
         parse_mode="Markdown"
     )
-    return REPORTS_MENU  # <<< FIX: Stay in the reports menu
+    return REPORTS_MENU
 
 async def show_popular_plans_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     plans = db.get_popular_plans(limit=5)
@@ -53,4 +57,39 @@ async def show_popular_plans_report(update: Update, context: ContextTypes.DEFAUL
             [f"{i}. **{plan['name']}** - {plan['sales_count']} فروش" for i, plan in enumerate(plans, 1)]
         )
         await update.message.reply_text(text, parse_mode="Markdown")
-    return REPORTS_MENU  # <<< FIX: Stay in the reports menu
+    return REPORTS_MENU
+
+# --- Scheduled Report Functions ---
+async def send_daily_summary(context: ContextTypes.DEFAULT_TYPE):
+    logger.info("Job: sending daily summary to admin...")
+    sales_today = db.get_sales_report(days=1)
+    revenue_today = sum(s['price'] for s in sales_today if s['price'])
+    new_users_today = db.get_new_users_count(days=1)
+    
+    text = (
+        f"📊 **خلاصه گزارش روزانه**\n\n"
+        f"👥 کاربران جدید امروز: **{new_users_today}** نفر\n"
+        f"🛍️ تعداد فروش امروز: **{len(sales_today)}** عدد\n"
+        f"💰 درآمد امروز: **{revenue_today:,.0f}** تومان"
+    )
+    try:
+        await context.bot.send_message(chat_id=ADMIN_ID, text=text, parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Failed to send daily summary: {e}")
+
+async def send_weekly_summary(context: ContextTypes.DEFAULT_TYPE):
+    logger.info("Job: sending weekly summary to admin...")
+    sales_week = db.get_sales_report(days=7)
+    revenue_week = sum(s['price'] for s in sales_week if s['price'])
+    new_users_week = db.get_new_users_count(days=7)
+
+    text = (
+        f"📅 **خلاصه گزارش هفتگی**\n\n"
+        f"👥 کاربران جدید در ۷ روز اخیر: **{new_users_week}** نفر\n"
+        f"🛍️ تعداد فروش در ۷ روز اخیر: **{len(sales_week)}** عدد\n"
+        f"💰 درآمد در ۷ روز اخیر: **{revenue_week:,.0f}** تومان"
+    )
+    try:
+        await context.bot.send_message(chat_id=ADMIN_ID, text=text, parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Failed to send weekly summary: {e}")
