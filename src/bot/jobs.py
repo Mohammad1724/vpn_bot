@@ -23,7 +23,7 @@ async def check_low_usage(context: ContextTypes.DEFAULT_TYPE):
         try:
             info = await hiddify_api.get_user_info(service['sub_uuid'])
             if not info:
-                logger.warning(f"Could not fetch info for service {service['service_id']}.")
+                logger.warning("Could not fetch info for service %s.", service['service_id'])
                 continue
 
             _, _, is_expired = get_service_status(info)
@@ -32,7 +32,6 @@ async def check_low_usage(context: ContextTypes.DEFAULT_TYPE):
 
             usage_limit = info.get('usage_limit_GB', 0)
             current_usage = info.get('current_usage_GB', 0)
-
             if usage_limit > 0 and (current_usage / usage_limit) >= USAGE_ALERT_THRESHOLD:
                 user_id = service['user_id']
                 name = f"'{service['name']}'" if service['name'] else ""
@@ -48,9 +47,9 @@ async def check_low_usage(context: ContextTypes.DEFAULT_TYPE):
                 db.set_low_usage_alert_sent(service['service_id'])
                 await asyncio.sleep(0.2)
         except (Forbidden, BadRequest) as e:
-            logger.warning(f"Failed to send low-usage alert to {service['user_id']}: {e}")
+            logger.warning("Failed to send low-usage alert to %s: %s", service['user_id'], e)
         except Exception as e:
-            logger.error(f"Unexpected error in low-usage job: {e}", exc_info=True)
+            logger.error("Unexpected error in low-usage job: %s", e, exc_info=True)
 
 async def check_expiring_services(context: ContextTypes.DEFAULT_TYPE):
     logger.info("Job: checking expiring services...")
@@ -65,7 +64,6 @@ async def check_expiring_services(context: ContextTypes.DEFAULT_TYPE):
             if is_expired or expiry_date_str == "N/A":
                 continue
 
-            # Parse Jalali yyyy/mm/dd
             y, m, d = map(int, expiry_date_str.split('/'))
             import jdatetime
             jalali_date = jdatetime.date(y, m, d)
@@ -85,9 +83,9 @@ async def check_expiring_services(context: ContextTypes.DEFAULT_TYPE):
                 )
                 await asyncio.sleep(0.2)
         except (Forbidden, BadRequest) as e:
-            logger.warning(f"Failed to send expiry reminder to {service['user_id']}: {e}")
+            logger.warning("Failed to send expiry reminder to %s: %s", service['user_id'], e)
         except Exception as e:
-            logger.error(f"Unexpected error in expiry reminder: {e}", exc_info=True)
+            logger.error("Unexpected error in expiry reminder: %s", e, exc_info=True)
 
 # Fallback loops (when JobQueue is unavailable)
 async def _low_usage_loop(app: Application, interval_s: int = 4 * 60 * 60):
@@ -118,9 +116,8 @@ async def post_init(app: Application):
         jq.run_repeating(check_low_usage, interval=timedelta(hours=4), first=10)
         jq.run_daily(check_expiring_services, time=time(hour=9, minute=0))
     else:
-        import logging
-        logging.getLogger(__name__).warning(
-            'JobQueue در دسترس نیست. برای فعال‌سازی: pip install "python-telegram-bot[job-queue]"'
-        )
-        app.create_task(_low_usage_loop(app))
-        app.create_task(_daily_expiry_loop(app))
+        # No PTBUserWarning anymore: use asyncio.create_task instead of app.create_task
+        logger.warning('JobQueue در دسترس نیست. برای فعال‌سازی: pip install "python-telegram-bot[job-queue]"')
+        loop = asyncio.get_event_loop()
+        loop.create_task(_low_usage_loop(app))
+        loop.create_task(_daily_expiry_loop(app))
