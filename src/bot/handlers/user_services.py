@@ -6,7 +6,7 @@ import qrcode
 import logging
 import httpx
 from telegram.ext import ContextTypes
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Message, InputFile
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from telegram.error import BadRequest
 import database as db
 import hiddify_api
@@ -16,17 +16,18 @@ from bot.utils import get_service_status
 
 logger = logging.getLogger(__name__)
 
-# ... (تمام توابع قبلی تا get_link_callback بدون تغییر) ...
 async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     services = db.get_user_services(user_id)
     if not services:
         await context.bot.send_message(chat_id=user_id, text="شما در حال حاضر هیچ سرویس فعالی ندارید.")
         return
+
     keyboard = []
     for service in services:
         title = service['name'] or "سرویس بدون نام"
         keyboard.append([InlineKeyboardButton(f"⚙️ {title}", callback_data=f"view_service_{service['service_id']}")])
+
     await context.bot.send_message(
         chat_id=user_id,
         text="لطفاً سرویسی که می‌خواهید مدیریتش کنید را انتخاب نمایید:",
@@ -65,32 +66,43 @@ async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
             return
 
         status, expiry_jalali, _ = get_service_status(info)
+        plan = db.get_plan(service['plan_id']) if service['plan_id'] else None
+        device_limit = plan.get('device_limit', 0) if plan else 'نامشخص'
+        device_limit_text = f"**{device_limit} کاربره**" if isinstance(device_limit, int) and device_limit > 0 else "نامحدود"
+        
         default_link_type = db.get_setting('default_sub_link_type') or 'sub'
         sub_path = SUB_PATH or ADMIN_PATH
         sub_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
         base_link = f"https://{sub_domain}/{sub_path}/{service['sub_uuid']}"
         config_name = info.get('name', 'config')
+        
         final_link = f"{base_link}/{default_link_type}/?name={config_name.replace(' ', '_')}"
         img = qrcode.make(final_link)
         bio = io.BytesIO(); bio.name = 'qrcode.png'; img.save(bio, 'PNG'); bio.seek(0)
+        
         caption = (
             f"🏷️ نام سرویس: **{service['name']}**\n\n"
             f"📊 حجم مصرفی: **{info.get('current_usage_GB', 0):.2f} / {info.get('usage_limit_GB', 0):.0f}** گیگ\n"
             f"🗓️ تاریخ انقضا: **{expiry_jalali}**\n"
+            f"👥 محدودیت دستگاه: {device_limit_text}\n"
+            f"📱 دستگاه‌های متصل: **{info.get('devices', 0)}**\n"
             f"🚦 وضعیت: {status}\n\n"
             f"🔗 لینک اشتراک (پیش‌فرض):\n`{final_link}`"
         )
+        
         keyboard = [[InlineKeyboardButton("🔄 به‌روزرسانی اطلاعات", callback_data=f"refresh_{service['service_id']}")]]
-        if service.get('plan_id', 0) > 0:
-            plan = db.get_plan(service['plan_id'])
-            if plan:
-                keyboard.append([InlineKeyboardButton(f"⏳ تمدید سرویس ({plan['price']:.0f} تومان)", callback_data=f"renew_{service['service_id']}")])
+        if plan:
+            keyboard.append([InlineKeyboardButton(f"⏳ تمدید سرویس ({plan['price']:.0f} تومان)", callback_data=f"renew_{service['service_id']}")])
+        
         keyboard.append([InlineKeyboardButton("🔗 دریافت لینک‌های بیشتر", callback_data=f"more_links_{service['sub_uuid']}")])
+        
         if is_from_menu:
             keyboard.append([InlineKeyboardButton("⬅️ بازگشت به لیست سرویس‌ها", callback_data="back_to_services")])
+
         if original_message:
             try: await original_message.delete()
             except BadRequest: pass
+
         await context.bot.send_photo(
             chat_id=chat_id, photo=bio, caption=caption, parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(keyboard)
@@ -108,17 +120,22 @@ async def more_links_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     q = update.callback_query
     await q.answer()
     uuid = q.data.split('_')[-1]
+    
     service = db.get_service_by_uuid(uuid)
     if not service:
-        await q.edit_message_text("سرویس یافت نشد.")
+        await q.message.edit_text("سرویس یافت نشد.")
         return
+        
     await show_link_options_menu(q.message, uuid, service['service_id'], is_edit=True, context=context)
 
 async def show_link_options_menu(message: Message, user_uuid: str, service_id: int, is_edit: bool = True, context: ContextTypes.DEFAULT_TYPE = None):
     keyboard = [
-        [InlineKeyboardButton("لینک V2ray (sub)", callback_data=f"getlink_sub_{user_uuid}"), InlineKeyboardButton("لینک هوشمند (Auto)", callback_data=f"getlink_auto_{user_uuid}")],
-        [InlineKeyboardButton("لینک Base64 (sub64)", callback_data=f"getlink_sub64_{user_uuid}"), InlineKeyboardButton("لینک SingBox", callback_data=f"getlink_singbox_{user_uuid}")],
-        [InlineKeyboardButton("لینک Xray", callback_data=f"getlink_xray_{user_uuid}"), InlineKeyboardButton("لینک Clash", callback_data=f"getlink_clash_{user_uuid}")],
+        [InlineKeyboardButton("لینک V2ray (sub)", callback_data=f"getlink_sub_{user_uuid}"),
+         InlineKeyboardButton("لینک هوشمند (Auto)", callback_data=f"getlink_auto_{user_uuid}")],
+        [InlineKeyboardButton("لینک Base64 (sub64)", callback_data=f"getlink_sub64_{user_uuid}"),
+         InlineKeyboardButton("لینک SingBox", callback_data=f"getlink_singbox_{user_uuid}")],
+        [InlineKeyboardButton("لینک Xray", callback_data=f"getlink_xray_{user_uuid}"),
+         InlineKeyboardButton("لینک Clash", callback_data=f"getlink_clash_{user_uuid}")],
         [InlineKeyboardButton("لینک Clash Meta", callback_data=f"getlink_clashmeta_{user_uuid}")],
         [InlineKeyboardButton("📄 نمایش کانفیگ‌های تکی", callback_data=f"getlink_full_{user_uuid}")],
         [InlineKeyboardButton("⬅️ بازگشت به جزئیات سرویس", callback_data=f"refresh_{service_id}")]
@@ -133,6 +150,7 @@ async def show_link_options_menu(message: Message, user_uuid: str, service_id: i
             else:
                 await message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
         else:
+            # When creating a new service, message is not a callback query, so we use its context
             await message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     except BadRequest as e:
         if "message is not modified" not in str(e):
@@ -164,7 +182,8 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.message.delete()
             await context.bot.send_document(
                 chat_id=q.from_user.id,
-                document=InputFile(io.BytesIO(configs_bytes), filename=f"{config_name}_configs.txt"),
+                document=io.BytesIO(configs_bytes),
+                filename=f"{config_name}_configs.txt",
                 caption="📄 کانفیگ‌های تکی شما به صورت فایل ارسال شد."
             )
         except Exception as e:
@@ -261,7 +280,7 @@ async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TY
     msg = await context.bot.send_message(chat_id=user_id, text="در حال بررسی وضعیت سرویس... ⏳")
     info = await hiddify_api.get_user_info(service['sub_uuid'])
     if not info:
-        await msg.edit_text("❌ امکان دریافت اطلاعات سرویس از پنل وجود ندارد. لطفاً بعداً تلاش کنید.")
+        await msg.edit_message_text("❌ امکان دریافت اطلاعات سرویس از پنل وجود ندارد. لطفاً بعداً تلاش کنید.")
         return
 
     _, _, is_expired = get_service_status(info)
@@ -306,7 +325,8 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
 
     service = db.get_service(service_id)
     plan = db.get_plan(plan_id)
-    new_info = await hiddify_api.renew_user_subscription(service['sub_uuid'], plan['days'], plan['gb'])
+    device_limit = plan.get('device_limit', 0)
+    new_info = await hiddify_api.renew_user_subscription(service['sub_uuid'], plan['days'], plan['gb'], device_limit)
 
     if new_info:
         db.finalize_renewal_transaction(txn_id, plan_id)
