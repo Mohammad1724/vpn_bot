@@ -25,9 +25,15 @@ async def _make_client(timeout: float = 20.0, force_h1: bool = False) -> httpx.A
 
 async def create_hiddify_user(plan_days: int, plan_gb: int, device_limit: int, user_telegram_id: int = None, custom_name: str = "") -> dict | None:
     endpoint = _get_base_url() + "user/"
-    user_name = custom_name or f"tg-{user_telegram_id}-{uuid.uuid4().hex[:4]}"
+    
+    # <<< FIX for 422 Error: Ensure username is unique >>>
+    # Append a short random hex to the name to avoid conflicts if the user buys multiple services with the same name.
+    random_suffix = uuid.uuid4().hex[:4]
+    base_name = custom_name if custom_name else f"tg-{user_telegram_id}"
+    unique_user_name = f"{base_name}-{random_suffix}"
+    
     payload = {
-        "name": user_name,
+        "name": unique_user_name,
         "package_days": int(plan_days),
         "usage_limit_GB": int(plan_gb),
         "device_limit": int(device_limit) if device_limit > 0 else 0,
