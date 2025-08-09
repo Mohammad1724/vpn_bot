@@ -23,18 +23,19 @@ from bot.handlers.admin import users as admin_users
 from bot.handlers.trial import get_trial_service as trial_get_trial_service
 from config import BOT_TOKEN, ADMIN_ID
 
-# Suppress PTB user warnings (per_message / job_queue etc.)
+# Suppress noisy PTB user warnings
 warnings.filterwarnings("ignore", category=PTBUserWarning)
 
 logger = logging.getLogger(__name__)
 
 def build_application():
-    application = ApplicationBuilder().token(BOT_TOKEN).post_init(jobs.post_init).build()
+    # post_init schedules jobs (JobQueue or fallback) and post_shutdown cancels fallback tasks
+    application = ApplicationBuilder().token(BOT_TOKEN).post_init(jobs.post_init).post_shutdown(jobs.post_shutdown).build()
 
     admin_filter = filters.User(user_id=ADMIN_ID)
     user_filter = ~admin_filter
 
-    # Buy conversation (entry via callback, next via message)
+    # Buy conversation (callback -> message)
     buy_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(buy_h.buy_start, pattern='^user_buy_')],
         states={
@@ -47,7 +48,7 @@ def build_application():
         per_user=True, per_chat=True
     )
 
-    # Gift conversation (pure message)
+    # Gift conversation (message-only)
     gift_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^🎁 کد هدیه$') & user_filter, gift_h.gift_code_entry)],
         states={constants.REDEEM_GIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, gift_h.redeem_gift_code)]},
@@ -55,7 +56,7 @@ def build_application():
         per_user=True, per_chat=True
     )
 
-    # Charge conversation (callback then message/photo)
+    # Charge conversation (callback -> message/photo)
     charge_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(charge_h.charge_start, pattern='^user_start_charge$')],
         states={
@@ -66,7 +67,7 @@ def build_application():
         per_user=True, per_chat=True
     )
 
-    # Settings (callback then message)
+    # Settings (callback -> message)
     settings_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_settings.edit_setting_start, pattern="^admin_edit_setting_")],
         states={constants.AWAIT_SETTING_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_settings.setting_value_received)]},
@@ -74,7 +75,7 @@ def build_application():
         per_user=True, per_chat=True
     )
 
-    # Edit plan (callback then messages)
+    # Edit plan (callback -> messages)
     edit_plan_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_plans.edit_plan_start, pattern="^admin_edit_plan_")],
         states={
@@ -99,7 +100,7 @@ def build_application():
         per_user=True, per_chat=True
     )
 
-    # Admin conversation (mostly message-based, includes some callbacks)
+    # Admin conversation
     admin_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f'^{constants.BTN_ADMIN_PANEL}$') & admin_filter, admin_c.admin_entry)],
         states={
