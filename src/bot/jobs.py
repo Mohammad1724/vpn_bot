@@ -4,6 +4,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, time
 from types import SimpleNamespace
+from typing import List
 from telegram.ext import Application, ContextTypes
 from telegram.error import Forbidden, BadRequest
 
@@ -14,8 +15,9 @@ from bot.utils import get_service_status
 
 logger = logging.getLogger(__name__)
 
-# Keep references to fallback tasks to cancel them on shutdown
-_BG_TASKS: list[asyncio.Task] = []
+# Global stop flag and tasks registry for clean shutdown
+_STOP_EVENT = asyncio.Event()
+_BG_TASKS: List[asyncio.Task] = []
 
 async def check_low_usage(context: ContextTypes.DEFAULT_TYPE):
     logger.info("Job: checking low-usage services...")
@@ -24,6 +26,7 @@ async def check_low_usage(context: ContextTypes.DEFAULT_TYPE):
             continue
         try:
             info = await hiddify_api.get_user_info(service['sub_uuid'])
+            # Auto-clean if 404 sentinel
             if isinstance(info, dict) and info.get('_not_found'):
                 await _remove_stale_service(service, context)
                 continue
@@ -106,28 +109,38 @@ async def _remove_stale_service(service: dict, context: ContextTypes.DEFAULT_TYP
 # Fallback loops (when JobQueue is unavailable)
 async def _low_usage_loop(app: Application, interval_s: int = 4 * 60 * 60):
     ctx = SimpleNamespace(bot=app.bot)
-    while True:
-        try:
+    try:
+        while not _STOP_EVENT.is_set():
             await check_low_usage(ctx)
-        except Exception:
-            logger.exception("Error in _low_usage_loop")
-        await asyncio.sleep(interval_s)
+            try:
+                await asyncio.wait_for(_STOP_EVENT.wait(), timeout=interval_s)
+            except asyncio.TimeoutError:
+                pass
+    except asyncio.CancelledError:
+        pass
 
 async def _daily_expiry_loop(app: Application, hour: int = 9, minute: int = 0):
-    while True:
-        now = datetime.now()
-        target = datetime.combine(now.date(), time(hour, minute))
-        if now >= target:
-            target += timedelta(days=1)
-        await asyncio.sleep((target - now).total_seconds())
-        ctx = SimpleNamespace(bot=app.bot)
-        try:
-            await check_expiring_services(ctx)
-        except Exception:
-            logger.exception("Error in _daily_expiry_loop")
+    try:
+        while not _STOP_EVENT.is_set():
+            now = datetime.now()
+            target = datetime.combine(now.date(), time(hour, minute))
+            if now >= target:
+                target += timedelta(days=1)
+            wait_sec = (target - now).total_seconds()
+            try:
+                await asyncio.wait_for(_STOP_EVENT.wait(), timeout=wait_sec)
+            except asyncio.TimeoutError:
+                # time reached
+                ctx = SimpleNamespace(bot=app.bot)
+                try:
+                    await check_expiring_services(ctx)
+                except Exception:
+                    logger.exception("Error running expiry check")
+    except asyncio.CancelledError:
+        pass
 
 async def post_init(app: Application):
-    # Try optional JobQueue (without accessing app.job_queue directly)
+    # Try optional JobQueue without touching app.job_queue (prevents PTB warnings)
     try:
         from telegram.ext import JobQueue  # optional extra
         jq = JobQueue()
@@ -138,19 +151,22 @@ async def post_init(app: Application):
         logger.info("Internal JobQueue started and jobs scheduled.")
         return
     except Exception as e:
-        logger.info("JobQueue not available (%s). Falling back to asyncio loops.", e)
+        logger.info("JobQueue not available (%s). Using asyncio fallback.", e)
 
+    # Fallback with clean shutdown support
+    _STOP_EVENT.clear()
     loop = asyncio.get_event_loop()
+    _BG_TASKS.clear()
     _BG_TASKS.append(loop.create_task(_low_usage_loop(app)))
     _BG_TASKS.append(loop.create_task(_daily_expiry_loop(app)))
 
 async def post_shutdown(app: Application):
-    # Cancel fallback tasks cleanly to avoid "Task was destroyed but pending!"
-    if not _BG_TASKS:
-        return
-    for t in _BG_TASKS:
-        t.cancel()
-    try:
-        await asyncio.gather(*_BG_TASKS, return_exceptions=True)
-    finally:
-        _BG_TASKS.clear()
+    # Trigger stop event and cancel tasks; await them to avoid 'Task destroyed' warnings
+    if _BG_TASKS:
+        _STOP_EVENT.set()
+        for t in _BG_TASKS:
+            t.cancel()
+        try:
+            await asyncio.gather(*_BG_TASKS, return_exceptions=True)
+        finally:
+            _BG_TASKS.clear()
