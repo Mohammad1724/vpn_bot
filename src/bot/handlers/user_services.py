@@ -5,7 +5,7 @@ import random
 import qrcode
 import logging
 import httpx
-from telegram.ext import ContextTypes, ConversationHandler
+from telegram.ext import ContextTypes
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from telegram.error import BadRequest
 import database as db
@@ -122,9 +122,9 @@ async def more_links_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         await q.edit_message_text("سرویس یافت نشد.")
         return
         
-    await show_link_options_menu(q.message, uuid, service['service_id'], is_edit=True)
+    await show_link_options_menu(q.message, uuid, service['service_id'], is_edit=True, context=context)
 
-async def show_link_options_menu(message: Message, user_uuid: str, service_id: int, is_edit: bool = True):
+async def show_link_options_menu(message: Message, user_uuid: str, service_id: int, is_edit: bool = True, context: ContextTypes.DEFAULT_TYPE = None):
     keyboard = [
         [InlineKeyboardButton("لینک V2ray (sub)", callback_data=f"getlink_sub_{user_uuid}"),
          InlineKeyboardButton("لینک هوشمند (Auto)", callback_data=f"getlink_auto_{user_uuid}")],
@@ -139,13 +139,14 @@ async def show_link_options_menu(message: Message, user_uuid: str, service_id: i
     text = "لطفاً نوع لینک اشتراک مورد نظر را انتخاب کنید:"
     try:
         if is_edit:
-            # FIX: If message is photo, delete it and send a new text message
             if message.photo:
                 await message.delete()
-                await context.bot.send_message(chat_id=message.chat_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard))
+                if context:
+                    await context.bot.send_message(chat_id=message.chat_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard))
             else:
                 await message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
         else:
+            # When creating a new service, message is not a callback query, so we use its context
             await message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     except BadRequest as e:
         if "message is not modified" not in str(e):
