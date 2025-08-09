@@ -16,7 +16,16 @@ from bot.utils import get_service_status
 
 logger = logging.getLogger(__name__)
 
-# لیست سرویس‌ها
+# ===== Helper: renew API compatibility (with/without device_limit) =====
+async def _renew_user_subscription_compat(sub_uuid: str, days: int, gb: int):
+    import inspect
+    fn = hiddify_api.renew_user_subscription
+    params = inspect.signature(fn).parameters
+    if "device_limit" in params:
+        return await fn(sub_uuid, days, gb, None)  # device_limit حذف شده → None پاس بده
+    return await fn(sub_uuid, days, gb)
+
+# ===== لیست سرویس‌ها =====
 async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     services = db.get_user_services(user_id)
@@ -33,7 +42,7 @@ async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# نمایش جزئیات سرویس
+# ===== نمایش جزئیات سرویس =====
 async def view_service_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -87,7 +96,8 @@ async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
         keyboard = [[InlineKeyboardButton("🔄 به‌روزرسانی اطلاعات", callback_data=f"refresh_{service['service_id']}")]]
 
         # فیکس: اگر plan_id None بود یا پلن حذف شده بود، دکمه تمدید را نشان نده
-        plan = db.get_plan(service.get('plan_id')) if service.get('plan_id') is not None else None
+        plan_id = service.get('plan_id')
+        plan = db.get_plan(plan_id) if plan_id is not None else None
         if plan:
             keyboard.append([InlineKeyboardButton(f"⏳ تمدید سرویس ({plan['price']:.0f} تومان)", callback_data=f"renew_{service['service_id']}")])
 
@@ -113,7 +123,7 @@ async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
         else:
             await context.bot.send_message(chat_id=chat_id, text=text)
 
-# لینک‌های بیشتر
+# ===== لینک‌های بیشتر =====
 async def more_links_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -148,7 +158,7 @@ async def show_link_options_menu(message: Message, user_uuid: str, service_id: i
         if "message is not modified" not in str(e):
             logger.error("show_link_options_menu error: %s", e)
 
-# تولید لینک‌ها و QR
+# ===== تولید لینک‌ها و QR =====
 async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -206,7 +216,7 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=get_main_menu_keyboard(q.from_user.id)
     )
 
-# به‌روزرسانی جزئیات
+# ===== به‌روزرسانی جزئیات =====
 async def refresh_service_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -222,7 +232,7 @@ async def refresh_service_details(update: Update, context: ContextTypes.DEFAULT_
     else:
         await q.answer("خطا: این سرویس متعلق به شما نیست.", show_alert=True)
 
-# بازگشت به لیست
+# ===== بازگشت به لیست =====
 async def back_to_services_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -232,7 +242,7 @@ async def back_to_services_callback(update: Update, context: ContextTypes.DEFAUL
         pass
     await list_my_services(update, context)
 
-# حذف سرویس (با تایید دو مرحله‌ای)
+# ===== حذف سرویس (با تایید دو مرحله‌ای) =====
 async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -297,7 +307,6 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
     ])
     try:
         if getattr(q.message, "photo", None):
-            # اگر پیام عکس دارد، فقط دکمه‌ها را عوض کن
             await q.edit_message_reply_markup(reply_markup=confirm_kb)
         else:
             await q.edit_message_text("آیا از حذف این سرویس مطمئن هستید؟ این عمل قابل بازگشت نیست.", reply_markup=confirm_kb)
@@ -308,7 +317,7 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
             reply_markup=confirm_kb
         )
 
-# شروع تمدید
+# ===== تمدید (شروع → تایید/لغو) =====
 async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -320,7 +329,8 @@ async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TY
     if not service:
         await context.bot.send_message(chat_id=user_id, text="❌ سرویس نامعتبر است.")
         return
-    plan = db.get_plan(service['plan_id']) if service.get('plan_id') is not None else None
+    plan_id = service.get('plan_id')
+    plan = db.get_plan(plan_id) if plan_id is not None else None
     if not plan:
         await context.bot.send_message(chat_id=user_id, text="❌ پلن تمدید برای این سرویس یافت نشد.")
         return
@@ -352,13 +362,11 @@ async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TY
             parse_mode="Markdown"
         )
 
-# تایید تمدید
 async def confirm_renewal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     await proceed_with_renewal(update, context, original_message=q.message)
 
-# انجام تمدید
 async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYPE, original_message=None):
     q = update.callback_query
     user_id = q.from_user.id if q else update.effective_user.id
@@ -379,7 +387,9 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
 
     service = db.get_service(service_id)
     plan = db.get_plan(plan_id)
-    new_info = await hiddify_api.renew_user_subscription(service['sub_uuid'], plan['days'], plan['gb'])
+
+    # سازگار با API جدید/قدیم (با/بی device_limit)
+    new_info = await _renew_user_subscription_compat(service['sub_uuid'], plan['days'], plan['gb'])
 
     if new_info:
         db.finalize_renewal_transaction(txn_id, plan_id)
@@ -393,7 +403,6 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
 
     context.user_data.clear()
 
-# لغو تمدید
 async def cancel_renewal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
