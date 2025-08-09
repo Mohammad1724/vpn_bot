@@ -28,6 +28,7 @@ def build_application():
     admin_filter = filters.User(user_id=ADMIN_ID)
     user_filter = ~admin_filter
 
+    # Buy conversation
     buy_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(buy_h.buy_start, pattern='^user_buy_')],
         states={
@@ -37,16 +38,18 @@ def build_application():
             ],
         },
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
-        per_user=True, per_chat=True, per_message=False
+        per_user=True, per_chat=True, per_message=True  # set True to avoid warnings with callbacks
     )
 
+    # Gift conversation
     gift_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^🎁 کد هدیه$') & user_filter, gift_h.gift_code_entry)],
         states={constants.REDEEM_GIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, gift_h.redeem_gift_code)]},
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
-        per_user=True, per_chat=True, per_message=False
+        per_user=True, per_chat=True, per_message=True
     )
 
+    # Charge conversation
     charge_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(charge_h.charge_start, pattern='^user_start_charge$')],
         states={
@@ -54,16 +57,18 @@ def build_application():
             constants.CHARGE_RECEIPT: [MessageHandler(filters.PHOTO, charge_h.charge_receipt_received)]
         },
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
-        per_user=True, per_chat=True, per_message=False
+        per_user=True, per_chat=True, per_message=True
     )
 
+    # Settings conversation
     settings_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_settings.edit_setting_start, pattern="^admin_edit_setting_")],
         states={constants.AWAIT_SETTING_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_settings.setting_value_received)]},
         fallbacks=[CommandHandler('cancel', admin_c.admin_conv_cancel)],
-        per_user=True, per_chat=True
+        per_user=True, per_chat=True, per_message=True
     )
 
+    # Edit plan conversation
     edit_plan_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_plans.edit_plan_start, pattern="^admin_edit_plan_")],
         states={
@@ -85,9 +90,10 @@ def build_application():
             ],
         },
         fallbacks=[CommandHandler('cancel', admin_c.admin_conv_cancel)],
-        per_user=True, per_chat=True
+        per_user=True, per_chat=True, per_message=True
     )
 
+    # Admin conversation
     admin_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f'^{constants.BTN_ADMIN_PANEL}$') & admin_filter, admin_c.admin_entry)],
         states={
@@ -157,7 +163,7 @@ def build_application():
             MessageHandler(filters.Regex(f'^{constants.BTN_EXIT_ADMIN_PANEL}$'), admin_c.exit_admin_panel),
             CommandHandler('cancel', admin_c.admin_generic_cancel),
         ],
-        per_user=True, per_chat=True, allow_reentry=True
+        per_user=True, per_chat=True, allow_reentry=True, per_message=True
     )
 
     # Register conversations
