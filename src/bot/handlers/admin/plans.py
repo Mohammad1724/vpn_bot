@@ -13,9 +13,13 @@ from bot.constants import (
 from bot.keyboards import get_admin_menu_keyboard
 import database as db
 
-async def plan_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def _plan_menu_keyboard() -> ReplyKeyboardMarkup:
+    # کیبورد مخصوص منوی مدیریت پلن‌ها
     keyboard = [["➕ افزودن پلن جدید", "📋 لیست پلن‌ها"], [BTN_BACK_TO_ADMIN_MENU]]
-    await update.message.reply_text("بخش مدیریت پلن‌ها", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+async def plan_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("بخش مدیریت پلن‌ها", reply_markup=_plan_menu_keyboard())
     return PLAN_MENU
 
 async def list_plans_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -81,10 +85,9 @@ async def plan_gb_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['plan_days'],
             context.user_data['plan_gb']
         )
-        keyboard = [["➕ افزودن پلن جدید", "📋 لیست پلن‌ها"], [BTN_BACK_TO_ADMIN_MENU]]
         await update.message.reply_text(
             "✅ پلن جدید با موفقیت اضافه شد!",
-            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            reply_markup=_plan_menu_keyboard()
         )
         context.user_data.clear()
         return ConversationHandler.END
@@ -162,11 +165,12 @@ async def finish_plan_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     plan_id = context.user_data.get('edit_plan_id')
     new_data = context.user_data.get('edit_plan_data')
     if not new_data:
-        await update.message.reply_text("هیچ تغییری اعمال نشد.", reply_markup=get_admin_menu_keyboard())
+        await update.message.reply_text("هیچ تغییری اعمال نشد.", reply_markup=_plan_menu_keyboard())
     else:
         db.update_plan(plan_id, new_data)
-        await update.message.reply_text("✅ پلن با موفقیت به‌روزرسانی شد!", reply_markup=get_admin_menu_keyboard())
+        await update.message.reply_text("✅ پلن با موفقیت به‌روزرسانی شد!", reply_markup=_plan_menu_keyboard())
     context.user_data.clear()
+    # به استیت PLAN_MENU (منوی مدیریت پلن‌ها) برگرد
     return PLAN_MENU
 
 async def admin_delete_plan_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
