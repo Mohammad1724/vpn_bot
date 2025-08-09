@@ -40,7 +40,7 @@ def build_application():
     admin_filter = filters.User(user_id=ADMIN_ID)
     user_filter = ~admin_filter
 
-    # Conversations
+    # --- User-facing Conversations (Top-level) ---
     buy_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(buy_h.buy_start, pattern='^user_buy_')],
         states={
@@ -52,12 +52,14 @@ def build_application():
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
         per_user=True, per_chat=True
     )
+
     gift_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^🎁 کد هدیه$') & user_filter, gift_h.gift_code_entry)],
         states={constants.REDEEM_GIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, gift_h.redeem_gift_code)]},
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
         per_user=True, per_chat=True
     )
+
     charge_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(charge_h.charge_start, pattern='^user_start_charge$')],
         states={
@@ -67,35 +69,35 @@ def build_application():
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
         per_user=True, per_chat=True
     )
+
+    # --- Admin Nested Conversations ---
     settings_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_settings.edit_setting_start, pattern="^admin_edit_setting_")],
         states={constants.AWAIT_SETTING_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_settings.setting_value_received)]},
         fallbacks=[CommandHandler('cancel', admin_c.admin_conv_cancel)],
-        per_user=True, per_chat=True
+        per_user=True, per_chat=True,
+        map_to_parent={
+            constants.ADMIN_MENU: constants.ADMIN_MENU,
+            ConversationHandler.END: constants.ADMIN_MENU
+        }
     )
+
     edit_plan_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_plans.edit_plan_start, pattern="^admin_edit_plan_")],
         states={
-            constants.EDIT_PLAN_NAME: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_name_received),
-                CommandHandler('skip', admin_plans.skip_edit_plan_name)
-            ],
-            constants.EDIT_PLAN_PRICE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_price_received),
-                CommandHandler('skip', admin_plans.skip_edit_plan_price)
-            ],
-            constants.EDIT_PLAN_DAYS: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_days_received),
-                CommandHandler('skip', admin_plans.skip_edit_plan_days)
-            ],
-            constants.EDIT_PLAN_GB: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_gb_received),
-                CommandHandler('skip', admin_plans.skip_edit_plan_gb)
-            ],
+            constants.EDIT_PLAN_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_name_received), CommandHandler('skip', admin_plans.skip_edit_plan_name)],
+            constants.EDIT_PLAN_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_price_received), CommandHandler('skip', admin_plans.skip_edit_plan_price)],
+            constants.EDIT_PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_days_received), CommandHandler('skip', admin_plans.skip_edit_plan_days)],
+            constants.EDIT_PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_gb_received), CommandHandler('skip', admin_plans.skip_edit_plan_gb)],
         },
         fallbacks=[CommandHandler('cancel', admin_c.admin_conv_cancel)],
-        per_user=True, per_chat=True
+        per_user=True, per_chat=True,
+        map_to_parent={
+            constants.PLAN_MENU: constants.PLAN_MENU,
+            ConversationHandler.END: constants.PLAN_MENU
+        }
     )
+
     create_gift_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^➕ ساخت کد هدیه جدید$') & admin_filter, admin_gift.create_gift_code_start)],
         states={
@@ -107,6 +109,7 @@ def build_application():
         }
     )
 
+    # --- Main Admin Conversation (Parent) ---
     admin_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f'^{constants.BTN_ADMIN_PANEL}$') & admin_filter, admin_c.admin_entry)],
         states={
@@ -120,10 +123,10 @@ def build_application():
                 MessageHandler(filters.Regex('^🛑 خاموش کردن ربات$'), admin_c.shutdown_bot),
                 MessageHandler(filters.Regex('^🎁 مدیریت کد هدیه$'), admin_gift.gift_code_management_menu),
                 MessageHandler(filters.Regex('^📋 لیست کدهای هدیه$'), admin_gift.list_gift_codes),
-                # <<< FIX: Add handler for back button in this state
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.back_to_admin_menu),
+                # Nested conversations are part of this state's handlers
                 create_gift_conv,
-                CallbackQueryHandler(admin_settings.edit_setting_start, pattern="^admin_edit_setting_"),
+                settings_conv,
             ],
             constants.REPORTS_MENU: [
                 MessageHandler(filters.Regex('^📊 آمار کلی$'), admin_reports.show_stats_report),
@@ -138,12 +141,8 @@ def build_application():
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.back_to_admin_menu),
                 CallbackQueryHandler(admin_plans.admin_delete_plan_callback, pattern="^admin_delete_plan_"),
                 CallbackQueryHandler(admin_plans.admin_toggle_plan_visibility_callback, pattern="^admin_toggle_plan_"),
-                CallbackQueryHandler(admin_plans.edit_plan_start, pattern="^admin_edit_plan_")
+                edit_plan_conv, # Nested conversation for editing a plan
             ],
-            constants.PLAN_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_name_received)],
-            constants.PLAN_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_price_received)],
-            constants.PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_days_received)],
-            constants.PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_gb_received)],
             constants.MANAGE_USER_ID: [
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.back_to_admin_menu),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, admin_users.manage_user_id_received)
@@ -153,26 +152,6 @@ def build_application():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, admin_users.manage_user_action_handler)
             ],
             constants.MANAGE_USER_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_users.manage_user_amount_received)],
-            constants.BROADCAST_MENU: [
-                MessageHandler(filters.Regex('^ارسال به همه کاربران$'), admin_users.broadcast_to_all_start),
-                MessageHandler(filters.Regex('^ارسال به کاربر خاص$'), admin_users.broadcast_to_user_start),
-                MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.back_to_admin_menu)
-            ],
-            constants.BROADCAST_MESSAGE: [MessageHandler(filters.ALL & ~filters.COMMAND, admin_users.broadcast_to_all_confirm)],
-            constants.BROADCAST_CONFIRM: [
-                MessageHandler(filters.Regex('^بله، ارسال کن$'), admin_users.broadcast_to_all_send),
-                MessageHandler(filters.Regex('^خیر، لغو کن$'), admin_c.admin_generic_cancel)
-            ],
-            constants.BROADCAST_TO_USER_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_users.broadcast_to_user_id_received)],
-            constants.BROADCAST_TO_USER_MESSAGE: [MessageHandler(filters.ALL & ~filters.COMMAND, admin_users.broadcast_to_user_message_received)],
-            constants.BACKUP_MENU: [
-                MessageHandler(filters.Regex('^📥 دریافت فایل پشتیبان$'), admin_backup.send_backup_file),
-                MessageHandler(filters.Regex('^📤 بارگذاری فایل پشتیبان$'), admin_backup.restore_start),
-                MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.back_to_admin_menu),
-                CallbackQueryHandler(admin_backup.admin_confirm_restore_callback, pattern="^admin_confirm_restore$"),
-                CallbackQueryHandler(admin_backup.admin_cancel_restore_callback, pattern="^admin_cancel_restore$"),
-            ],
-            constants.RESTORE_UPLOAD: [MessageHandler(filters.Document.FileExtension("db"), admin_backup.restore_receive_file)]
         },
         fallbacks=[
             MessageHandler(filters.Regex(f'^{constants.BTN_EXIT_ADMIN_PANEL}$'), admin_c.exit_admin_panel),
@@ -181,19 +160,18 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    application.add_handler(charge_conv, group=1)
-    application.add_handler(gift_conv, group=1)
-    application.add_handler(buy_conv, group=1)
-    application.add_handler(settings_conv, group=1)
-    application.add_handler(edit_plan_conv, group=1)
-    application.add_handler(admin_conv, group=1)
+    # Register handlers
+    application.add_handler(charge_conv)
+    application.add_handler(gift_conv)
+    application.add_handler(buy_conv)
+    application.add_handler(admin_conv)
 
     application.add_handler(CallbackQueryHandler(admin_users.admin_confirm_charge_callback, pattern="^admin_confirm_charge_"))
     application.add_handler(CallbackQueryHandler(admin_users.admin_reject_charge_callback, pattern="^admin_reject_charge_"))
     application.add_handler(CallbackQueryHandler(admin_settings.edit_default_link_start, pattern="^edit_default_link_type$"))
     application.add_handler(CallbackQueryHandler(admin_settings.set_default_link_type, pattern="^set_default_link_"))
     application.add_handler(CallbackQueryHandler(admin_settings.settings_menu, pattern="^back_to_settings$"))
-
+    
     application.add_handler(CallbackQueryHandler(us_h.view_service_callback, pattern="^view_service_"), group=2)
     application.add_handler(CallbackQueryHandler(us_h.back_to_services_callback, pattern="^back_to_services$"), group=2)
     application.add_handler(CallbackQueryHandler(us_h.get_link_callback, pattern="^getlink_"), group=2)
