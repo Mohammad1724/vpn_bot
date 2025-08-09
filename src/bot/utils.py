@@ -13,27 +13,45 @@ def parse_date_flexible(date_str: str) -> Union[datetime.date, None]:
         return None
     s = str(date_str).strip()
 
-    # Try multiple candidates (raw, split by 'T', split by whitespace)
-    candidates = {s}
-    if 'T' in s:
-        candidates.add(s.split('T', 1)[0])
-    if ' ' in s:
-        candidates.add(s.split(' ', 1)[0])
+    # build candidate strings
+    candidates = []
+    # original
+    candidates.append(s)
+    # split by 'T' and whitespace (keep date-only part)
+    for sep in ("T", " "):
+        if sep in s:
+            candidates.append(s.split(sep, 1)[0])
+    # normalize slashes
+    candidates.extend([c.replace("/", "-") for c in list(candidates)])
 
-    # Supported formats (date-only and date+time)
-    fmts = [
+    # dedupe while keeping order
+    seen = set()
+    ordered = []
+    for c in candidates:
+        if c and c not in seen:
+            seen.add(c)
+            ordered.append(c)
+
+    # 1) try fromisoformat on all candidates
+    for c in ordered:
+        try:
+            dt = datetime.fromisoformat(c)
+            return dt.date()
+        except Exception:
+            pass
+
+    # 2) try explicit formats
+    fmts = (
         "%Y-%m-%d",
         "%Y/%m/%d",
         "%Y-%m-%d %H:%M:%S",
         "%Y/%m/%d %H:%M:%S",
-    ]
-
-    for cand in candidates:
+    )
+    for c in ordered:
         for fmt in fmts:
             try:
-                dt = datetime.strptime(cand, fmt)
-                return dt.date()
-            except (ValueError, TypeError):
+                return datetime.strptime(c, fmt).date()
+            except Exception:
                 continue
 
     logger.error(f"Date parse failed for '{date_str}'.")
