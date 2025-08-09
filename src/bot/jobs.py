@@ -21,9 +21,9 @@ async def check_low_usage(context: ContextTypes.DEFAULT_TYPE):
             continue
         try:
             info = await hiddify_api.get_user_info(service['sub_uuid'])
-            # Auto-clean if 404 sentinel returned
+            # Auto-clean if 404 sentinel
             if isinstance(info, dict) and info.get('_not_found'):
-                _remove_stale_service(service, context)
+                await _remove_stale_service(service, context)
                 continue
             if not info:
                 continue
@@ -58,7 +58,7 @@ async def check_expiring_services(context: ContextTypes.DEFAULT_TYPE):
         try:
             info = await hiddify_api.get_user_info(service['sub_uuid'])
             if isinstance(info, dict) and info.get('_not_found'):
-                _remove_stale_service(service, context)
+                await _remove_stale_service(service, context)
                 continue
             if not info:
                 continue
@@ -88,16 +88,15 @@ async def check_expiring_services(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error("Expiry job error: %s", e, exc_info=True)
 
-def _remove_stale_service(service: dict, context: ContextTypes.DEFAULT_TYPE):
+async def _remove_stale_service(service: dict, context: ContextTypes.DEFAULT_TYPE):
     try:
         conn = db._connect_db()
         conn.execute("DELETE FROM active_services WHERE service_id = ?", (service['service_id'],))
         conn.commit()
-        # Notify user
-        asyncio.create_task(context.bot.send_message(
+        await context.bot.send_message(
             chat_id=service['user_id'],
             text=f"🗑️ سرویس {f'({service['name']})' if service['name'] else ''} در پنل یافت نشد و از لیست شما حذف شد."
-        ))
+        )
         logger.info("Removed stale service %s (uuid=%s)", service['service_id'], service['sub_uuid'])
     except Exception as e:
         logger.error("Failed to remove stale service %s: %s", service['service_id'], e, exc_info=True)
@@ -126,20 +125,18 @@ async def _daily_expiry_loop(app: Application, hour: int = 9, minute: int = 0):
             logger.exception("Error in _daily_expiry_loop")
 
 async def post_init(app: Application):
-    # Avoid touching app.job_queue to prevent PTBUserWarning
-    job_queue_available = False
+    # Try to use a JobQueue instance without touching app.job_queue
     try:
-        from telegram.ext import JobQueue  # noqa: F401
-        job_queue_available = True
-    except Exception:
-        job_queue_available = False
-
-    if job_queue_available:
-        jq = app.job_queue  # will not warn since JobQueue is available
-        if jq:
-            jq.run_repeating(check_low_usage, interval=timedelta(hours=4), first=10)
-            jq.run_daily(check_expiring_services, time=time(hour=9, minute=0))
-            return
+        from telegram.ext import JobQueue  # optional extra
+        jq = JobQueue()
+        jq.set_application(app)
+        jq.start()
+        jq.run_repeating(check_low_usage, interval=timedelta(hours=4), first=10)
+        jq.run_daily(check_expiring_services, time=time(hour=9, minute=0))
+        logger.info("Internal JobQueue started and jobs scheduled.")
+        return
+    except Exception as e:
+        logger.info("JobQueue not available (%s). Falling back to asyncio loops.", e)
 
     # Fallback without warnings
     loop = asyncio.get_event_loop()
