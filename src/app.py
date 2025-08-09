@@ -40,6 +40,7 @@ def build_application():
     admin_filter = filters.User(user_id=ADMIN_ID)
     user_filter = ~admin_filter
 
+    # --- User-facing Conversations (Top-level) ---
     buy_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(buy_h.buy_start, pattern='^user_buy_')],
         states={
@@ -66,16 +67,22 @@ def build_application():
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
         per_user=True, per_chat=True
     )
-    settings_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(admin_settings.edit_setting_start, pattern="^admin_edit_setting_")],
-        states={constants.AWAIT_SETTING_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_settings.setting_value_received)]},
+
+    # --- Admin Nested Conversations ---
+    add_plan_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex('^➕ افزودن پلن جدید$'), admin_plans.add_plan_start)],
+        states={
+            constants.PLAN_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_name_received)],
+            constants.PLAN_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_price_received)],
+            constants.PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_days_received)],
+            constants.PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_gb_received)],
+        },
         fallbacks=[CommandHandler('cancel', admin_c.admin_conv_cancel)],
-        per_user=True, per_chat=True,
         map_to_parent={
-            constants.ADMIN_MENU: constants.ADMIN_MENU,
-            ConversationHandler.END: constants.ADMIN_MENU
+            ConversationHandler.END: constants.PLAN_MENU,
         }
     )
+
     edit_plan_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_plans.edit_plan_start, pattern="^admin_edit_plan_")],
         states={
@@ -85,12 +92,12 @@ def build_application():
             constants.EDIT_PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_gb_received), CommandHandler('skip', admin_plans.skip_edit_plan_gb)],
         },
         fallbacks=[CommandHandler('cancel', admin_c.admin_conv_cancel)],
-        per_user=True, per_chat=True,
         map_to_parent={
             constants.PLAN_MENU: constants.PLAN_MENU,
             ConversationHandler.END: constants.PLAN_MENU
         }
     )
+
     create_gift_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^➕ ساخت کد هدیه جدید$') & admin_filter, admin_gift.create_gift_code_start)],
         states={
@@ -101,6 +108,18 @@ def build_application():
             ConversationHandler.END: constants.ADMIN_MENU
         }
     )
+
+    settings_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(admin_settings.edit_setting_start, pattern="^admin_edit_setting_")],
+        states={constants.AWAIT_SETTING_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_settings.setting_value_received)]},
+        fallbacks=[CommandHandler('cancel', admin_c.admin_conv_cancel)],
+        map_to_parent={
+            constants.ADMIN_MENU: constants.ADMIN_MENU,
+            ConversationHandler.END: constants.ADMIN_MENU
+        }
+    )
+
+    # --- Main Admin Conversation (Parent) ---
     admin_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f'^{constants.BTN_ADMIN_PANEL}$') & admin_filter, admin_c.admin_entry)],
         states={
@@ -126,12 +145,12 @@ def build_application():
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.back_to_admin_menu),
             ],
             constants.PLAN_MENU: [
-                MessageHandler(filters.Regex('^➕ افزودن پلن جدید$'), admin_plans.add_plan_start),
+                add_plan_conv,
+                edit_plan_conv,
                 MessageHandler(filters.Regex('^📋 لیست پلن‌ها$'), admin_plans.list_plans_admin),
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.back_to_admin_menu),
                 CallbackQueryHandler(admin_plans.admin_delete_plan_callback, pattern="^admin_delete_plan_"),
                 CallbackQueryHandler(admin_plans.admin_toggle_plan_visibility_callback, pattern="^admin_toggle_plan_"),
-                edit_plan_conv,
             ],
             constants.MANAGE_USER_ID: [
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.back_to_admin_menu),
@@ -142,11 +161,6 @@ def build_application():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, admin_users.manage_user_action_handler)
             ],
             constants.MANAGE_USER_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_users.manage_user_amount_received)],
-            constants.BROADCAST_MENU: [
-                MessageHandler(filters.Regex('^ارسال به همه کاربران$'), admin_users.broadcast_to_all_start),
-                MessageHandler(filters.Regex('^ارسال به کاربر خاص$'), admin_users.broadcast_to_user_start),
-                MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.back_to_admin_menu)
-            ],
         },
         fallbacks=[
             MessageHandler(filters.Regex(f'^{constants.BTN_EXIT_ADMIN_PANEL}$'), admin_c.exit_admin_panel),
@@ -169,7 +183,7 @@ def build_application():
     application.add_handler(CallbackQueryHandler(admin_settings.toggle_report_setting, pattern="^toggle_report_"))
     application.add_handler(CallbackQueryHandler(admin_settings.edit_auto_backup_start, pattern="^edit_auto_backup$"))
     application.add_handler(CallbackQueryHandler(admin_settings.set_backup_interval, pattern="^set_backup_interval_"))
-
+    
     application.add_handler(CallbackQueryHandler(us_h.view_service_callback, pattern="^view_service_"), group=2)
     application.add_handler(CallbackQueryHandler(us_h.back_to_services_callback, pattern="^back_to_services$"), group=2)
     application.add_handler(CallbackQueryHandler(us_h.get_link_callback, pattern="^getlink_"), group=2)
