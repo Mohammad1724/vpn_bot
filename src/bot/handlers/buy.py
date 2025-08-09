@@ -13,7 +13,17 @@ async def buy_service_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not plans:
         await update.message.reply_text("متأسفانه در حال حاضر هیچ پلنی موجود نیست.")
         return
-    keyboard = [[InlineKeyboardButton(f"{p['name']} - {p['days']} روزه {p['gb']} گیگ - {p['price']:.0f} تومان", callback_data=f"user_buy_{p['plan_id']}")] for p in plans]
+    
+    keyboard = []
+    for p in plans:
+        # <<< NEW: Add device limit info to the button text
+        limit = p.get('device_limit', 0)
+        limit_text = f"{limit} کاربره" if limit and limit > 0 else "نامحدود"
+        button_text = (
+            f"{p['name']} - {p['days']} روزه {p['gb']} گیگ - {limit_text} - {p['price']:,.0f} تومان"
+        )
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=f"user_buy_{p['plan_id']}")])
+
     await update.message.reply_text("لطفاً پلن مورد نظر خود را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def buy_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -67,12 +77,13 @@ async def create_service_after_name(message: Update.message, context: ContextTyp
 
     if result and result.get('uuid'):
         db.finalize_purchase_transaction(transaction_id, result['uuid'], result['full_link'], custom_name)
+        
         new_service = db.get_service_by_uuid(result['uuid'])
         if not new_service:
             await msg_loading.edit_text("❌ خطایی در ثبت سرویس در دیتابیس رخ داد. لطفاً به پشتیبانی اطلاع دهید.")
             context.user_data.clear()
             return
-
+        
         referrer_id, bonus_amount = db.apply_referral_bonus(user_id)
         if referrer_id:
             try:
