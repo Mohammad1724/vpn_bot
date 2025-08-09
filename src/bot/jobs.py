@@ -14,6 +14,9 @@ from bot.utils import get_service_status
 
 logger = logging.getLogger(__name__)
 
+# Keep references to fallback tasks to cancel them on shutdown
+_BG_TASKS: list[asyncio.Task] = []
+
 async def check_low_usage(context: ContextTypes.DEFAULT_TYPE):
     logger.info("Job: checking low-usage services...")
     for service in db.get_all_active_services():
@@ -21,7 +24,6 @@ async def check_low_usage(context: ContextTypes.DEFAULT_TYPE):
             continue
         try:
             info = await hiddify_api.get_user_info(service['sub_uuid'])
-            # Auto-clean if 404 sentinel
             if isinstance(info, dict) and info.get('_not_found'):
                 await _remove_stale_service(service, context)
                 continue
@@ -125,7 +127,7 @@ async def _daily_expiry_loop(app: Application, hour: int = 9, minute: int = 0):
             logger.exception("Error in _daily_expiry_loop")
 
 async def post_init(app: Application):
-    # Try to use a JobQueue instance without touching app.job_queue
+    # Try optional JobQueue (without accessing app.job_queue directly)
     try:
         from telegram.ext import JobQueue  # optional extra
         jq = JobQueue()
@@ -138,7 +140,17 @@ async def post_init(app: Application):
     except Exception as e:
         logger.info("JobQueue not available (%s). Falling back to asyncio loops.", e)
 
-    # Fallback without warnings
     loop = asyncio.get_event_loop()
-    loop.create_task(_low_usage_loop(app))
-    loop.create_task(_daily_expiry_loop(app))
+    _BG_TASKS.append(loop.create_task(_low_usage_loop(app)))
+    _BG_TASKS.append(loop.create_task(_daily_expiry_loop(app)))
+
+async def post_shutdown(app: Application):
+    # Cancel fallback tasks cleanly to avoid "Task was destroyed but pending!"
+    if not _BG_TASKS:
+        return
+    for t in _BG_TASKS:
+        t.cancel()
+    try:
+        await asyncio.gather(*_BG_TASKS, return_exceptions=True)
+    finally:
+        _BG_TASKS.clear()
