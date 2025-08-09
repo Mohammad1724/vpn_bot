@@ -73,7 +73,7 @@ async def manage_user_action_handler(update: Update, context: ContextTypes.DEFAU
         msg = "📜 سوابق خرید کاربر:\n\n"
         from datetime import datetime
         for sale in history:
-            sale_date = datetime.strptime(sale['sale_date'], '%Y-%m-%d %H:%M:%S').strftime('%Y/%m/%d - %H:%M')
+            sale_date = datetime.strptime(sale['sale_date'], '%Y-%m-%d %H:%M:%S').strftime('%Y/%m/%d - %H:%م')
             msg += f"🔹 {sale['plan_name'] or 'پلن حذف شده'} | قیمت: {sale['price']:.0f} تومان | تاریخ: {sale_date}\n"
         await update.message.reply_text(msg, parse_mode="Markdown")
         return MANAGE_USER_ACTION
@@ -196,7 +196,7 @@ async def broadcast_to_all_send(update: Update, context: ContextTypes.DEFAULT_TY
     msg = context.user_data.get('broadcast_message')
     if not msg:
         await update.message.reply_text("خطا: پیامی برای ارسال یافت نشد.", reply_markup=get_admin_menu_keyboard())
-        return BROADCAST_MENU
+        return ConversationHandler.END
 
     user_ids = db.get_all_user_ids()
     sent, failed = 0, 0
@@ -224,9 +224,13 @@ async def broadcast_to_all_send(update: Update, context: ContextTypes.DEFAULT_TY
         # رعایت ریت‌لیمیت
         await asyncio.sleep(0.05)
 
-    await update.message.reply_text(f"✅ ارسال پیام همگانی پایان یافت.\n\nارسال موفق: {sent}\nارسال ناموفق: {failed}")
+    await update.message.reply_text(
+        f"✅ ارسال پیام همگانی پایان یافت.\n\nارسال موفق: {sent}\nارسال ناموفق: {failed}",
+        reply_markup=get_admin_menu_keyboard()
+    )
     context.user_data.clear()
-    return BROADCAST_MENU
+    # مهم: خروج از کانورسیشن و برگشت به منوی ادمین
+    return ConversationHandler.END
 
 # ارسال به کاربر خاص
 async def broadcast_to_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -251,7 +255,7 @@ async def broadcast_to_user_message_received(update: Update, context: ContextTyp
     target_id = context.user_data.get('target_user_id')
     if not target_id:
         await update.message.reply_text("خطا: کاربر هدف مشخص نیست.", reply_markup=get_admin_menu_keyboard())
-        return BROADCAST_MENU
+        return ConversationHandler.END
 
     msg = update.message
     try:
@@ -268,4 +272,5 @@ async def broadcast_to_user_message_received(update: Update, context: ContextTyp
             await update.message.reply_text("❌ ارسال ناموفق بود.", reply_markup=get_admin_menu_keyboard())
 
     context.user_data.clear()
-    return BROADCAST_MENU
+    # مهم: پایان کانورسیشن و برگشت به منوی ادمین
+    return ConversationHandler.END
