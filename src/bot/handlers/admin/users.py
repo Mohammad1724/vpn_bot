@@ -8,13 +8,12 @@ from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKe
 from telegram.error import Forbidden, BadRequest, RetryAfter, TimedOut, NetworkError
 
 from bot.constants import (
-    # User management states
     MANAGE_USER_ID, MANAGE_USER_ACTION, MANAGE_USER_AMOUNT, CMD_CANCEL,
     BTN_BACK_TO_ADMIN_MENU,
-    # Broadcast states
     BROADCAST_MENU, BROADCAST_MESSAGE, BROADCAST_CONFIRM,
     BROADCAST_TO_USER_ID, BROADCAST_TO_USER_MESSAGE
 )
+from bot.keyboards import get_admin_menu_keyboard
 import database as db
 
 logger = logging.getLogger(__name__)
@@ -27,7 +26,6 @@ async def _send_user_panel(update: Update, target_id: int):
     if not info:
         await update.message.reply_text("کاربر یافت نشد.")
         return
-
     ban_text = "آزاد کردن کاربر" if info['is_banned'] else "مسدود کردن کاربر"
     keyboard = [["افزایش موجودی", "کاهش موجودی"], ["📜 سوابق خرید", ban_text], [BTN_BACK_TO_ADMIN_MENU]]
     text = (
@@ -115,10 +113,17 @@ async def manage_user_amount_received(update: Update, context: ContextTypes.DEFA
         action = context.user_data['manage_action']
         target = context.user_data['target_user_id']
         is_add = action == "افزایش موجودی"
+
+        # ثبت تراکنش برای تاریخچه شارژ
+        if is_add:
+            db.add_charge_transaction(target, amount, type_="manual_charge_add")
+        else:
+            db.add_charge_transaction(target, -amount, type_="manual_charge_sub")
+
         db.update_balance(target, amount if is_add else -amount)
         await update.message.reply_text(f"✅ مبلغ {amount:.0f} تومان از حساب کاربر {'کسر' if not is_add else 'افزوده'} شد.")
 
-        # ارسال اطلاعیه به خود کاربر
+        # ارسال اطلاعیه به کاربر
         try:
             if is_add:
                 await context.bot.send_message(
@@ -154,15 +159,18 @@ async def admin_confirm_charge_callback(update: Update, context: ContextTypes.DE
         target_user_id = int(user_id_str)
         amount = int(float(amount_str))
     except Exception:
-        try:
-            if q.message.photo:
-                await q.edit_message_caption(caption=f"{q.message.caption}\n\n---\n❌ خطا در پردازش داده دکمه.")
-            else:
-                await q.edit_message_text("❌ خطا در پردازش داده دکمه.")
-        except Exception:
-            pass
+        if q.message:
+            try:
+                if q.message.photo:
+                    await q.edit_message_caption(caption=f"{q.message.caption}\n\n---\n❌ خطا در پردازش داده دکمه.")
+                else:
+                    await q.edit_message_text("❌ خطا در پردازش داده دکمه.")
+            except Exception:
+                pass
         return
 
+    # ثبت تراکنش برای تاریخچه شارژ
+    db.add_charge_transaction(target_user_id, amount, type_="charge")
     db.update_balance(target_user_id, amount)
     original_caption = q.message.caption or ""
     feedback = f"{original_caption}\n\n---\n✅ مبلغ {amount:,} تومان به حساب کاربر `{target_user_id}` اضافه شد."
@@ -170,10 +178,11 @@ async def admin_confirm_charge_callback(update: Update, context: ContextTypes.DE
         await context.bot.send_message(chat_id=target_user_id, text=f"حساب شما به مبلغ **{amount:,} تومان** شارژ شد!", parse_mode="Markdown")
     except (Forbidden, BadRequest):
         feedback += "\n\n⚠️ کاربر ربات را بلاک کرده و پیام تایید را دریافت نکرد."
-    try:
-        await q.edit_message_caption(caption=feedback, reply_markup=None, parse_mode="Markdown")
-    except Exception:
-        await context.bot.send_message(chat_id=q.from_user.id, text=feedback, parse_mode="Markdown")
+    if q.message:
+        try:
+            await q.edit_message_caption(caption=feedback, reply_markup=None, parse_mode="Markdown")
+        except Exception:
+            await context.bot.send_message(chat_id=q.from_user.id, text=feedback, parse_mode="Markdown")
 
 
 async def admin_reject_charge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -183,13 +192,14 @@ async def admin_reject_charge_callback(update: Update, context: ContextTypes.DEF
     try:
         target_user_id = int(q.data.split('_')[-1])
     except Exception:
-        try:
-            if q.message.photo:
-                await q.edit_message_caption(caption=f"{q.message.caption}\n\n---\n❌ خطا در پردازش داده دکمه.")
-            else:
-                await q.edit_message_text("❌ خطا در پردازش داده دکمه.")
-        except Exception:
-            pass
+        if q.message:
+            try:
+                if q.message.photo:
+                    await q.edit_message_caption(caption=f"{q.message.caption}\n\n---\n❌ خطا در پردازش داده دکمه.")
+                else:
+                    await q.edit_message_text("❌ خطا در پردازش داده دکمه.")
+            except Exception:
+                pass
         return
 
     original_caption = q.message.caption or ""
@@ -198,10 +208,11 @@ async def admin_reject_charge_callback(update: Update, context: ContextTypes.DEF
         await context.bot.send_message(chat_id=target_user_id, text="متاسفانه درخواست شارژ حساب شما توسط ادمین رد شد.")
     except (Forbidden, BadRequest):
         feedback += "\n\n⚠️ کاربر ربات را بلاک کرده است."
-    try:
-        await q.edit_message_caption(caption=feedback, reply_markup=None, parse_mode="Markdown")
-    except Exception:
-        await context.bot.send_message(chat_id=q.from_user.id, text=feedback, parse_mode="Markdown")
+    if q.message:
+        try:
+            await q.edit_message_caption(caption=feedback, reply_markup=None, parse_mode="Markdown")
+        except Exception:
+            await context.bot.send_message(chat_id=q.from_user.id, text=feedback, parse_mode="Markdown")
 
 
 # =============== Broadcast (Admin) ===============
@@ -250,7 +261,6 @@ async def broadcast_confirm_callback(update: Update, context: ContextTypes.DEFAU
         context.user_data.clear()
         return ConversationHandler.END
 
-    # تایید = ارسال
     msg = context.user_data.get("broadcast_message")
     if not msg:
         await q.edit_message_text("خطا: پیامی برای ارسال یافت نشد.", reply_markup=None)
