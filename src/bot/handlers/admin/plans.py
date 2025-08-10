@@ -8,7 +8,7 @@ from bot.constants import (
     CMD_CANCEL, CMD_SKIP,
     PLAN_MENU, PLAN_NAME, PLAN_PRICE, PLAN_DAYS, PLAN_GB,
     EDIT_PLAN_NAME, EDIT_PLAN_PRICE, EDIT_PLAN_DAYS, EDIT_PLAN_GB,
-    BTN_BACK_TO_ADMIN_MENU, ADMIN_MENU
+    BTN_BACK_TO_ADMIN_MENU
 )
 import database as db
 
@@ -94,7 +94,6 @@ async def plan_gb_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("حجم را به صورت عدد وارد کنید.")
         return PLAN_GB
 
-# لغو افزودن پلن (fix /cancel)
 async def cancel_add_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await update.message.reply_text("عملیات لغو شد.", reply_markup=_plan_menu_keyboard())
@@ -166,7 +165,6 @@ async def skip_edit_plan_gb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await finish_plan_edit(update, context)
     return ConversationHandler.END
 
-# لغو ویرایش پلن (fix /cancel)
 async def cancel_edit_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await update.message.reply_text("ویرایش لغو شد.", reply_markup=_plan_menu_keyboard())
