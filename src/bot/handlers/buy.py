@@ -19,6 +19,12 @@ def _maint_on() -> bool:
 def _maint_msg() -> str:
     return db.get_setting("maintenance_message") or "⛔️ ربات در حال بروزرسانی است. لطفاً کمی بعد مراجعه کنید."
 
+def _build_note_for_user(user_id: int, username: str | None) -> str:
+    if username:
+        u = username.lstrip('@')
+        return f"tg:@{u}|id:{user_id}"
+    return f"tg:id:{user_id}"
+
 # ===== Public handlers =====
 async def buy_service_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if _maint_on():
@@ -81,6 +87,7 @@ async def skip_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def _process_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE, custom_name: str):
     user_id = update.effective_user.id
+    username = update.effective_user.username
     plan_id = context.user_data.get('buy_plan_id')
     plan = db.get_plan(plan_id) if plan_id else None
 
@@ -102,23 +109,19 @@ async def _process_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         await update.message.reply_text("⏳ در حال ایجاد سرویس شما...")
 
         final_name = custom_name or f"سرویس {plan['gb']} گیگ"
-        
-        # Note را به user_telegram_id پاس می‌دهیم
-        # اگر می‌خواهید username را هم ثبت کنید، note را بسازید و به user_telegram_id بدهید:
-        # note = f"tg:@{(update.effective_user.username or '').lstrip('@')} id:{user_id}"
-        
+        note = _build_note_for_user(user_id, username)
+
         provision = await hiddify_api.create_hiddify_user(
             plan_days=plan['days'],
             plan_gb=plan['gb'],
-            device_limit=0,
-            user_telegram_id=user_id,
+            user_telegram_id=note,  # ← Note را به comment مپ می‌کند
             custom_name=final_name
         )
         if not provision or not provision.get("uuid"):
             raise RuntimeError("Provisioning failed or no uuid returned.")
 
         sub_uuid = provision["uuid"]
-        sub_link = ""  # لینک در send_service_details ساخته می‌شود
+        sub_link = provision.get('full_link', '')
         db.finalize_purchase_transaction(txn_id, sub_uuid, sub_link, final_name)
 
         svc = db.get_service_by_uuid(sub_uuid)
