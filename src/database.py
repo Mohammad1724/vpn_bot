@@ -116,7 +116,6 @@ def init_db():
         )
     ''')
 
-    # مهاجرت حذف device_limit_alert_sent
     _remove_device_limit_alert_column_if_exists(conn)
 
     # sales_log
@@ -524,6 +523,17 @@ def set_setting(key: str, value: str):
     conn.execute("REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
     conn.commit()
 
+def was_reminder_sent(service_id: int, type_: str, date: str) -> bool:
+    conn = _connect_db()
+    cur = conn.cursor()
+    cur.execute("SELECT 1 FROM reminder_log WHERE service_id = ? AND date = ? AND type = ?", (service_id, date, type_))
+    return cur.fetchone() is not None
+
+def mark_reminder_sent(service_id: int, type_: str, date: str):
+    conn = _connect_db()
+    conn.execute("INSERT OR IGNORE INTO reminder_log (service_id, date, type) VALUES (?, ?, ?)", (service_id, date, type_))
+    conn.commit()
+
 def get_stats() -> dict:
     conn = _connect_db()
     total_users = conn.execute("SELECT COUNT(user_id) FROM users").fetchone()[0]
@@ -566,12 +576,16 @@ def get_user_sales_history(user_id: int) -> list:
     cur.execute(query, (user_id,))
     return [dict(r) for r in cur.fetchall()]
 
-# ===== New: Referral count & Charge history =====
+# ===== New / Updated functions =====
+
+def get_service_by_name(user_id: int, name: str) -> dict | None:
+    conn = _connect_db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM active_services WHERE user_id = ? AND name = ?", (user_id, name))
+    row = cur.fetchone()
+    return dict(row) if row else None
 
 def get_user_referral_count(user_id: int) -> int:
-    """
-    تعداد کاربرانی که این user_id را به‌عنوان معرف (referred_by) دارند.
-    """
     conn = _connect_db()
     cur = conn.cursor()
     cur.execute("SELECT COUNT(*) FROM users WHERE referred_by = ?", (user_id,))
@@ -579,26 +593,18 @@ def get_user_referral_count(user_id: int) -> int:
     return row[0] if row else 0
 
 def get_user_charge_history(user_id: int) -> list:
-    """
-    تاریخچه شارژ موفق کاربر از جدول transactions.
-    اگر برای شارژها رکوردی ثبت نمی‌کنید، این لیست خالی می‌ماند.
-    """
     conn = _connect_db()
     cur = conn.cursor()
     cur.execute("""
-        SELECT created_at, amount
-        FROM transactions
+        SELECT created_at, amount, type FROM transactions
         WHERE user_id = ?
-          AND type IN ('charge', 'manual_charge')
+          AND type LIKE '%charge%'
           AND status = 'completed'
         ORDER BY transaction_id DESC
     """, (user_id,))
     return [dict(r) for r in cur.fetchall()]
 
 def add_charge_transaction(user_id: int, amount: float, type_: str = "charge"):
-    """
-    یک شارژ موفق را در جدول transactions ثبت می‌کند تا در تاریخچه شارژ نمایش داده شود.
-    """
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn = _connect_db()
     conn.execute("""
