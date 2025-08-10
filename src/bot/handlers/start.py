@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import logging
+from datetime import datetime
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 import database as db
@@ -48,17 +49,79 @@ async def admin_conv_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_account_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user = db.get_or_create_user(user_id)
-    kb = [[InlineKeyboardButton("💳 شارژ حساب", callback_data="user_start_charge")]]
+    services_count = len(db.get_user_services(user_id))
+    referral_count = db.get_user_referral_count(user_id)
+    join_date = user.get('join_date', 'N/A').split(' ')[0]
+
     text = (
         f"👤 **اطلاعات حساب شما**\n\n"
         f"▫️ شناسه عددی: `{user_id}`\n"
-        f"▫️ موجودی کیف پول: **{user['balance']:.0f} تومان**"
+        f"▫️ موجودی کیف پول: **{user['balance']:.0f} تومان**\n"
+        f"▫️ تعداد سرویس‌های فعال: **{services_count}**\n"
+        f"▫️ تعداد دوستان دعوت‌شده: **{referral_count}**\n"
+        f"▫️ تاریخ عضویت: **{join_date}**"
     )
-    await update.message.reply_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(kb),
-        parse_mode="Markdown"
-    )
+
+    keyboard = [
+        [InlineKeyboardButton("💳 شارژ حساب", callback_data="user_start_charge")],
+        [InlineKeyboardButton("📜 سوابق خرید", callback_data="acc_purchase_history"),
+         InlineKeyboardButton("💸 سوابق شارژ", callback_data="acc_charge_history")],
+        [InlineKeyboardButton("🤝 انتقال موجودی", callback_data="acc_transfer_start"),
+         InlineKeyboardButton("🎁 ساخت کد هدیه", callback_data="acc_gift_from_balance_start")],
+        [InlineKeyboardButton("💡 راهنمای شارژ", callback_data="acc_charging_guide")],
+    ]
+
+    if update.callback_query:
+        await update.callback_query.answer()
+        try:
+            await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        except Exception:
+            await context.bot.send_message(user_id, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    else:
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+
+async def show_purchase_history_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    history = db.get_user_sales_history(q.from_user.id)
+    if not history:
+        await q.answer("شما تاکنون خریدی نداشته‌اید.", show_alert=True)
+        return
+
+    msg = "🛍️ **سوابق خرید شما:**\n\n"
+    for sale in history:
+        sale_date = datetime.strptime(sale['sale_date'], '%Y-%m-%d %H:%M:%S').strftime('%Y/%m/%d')
+        msg += f"🔹 {sale['plan_name'] or 'پلن حذف شده'} | {sale['price']:.0f} تومان | {sale_date}\n"
+
+    kb = [[InlineKeyboardButton("🔙 بازگشت", callback_data="acc_back_to_main")]]
+    await q.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
+
+async def show_charge_history_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    history = db.get_user_charge_history(q.from_user.id)
+    if not history:
+        await q.answer("شما تاکنون سابقه شارژ موفقی نداشته‌اید.", show_alert=True)
+        return
+
+    msg = "💸 **سوابق شارژ موفق شما:**\n\n"
+    for ch in history:
+        charge_date = datetime.strptime(ch['created_at'], '%Y-%m-%d %H:%M:%S').strftime('%Y/%m/%d')
+        msg += f"🔹 {ch['amount']:.0f} تومان | {charge_date}\n"
+
+    kb = [[InlineKeyboardButton("🔙 بازگشت", callback_data="acc_back_to_main")]]
+    await q.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
+
+async def show_charging_guide_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    guide = db.get_setting("payment_instruction_text") or "راهنمایی ثبت نشده است."
+    kb = [[InlineKeyboardButton("🔙 بازگشت", callback_data="acc_back_to_main")]]
+    await q.edit_message_text(guide, reply_markup=InlineKeyboardMarkup(kb))
+
 
 async def show_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if SUPPORT_USERNAME:
