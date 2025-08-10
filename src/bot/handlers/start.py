@@ -30,11 +30,30 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_info = db.get_user(user.id)
     if user_info and user_info.get('is_banned'):
-        await update.message.reply_text("شما از استفاده از این ربات منع شده‌اید.")
+        if update.message:
+            await update.message.reply_text("شما از استفاده از این ربات منع شده‌اید.")
+        elif update.callback_query:
+            await update.callback_query.answer("شما از استفاده از این ربات منع شده‌اید.", show_alert=True)
         return ConversationHandler.END
 
-    await update.message.reply_text("👋 به ربات خوش آمدید!", reply_markup=get_main_menu_keyboard(user.id))
+    text = "👋 به ربات خوش آمدید!"
+    
+    # تشخیص نوع آپدیت (Message یا CallbackQuery)
+    if update.callback_query:
+        # اگر از دکمه "بررسی عضویت" آمده بود، پیام قبلی را حذف کن و پیام جدید بفرست
+        q = update.callback_query
+        await q.answer("عضویت شما تایید شد. خوش آمدید!")
+        try:
+            await q.message.delete()
+        except Exception:
+            pass
+        await q.from_user.send_message(text, reply_markup=get_main_menu_keyboard(user.id))
+    else:
+        # اگر از /start آمده بود
+        await update.message.reply_text(text, reply_markup=get_main_menu_keyboard(user.id))
+    
     return ConversationHandler.END
+
 
 async def user_generic_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
