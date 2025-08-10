@@ -10,7 +10,6 @@ from bot.constants import (
     EDIT_PLAN_NAME, EDIT_PLAN_PRICE, EDIT_PLAN_DAYS, EDIT_PLAN_GB,
     BTN_BACK_TO_ADMIN_MENU, ADMIN_MENU
 )
-from bot.keyboards import get_admin_menu_keyboard
 import database as db
 
 def _plan_menu_keyboard() -> ReplyKeyboardMarkup:
@@ -95,6 +94,12 @@ async def plan_gb_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("حجم را به صورت عدد وارد کنید.")
         return PLAN_GB
 
+# لغو افزودن پلن (fix /cancel)
+async def cancel_add_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
+    await update.message.reply_text("عملیات لغو شد.", reply_markup=_plan_menu_keyboard())
+    return ConversationHandler.END
+
 async def edit_plan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -161,6 +166,12 @@ async def skip_edit_plan_gb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await finish_plan_edit(update, context)
     return ConversationHandler.END
 
+# لغو ویرایش پلن (fix /cancel)
+async def cancel_edit_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
+    await update.message.reply_text("ویرایش لغو شد.", reply_markup=_plan_menu_keyboard())
+    return ConversationHandler.END
+
 async def finish_plan_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     plan_id = context.user_data.get('edit_plan_id')
     new_data = context.user_data.get('edit_plan_data')
@@ -170,7 +181,6 @@ async def finish_plan_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.update_plan(plan_id, new_data)
         await update.message.reply_text("✅ پلن با موفقیت به‌روزرسانی شد!", reply_markup=_plan_menu_keyboard())
     context.user_data.clear()
-    # به استیت PLAN_MENU (منوی مدیریت پلن‌ها) برگرد
     return PLAN_MENU
 
 async def admin_delete_plan_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
