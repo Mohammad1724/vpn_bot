@@ -283,10 +283,12 @@ def get_plan(plan_id: int) -> dict:
 def list_plans(only_visible: bool = False) -> list:
     conn = _connect_db()
     cur = conn.cursor()
+    # مرتب‌سازی جدید: اول بر اساس روز، بعد بر اساس حجم
+    sort_order = "ORDER BY days ASC, gb ASC"
     if only_visible:
-        cur.execute("SELECT * FROM plans WHERE is_visible = 1 ORDER BY price ASC")
+        cur.execute(f"SELECT * FROM plans WHERE is_visible = 1 {sort_order}")
     else:
-        cur.execute("SELECT * FROM plans ORDER BY price ASC")
+        cur.execute(f"SELECT * FROM plans {sort_order}")
     return [dict(r) for r in cur.fetchall()]
 
 def update_plan(plan_id: int, data: dict):
@@ -575,8 +577,6 @@ def get_user_sales_history(user_id: int) -> list:
     cur = conn.cursor()
     cur.execute(query, (user_id,))
     return [dict(r) for r in cur.fetchall()]
-
-# ===== New / Updated functions =====
 
 def get_service_by_name(user_id: int, name: str) -> dict | None:
     conn = _connect_db()
