@@ -3,12 +3,13 @@
 import logging
 import random
 import inspect
+import httpx
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 
 import database as db
 import hiddify_api
-from config import SUB_DOMAINS, PANEL_DOMAIN, SUB_PATH, ADMIN_PATH
+from config import SUB_DOMAINS, PANEL_DOMAIN, SUB_PATH, ADMIN_PATH, API_KEY
 from bot.constants import GET_CUSTOM_NAME, CMD_CANCEL, CMD_SKIP
 from bot.handlers import user_services as us_h
 
@@ -31,18 +32,14 @@ def _build_default_sub_link(sub_uuid: str, config_name: str) -> str:
     return f"{base_link}/{default_link_type}/?name={config_name.replace(' ', '_')}"
 
 def _build_note_for_user(user_id: int, username: str | None) -> str:
-    # اگر می‌خوای فقط آی‌دی ذخیره بشه، این خط رو نگه دار:
+    # اگر فقط آی‌دی می‌خواهی:
     # return f"tg_id:{user_id}"
-    # آی‌دی + یوزرنیم (اگر وجود داشته باشد):
     if username:
         u = username.lstrip('@')
         return f"tg:@{u} id:{user_id}"
     return f"tg:id:{user_id}"
 
 async def _get_panel_user_id(sub_uuid: str) -> int | None:
-    """
-    تلاش برای دریافت شناسه کاربر پنل از get_user_info
-    """
     try:
         info = await hiddify_api.get_user_info(sub_uuid)
         if isinstance(info, dict):
@@ -63,10 +60,52 @@ async def _call_api(fn, *args, **kwargs):
         logger.debug("API call %s failed: %s", getattr(fn, '__name__', fn), e)
         return False
 
+async def _set_user_note_http_fallback(panel_user_id: int, note: str) -> bool:
+    """
+    تلاش مستقیم با HTTP روی API پنل:
+    - مسیرهای احتمالی: /api/v1/users/{id}, /api/users/{id}, /api/user/{id}
+    - متدهای PATCH/PUT
+    - هدرهای Authorization/X-API-Key
+    - کلیدهای note/description/comment/telegram/telegram_id
+    """
+    base = f"https://{PANEL_DOMAIN}/{ADMIN_PATH}".strip().rstrip('/')
+    api_base_candidates = [f"{base}/api/v1", f"{base}/api", base]  # ترتیب تست
+
+    headers_candidates = [
+        {"Authorization": f"Bearer {API_KEY}"},
+        {"X-API-Key": API_KEY},
+    ]
+    methods = ("PATCH", "PUT")
+    body_keys = ("note", "description", "comment", "telegram", "telegram_id")
+    path_templates = ("/users/{id}", "/user/{id}")
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        for api_base in api_base_candidates:
+            for path_tpl in path_templates:
+                url = f"{api_base}{path_tpl.format(id=panel_user_id)}"
+                for hdr in headers_candidates:
+                    for method in methods:
+                        for key in body_keys:
+                            data = {key: note}
+                            try:
+                                r = await client.request(method, url, json=data, headers=hdr, verify=True)
+                                if 200 <= r.status_code < 300:
+                                    logger.info("HTTP note set OK via %s %s with key=%s", method, url, key)
+                                    return True
+                                else:
+                                    logger.debug("HTTP note attempt %s %s (%s) -> %s %s",
+                                                 method, url, key, r.status_code, r.text[:200])
+                            except Exception as e:
+                                logger.debug("HTTP note attempt failed: %s %s (%s): %s", method, url, key, e)
+
+    logger.warning("HTTP fallback failed to set note for panel_user_id=%s", panel_user_id)
+    return False
+
 async def _set_user_note_compat(sub_uuid: str, note: str):
     """
-    بعد از ساخت، تلاش برای ثبت Note روی کاربر/سرویس در پنل (سازگار با چند امضا).
-    هم با uuid و هم با panel_user_id (اگر موجود باشد) تست می‌کند.
+    بعد از ساخت، تلاش برای ثبت Note:
+    - ابتدا از hiddify_api با امضاهای مختلف (uuid و id)
+    - در صورت شکست، تلاش مستقیم HTTP روی پنل
     """
     panel_user_id = await _get_panel_user_id(sub_uuid)
 
@@ -96,7 +135,7 @@ async def _set_user_note_compat(sub_uuid: str, note: str):
     if hasattr(hiddify_api, "set_comment"):
         attempts.append((hiddify_api.set_comment, (), {"uuid": sub_uuid, "comment": note}))
 
-    # با panel_user_id (اگر شناسایی شد)
+    # با panel_user_id (اگر موجود باشد)
     if panel_user_id is not None:
         if hasattr(hiddify_api, "set_user_note"):
             attempts.append((hiddify_api.set_user_note, (), {"id": panel_user_id, "note": note}))
@@ -118,10 +157,17 @@ async def _set_user_note_compat(sub_uuid: str, note: str):
         if hasattr(hiddify_api, "set_comment"):
             attempts.append((hiddify_api.set_comment, (), {"id": panel_user_id, "comment": note}))
 
+    # اجرای تلاش‌ها
     for fn, args, kwargs in attempts:
         ok = await _call_api(fn, *args, **kwargs)
         if ok:
-            logger.info("Note set via %s with %s", getattr(fn, '__name__', fn), ("uuid" if "uuid" in kwargs else "id"))
+            logger.info("Note set via %s (%s)", getattr(fn, '__name__', fn), "uuid" if "uuid" in kwargs else "id")
+            return True
+
+    # HTTP fallback (اگر panel_user_id داشتیم)
+    if panel_user_id is not None:
+        http_ok = await _set_user_note_http_fallback(panel_user_id, note)
+        if http_ok:
             return True
 
     logger.warning("All note attempts failed for uuid=%s (panel_user_id=%s)", sub_uuid, panel_user_id)
@@ -194,7 +240,6 @@ async def _create_user_subscription_compat(user_id: int, name: str, days: int, g
 # ===== Public handlers =====
 
 async def buy_service_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Maintenance gate
     if _maint_on():
         await update.message.reply_text(_maint_msg())
         return
@@ -216,7 +261,6 @@ async def buy_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
-    # Maintenance gate (برای کلیک روی دکمه‌های قدیمی)
     if _maint_on():
         await q.answer(_maint_msg(), show_alert=True)
         return ConversationHandler.END
@@ -290,7 +334,6 @@ async def _process_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 
         svc = db.get_service_by_uuid(sub_uuid)
         if svc:
-            # نمایش مینیمال: فقط «لینک پیش‌فرض» + «سایر لینک‌ها»
             await us_h.send_service_details(
                 context=context,
                 chat_id=user_id,
