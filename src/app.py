@@ -99,7 +99,7 @@ def build_application():
             constants.PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_days_received)],
             constants.PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_gb_received)],
         },
-        fallbacks=[CommandHandler('cancel', admin_c.admin_conv_cancel)],
+        fallbacks=[CommandHandler('cancel', admin_plans.cancel_add_plan)],
         map_to_parent={ConversationHandler.END: constants.PLAN_MENU}
     )
 
@@ -111,7 +111,7 @@ def build_application():
             constants.EDIT_PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_days_received), CommandHandler('skip', admin_plans.skip_edit_plan_days)],
             constants.EDIT_PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_gb_received), CommandHandler('skip', admin_plans.skip_edit_plan_gb)],
         },
-        fallbacks=[CommandHandler('cancel', admin_c.admin_conv_cancel)],
+        fallbacks=[CommandHandler('cancel', admin_plans.cancel_edit_plan)],
         map_to_parent={constants.PLAN_MENU: constants.PLAN_MENU, ConversationHandler.END: constants.PLAN_MENU}
     )
 
@@ -165,7 +165,30 @@ def build_application():
                 broadcast_conv,
                 CallbackQueryHandler(admin_settings.back_to_admin_menu_cb, pattern="^admin_back_to_menu$"),
             ],
-            # ... سایر stateهای ادمین مثل قبل
+            constants.REPORTS_MENU: [
+                MessageHandler(filters.Regex('^📊 آمار کلی$'), admin_reports.show_stats_report),
+                MessageHandler(filters.Regex('^📈 گزارش فروش امروز$'), admin_reports.show_daily_report),
+                MessageHandler(filters.Regex('^📅 گزارش فروش ۷ روز اخیر$'), admin_reports.show_weekly_report),
+                MessageHandler(filters.Regex('^🏆 محبوب‌ترین پلن‌ها$'), admin_reports.show_popular_plans_report),
+                MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.back_to_admin_menu),
+            ],
+            constants.PLAN_MENU: [
+                add_plan_conv,
+                edit_plan_conv,
+                MessageHandler(filters.Regex('^📋 لیست پلن‌ها$'), admin_plans.list_plans_admin),
+                MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.back_to_admin_menu),
+                CallbackQueryHandler(admin_plans.admin_delete_plan_callback, pattern="^admin_delete_plan_"),
+                CallbackQueryHandler(admin_plans.admin_toggle_plan_visibility_callback, pattern="^admin_toggle_plan_"),
+            ],
+            constants.MANAGE_USER_ID: [
+                MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.back_to_admin_menu),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_users.manage_user_id_received)
+            ],
+            constants.MANAGE_USER_ACTION: [
+                MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.back_to_admin_menu),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_users.manage_user_action_handler)
+            ],
+            constants.MANAGE_USER_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_users.manage_user_amount_received)],
         },
         fallbacks=[
             MessageHandler(filters.Regex(f'^{constants.BTN_EXIT_ADMIN_PANEL}$'), admin_c.exit_admin_panel),
@@ -217,7 +240,6 @@ def build_application():
     application.add_handler(MessageHandler(filters.Regex('^🛍️ خرید سرویس$'), buy_h.buy_service_list), group=3)
     application.add_handler(MessageHandler(filters.Regex('^📋 سرویس‌های من$'), us_h.list_my_services), group=3)
     application.add_handler(MessageHandler(filters.Regex('^👤 اطلاعات حساب کاربری$'), start_h.show_account_info), group=3)
-    application.add_handler(MessageHandler(filters.Regex('^💰 موجودی و شارژ$'), start_h.show_account_info), group=3) # Legacy compatibility
     application.add_handler(MessageHandler(filters.Regex('^📞 پشتیبانی$'), start_h.show_support), group=3)
     application.add_handler(MessageHandler(filters.Regex('^📚 راهنمای اتصال$'), start_h.show_guide), group=3)
     application.add_handler(MessageHandler(filters.Regex('^🧪 دریافت سرویس تست رایگان$'), trial_get_trial_service), group=3)
