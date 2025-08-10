@@ -162,9 +162,12 @@ def build_application():
                 MessageHandler(filters.Regex('^🎁 مدیریت کد هدیه$'), admin_gift.gift_code_management_menu),
                 MessageHandler(filters.Regex('^📋 لیست کدهای هدیه$'), admin_gift.list_gift_codes),
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.back_to_admin_menu),
+                # زیرکانورسیشن‌ها
                 create_gift_conv,
                 settings_conv,
                 broadcast_conv,
+                # برگشت از تنظیمات به منوی ادمین (دکمه اینلاین)
+                CallbackQueryHandler(admin_settings.back_to_admin_menu_cb, pattern="^admin_back_to_menu$"),
             ],
             constants.REPORTS_MENU: [
                 MessageHandler(filters.Regex('^📊 آمار کلی$'), admin_reports.show_stats_report),
@@ -217,7 +220,7 @@ def build_application():
     application.add_handler(buy_conv)
     application.add_handler(admin_conv)
 
-    # Admin callbacks
+    # Admin callbacks (global)
     application.add_handler(CallbackQueryHandler(admin_users.admin_confirm_charge_callback, pattern="^admin_confirm_charge_"))
     application.add_handler(CallbackQueryHandler(admin_users.admin_reject_charge_callback, pattern="^admin_reject_charge_"))
     application.add_handler(CallbackQueryHandler(admin_settings.edit_default_link_start, pattern="^edit_default_link_type$"))
