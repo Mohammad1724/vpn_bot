@@ -7,6 +7,9 @@ SERVICE_NAME="vpn_bot"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 CONF_FILE="/etc/vpn_bot.conf"
 
+# Default repo (won't ask during install)
+DEFAULT_GITHUB_REPO="https://github.com/Mohammad1724/vpn_bot.git"
+
 print_color() {
   local COLOR="$1"; shift
   local TEXT="$*"
@@ -45,6 +48,10 @@ load_conf() {
     INSTALL_DIR="$(grep -E '^WorkingDirectory=' "$SERVICE_FILE" | sed 's/^WorkingDirectory=//')"
     INSTALL_DIR="${INSTALL_DIR%/src}"
   fi
+  # Fallback to default repo if not set
+  if [ -z "${GITHUB_REPO:-}" ]; then
+    GITHUB_REPO="$DEFAULT_GITHUB_REPO"
+  fi
 }
 
 save_conf() {
@@ -58,9 +65,13 @@ EOF
 }
 
 create_system_user() {
+  # ensure group exists
+  if ! getent group vpn-bot >/dev/null 2>&1; then
+    groupadd --system vpn-bot || true
+  fi
   if ! id -u vpn-bot >/dev/null 2>&1; then
     print_color yellow "Creating system user 'vpn-bot'..."
-    useradd --system --home "${INSTALL_DIR}" --shell /usr/sbin/nologin vpn-bot
+    useradd --system --home "${INSTALL_DIR}" --shell /usr/sbin/nologin --gid vpn-bot vpn-bot
   fi
 }
 
@@ -99,10 +110,12 @@ deactivate_venv() {
 }
 
 ensure_install_dir_vars() {
-  local DEFAULT_GITHUB_REPO="https://github.com/Mohammad1724/vpn_bot.git"
+  # Don't ask for repo anymore; use default
+  GITHUB_REPO="$DEFAULT_GITHUB_REPO"
+  print_color yellow "Using repository: ${GITHUB_REPO}"
+
+  # Still ask install dir (can auto-accept default)
   local DEFAULT_INSTALL_DIR="/opt/vpn-bot"
-  read -rp "GitHub repository URL [${DEFAULT_GITHUB_REPO}]: " GITHUB_REPO_INPUT
-  GITHUB_REPO="${GITHUB_REPO_INPUT:-$DEFAULT_GITHUB_REPO}"
   read -rp "Installation directory [${DEFAULT_INSTALL_DIR}]: " INSTALL_DIR_INPUT
   INSTALL_DIR="${INSTALL_DIR_INPUT:-$DEFAULT_INSTALL_DIR}"
 }
@@ -334,12 +347,13 @@ follow_bot_log() {
   ensure_root
   load_conf
   local LOG_FILE="${INSTALL_DIR:-/opt/vpn-bot}/src/bot.log"
+  print_color yellow "Attempting to tail bot.log (last 200 lines, live)..."
   if [ -f "$LOG_FILE" ]; then
-    print_color yellow "Tailing bot.log (last 200 lines, live). Ctrl+C to exit."
     tail -n 200 -f "$LOG_FILE"
   else
     print_color red "bot.log not found at: $LOG_FILE"
-    print_color yellow "Use the Journalctl option instead."
+    print_color yellow "Falling back to journalctl -u ${SERVICE_NAME} (last 200 lines, live)."
+    journalctl -u "${SERVICE_NAME}" -n 200 -f
   fi
 }
 
@@ -386,7 +400,7 @@ show_menu() {
   echo "3) Restart"
   echo "4) Status"
   echo "5) Journalctl (live logs)"
-  echo "6) bot.log"
+  echo "6) bot.log (fallback to journalctl)"
   echo "7) Uninstall"
   echo "0) Exit"
   echo
