@@ -1,10 +1,13 @@
 # -*- coding: utf-8 -*-
 
 from functools import wraps
+import logging
 from telegram.ext import ContextTypes
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ChatMemberStatus
 import database as db
+
+logger = logging.getLogger(__name__)
 
 def check_channel_membership(func):
     """
@@ -29,8 +32,8 @@ def check_channel_membership(func):
                 member = await context.bot.get_chat_member(chat_id=channel_id, user_id=user_id)
                 if member.status not in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]:
                     not_joined_channels.append(channel_id)
-            except Exception:
-                # اگر ربات در کانال ادمین نبود یا خطای دیگری رخ داد
+            except Exception as e:
+                logger.warning(f"Could not check membership for user {user_id} in channel {channel_id}: {e}")
                 not_joined_channels.append(channel_id)
 
         if not not_joined_channels:
@@ -45,17 +48,15 @@ def check_channel_membership(func):
                     if chat.invite_link:
                         keyboard.append([InlineKeyboardButton(f"📢 عضویت در کانال {chat.title}", url=chat.invite_link)])
                 except Exception:
-                    # اگر نتوانستیم لینک بسازیم، از کاربر می‌خواهیم خودش جستجو کند
                     keyboard.append([InlineKeyboardButton(f"📢 عضویت در کانال ({channel_id})", url=f"https://t.me/c/{str(channel_id).replace('-100', '')}")])
             
-            # callback_data را به 'check_membership' تغییر می‌دهیم
             keyboard.append([InlineKeyboardButton("✅ بررسی عضویت", callback_data="check_membership")])
             
             text = "لطفاً برای استفاده از ربات، ابتدا در کانال(های) زیر عضو شوید و سپس دکمه «بررسی عضویت» را بزنید:"
             
             if update.callback_query:
                 await update.callback_query.answer("شما هنوز عضو کانال نشده‌اید.", show_alert=True)
-                try: # سعی کن پیام را ویرایش کنی، اگر نشد پیام جدید بفرست
+                try:
                     await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
                 except Exception:
                     await context.bot.send_message(user_id, text, reply_markup=InlineKeyboardMarkup(keyboard))
