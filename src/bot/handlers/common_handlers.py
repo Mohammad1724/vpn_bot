@@ -6,15 +6,23 @@ from telegram.ext import ContextTypes
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ChatMemberStatus
 import database as db
+from config import ADMIN_ID
 
 logger = logging.getLogger(__name__)
 
 def check_channel_membership(func):
     """
     یک دکوراتور که قبل از اجرای تابع، عضویت کاربر در کانال‌های اجباری را چک می‌کند.
+    ادمین‌ها از این چک معاف هستند.
     """
     @wraps(func)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        user_id = update.effective_user.id
+        
+        # اگر کاربر ادمین است، از چک عبور کن
+        if user_id == ADMIN_ID:
+            return await func(update, context, *args, **kwargs)
+
         is_enabled = str(db.get_setting("force_channel_enabled") or "0").lower() in ("1", "true", "on")
         if not is_enabled:
             return await func(update, context, *args, **kwargs)
@@ -23,14 +31,12 @@ def check_channel_membership(func):
         if not channel_ids_str:
             return await func(update, context, *args, **kwargs)
 
-        user_id = update.effective_user.id
         channel_ids = [int(cid.strip()) for cid in channel_ids_str.split(',') if cid.strip()]
         
         not_joined_channels = []
         for channel_id in channel_ids:
             try:
                 member = await context.bot.get_chat_member(chat_id=channel_id, user_id=user_id)
-                # CREATOR حذف شد تا با نسخه‌های قدیمی‌تر سازگار باشد
                 if member.status not in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR]:
                     not_joined_channels.append(channel_id)
             except Exception as e:
