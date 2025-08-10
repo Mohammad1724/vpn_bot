@@ -16,8 +16,12 @@ def _get_api_headers() -> dict:
     return { "Hiddify-API-Key": API_KEY, "Content-Type": "application/json", "Accept": "application/json" }
 
 async def _make_client(timeout: float = 20.0) -> httpx.AsyncClient:
-    # HTTP/2 را غیرفعال می‌کنیم
-    return httpx.AsyncClient(timeout=timeout, http2=False)
+    try:
+        import h2
+        http2_support = True
+    except ImportError:
+        http2_support = False
+    return httpx.AsyncClient(timeout=timeout, http2=http2_support)
 
 async def create_hiddify_user(plan_days: int, plan_gb: int, user_telegram_id: str, custom_name: str = "") -> dict | None:
     endpoint = _get_base_url() + "user/"
@@ -30,7 +34,7 @@ async def create_hiddify_user(plan_days: int, plan_gb: int, user_telegram_id: st
         "name": unique_user_name,
         "package_days": int(plan_days),
         "usage_limit_GB": int(plan_gb),
-        "comment": user_telegram_id  # ← آیدی تلگرام در comment
+        "comment": user_telegram_id
     }
 
     try:
@@ -87,10 +91,14 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: int) 
         return None
 
 async def delete_user_from_panel(user_uuid: str) -> bool:
+    """
+    کاربر را از پنل هیدیفای (API v2) حذف می‌کند.
+    """
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
     try:
         async with await _make_client(timeout=15.0) as client:
             resp = await client.delete(endpoint, headers=_get_api_headers())
+            # اگر کاربر از قبل حذف شده بود (404)، آن را موفقیت در نظر می‌گیریم.
             if 200 <= resp.status_code < 300 or resp.status_code == 404:
                 logger.info(f"Successfully deleted/not-found user {user_uuid} from panel.")
                 return True
