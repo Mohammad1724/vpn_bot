@@ -2,9 +2,9 @@
 
 import logging
 from telegram.ext import ContextTypes, ConversationHandler
-from telegram import Update
-from bot.keyboards import get_main_menu_keyboard, get_admin_menu_keyboard
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 import database as db
+from bot.keyboards import get_main_menu_keyboard, get_admin_menu_keyboard
 from bot.constants import ADMIN_MENU
 from config import SUPPORT_USERNAME, REFERRAL_BONUS_AMOUNT
 
@@ -14,7 +14,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db.get_or_create_user(user.id, user.username)
 
-    # Referral handling: /start ref_<user_id>
     if context.args and context.args[0].startswith('ref_'):
         try:
             referrer_id = int(context.args[0].split('_')[1])
@@ -25,12 +24,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_info = db.get_user(user.id)
     if user_info and user_info.get('is_banned'):
-        if update.message:
-            await update.message.reply_text("شما از استفاده از این ربات منع شده‌اید.")
+        await update.message.reply_text("شما از استفاده از این ربات منع شده‌اید.")
         return ConversationHandler.END
 
-    if update.message:
-        await update.message.reply_text("👋 به ربات فروش VPN خوش آمدید!", reply_markup=get_main_menu_keyboard(user.id))
+    await update.message.reply_text("👋 به ربات خوش آمدید!", reply_markup=get_main_menu_keyboard(user.id))
     return ConversationHandler.END
 
 async def user_generic_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -48,13 +45,18 @@ async def admin_conv_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("عملیات لغو شد.", reply_markup=get_admin_menu_keyboard())
     return ConversationHandler.END
 
-async def show_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = db.get_or_create_user(update.effective_user.id)
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-    keyboard = [[InlineKeyboardButton("💳 شارژ حساب", callback_data="user_start_charge")]]
+async def show_account_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user = db.get_or_create_user(user_id)
+    kb = [[InlineKeyboardButton("💳 شارژ حساب", callback_data="user_start_charge")]]
+    text = (
+        f"👤 **اطلاعات حساب شما**\n\n"
+        f"▫️ شناسه عددی: `{user_id}`\n"
+        f"▫️ موجودی کیف پول: **{user['balance']:.0f} تومان**"
+    )
     await update.message.reply_text(
-        f"💰 موجودی فعلی شما: **{user['balance']:.0f}** تومان",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        text,
+        reply_markup=InlineKeyboardMarkup(kb),
         parse_mode="Markdown"
     )
 
@@ -70,7 +72,7 @@ async def show_guide(update: Update, context: ContextTypes.DEFAULT_TYPE):
         guide = (
             "📚 راهنمای اتصال\n\n"
             "1) اپ مناسب (V2Ray/Clash/SingBox) را نصب کنید.\n"
-            "2) بعد از خرید، روی «⚡ دریافت لینک پیش‌فرض» بزنید.\n"
+            "2) از ربات «⚡ دریافت لینک پیش‌فرض» را بگیرید.\n"
             "3) لینک را در اپ وارد کنید و متصل شوید.\n"
             "سؤال داشتید؟ از «📞 پشتیبانی» بپرسید."
         )
