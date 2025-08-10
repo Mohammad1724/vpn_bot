@@ -30,7 +30,8 @@ def check_channel_membership(func):
         for channel_id in channel_ids:
             try:
                 member = await context.bot.get_chat_member(chat_id=channel_id, user_id=user_id)
-                if member.status not in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]:
+                # CREATOR حذف شد تا با نسخه‌های قدیمی‌تر سازگار باشد
+                if member.status not in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR]:
                     not_joined_channels.append(channel_id)
             except Exception as e:
                 logger.warning(f"Could not check membership for user {user_id} in channel {channel_id}: {e}")
