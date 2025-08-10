@@ -12,7 +12,7 @@ import database as db
 import hiddify_api
 from config import SUB_DOMAINS, PANEL_DOMAIN, SUB_PATH, ADMIN_PATH
 from bot.keyboards import get_main_menu_keyboard
-from bot.utils import get_service_status
+from bot.utils import get_service_status  # ← استفاده از فایل شما
 
 logger = logging.getLogger(__name__)
 
