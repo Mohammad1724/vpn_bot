@@ -279,25 +279,28 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
 
     if data.startswith("delete_service_confirm_"):
         try:
+            await q.edit_message_text("در حال حذف سرویس از پنل... ⏳")
+
+            # 1. حذف از پنل هیدیفای
+            success_on_panel = await hiddify_api.delete_user_from_panel(service['sub_uuid'])
+            if not success_on_panel:
+                await q.edit_message_text("❌ حذف سرویس از پنل با خطا مواجه شد. لطفاً به پشتیبانی اطلاع دهید.")
+                return
+
+            # 2. اگر موفق بود، از دیتابیس ربات حذف کن
             db.delete_service(service_id)
+
+            await q.edit_message_text("✅ سرویس با موفقیت از پنل و ربات حذف شد.")
         except Exception as e:
             logger.error("Delete service %s failed: %s", service_id, e, exc_info=True)
             try:
-                await q.edit_message_text("❌ حذف سرویس انجام نشد. لطفاً بعداً دوباره تلاش کنید.")
+                await q.edit_message_text("❌ حذف سرویس با خطای ناشناخته مواجه شد.")
             except Exception:
                 pass
             return
 
-        try:
-            await q.message.delete()
-        except Exception:
-            try:
-                await q.edit_message_reply_markup(reply_markup=None)
-            except Exception:
-                pass
-
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت به سرویس‌ها", callback_data="back_to_services")]])
-        await context.bot.send_message(chat_id=q.from_user.id, text="✅ سرویس با موفقیت حذف شد.", reply_markup=kb)
+        await context.bot.send_message(chat_id=q.from_user.id, text="عملیات حذف کامل شد.", reply_markup=kb)
         return
 
     if data.startswith("delete_service_cancel_"):
@@ -317,7 +320,7 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
         if getattr(q.message, "photo", None):
             await q.edit_message_reply_markup(reply_markup=confirm_kb)
         else:
-            await q.edit_message_text("آیا از حذف این سرویس مطمئن هستید؟ این عمل قابل بازگشت نیست.", reply_markup=confirm_kb)
+            await q.edit_message_text("آیا از حذف این سرویس مطمئن هستید؟ این عمل سرویس را از پنل اصلی نیز حذف می‌کند و قابل بازگشت نیست.", reply_markup=confirm_kb)
     except Exception:
         await context.bot.send_message(
             chat_id=q.from_user.id,
@@ -398,8 +401,7 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
     new_info = await hiddify_api.renew_user_subscription(
         user_uuid=service['sub_uuid'],
         plan_days=plan['days'],
-        plan_gb=plan['gb'],
-        device_limit=0
+        plan_gb=plan['gb']
     )
 
     if new_info:
