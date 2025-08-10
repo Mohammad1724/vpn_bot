@@ -1,13 +1,11 @@
 #!/bin/bash
-# Menu-based installer/manager for vpn_bot (English-only output)
+# Menu-based installer/manager for vpn_bot
 
 set -Eeuo pipefail
 
 SERVICE_NAME="vpn_bot"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 CONF_FILE="/etc/vpn_bot.conf"
-
-# Default repo (won't ask during install)
 DEFAULT_GITHUB_REPO="https://github.com/Mohammad1724/vpn_bot.git"
 
 print_color() {
@@ -48,10 +46,7 @@ load_conf() {
     INSTALL_DIR="$(grep -E '^WorkingDirectory=' "$SERVICE_FILE" | sed 's/^WorkingDirectory=//')"
     INSTALL_DIR="${INSTALL_DIR%/src}"
   fi
-  # Fallback to default repo if not set
-  if [ -z "${GITHUB_REPO:-}" ]; then
-    GITHUB_REPO="$DEFAULT_GITHUB_REPO"
-  fi
+  GITHUB_REPO="${GITHUB_REPO:-$DEFAULT_GITHUB_REPO}"
 }
 
 save_conf() {
@@ -65,7 +60,6 @@ EOF
 }
 
 create_system_user() {
-  # ensure group exists
   if ! getent group vpn-bot >/dev/null 2>&1; then
     groupadd --system vpn-bot || true
   fi
@@ -90,8 +84,6 @@ ExecStart=${INSTALL_DIR}/venv/bin/python main_bot.py
 Restart=always
 RestartSec=10
 Environment=PYTHONUNBUFFERED=1
-StandardOutput=journal
-StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
@@ -110,11 +102,8 @@ deactivate_venv() {
 }
 
 ensure_install_dir_vars() {
-  # Don't ask for repo anymore; use default
   GITHUB_REPO="$DEFAULT_GITHUB_REPO"
   print_color yellow "Using repository: ${GITHUB_REPO}"
-
-  # Still ask install dir (can auto-accept default)
   local DEFAULT_INSTALL_DIR="/opt/vpn-bot"
   read -rp "Installation directory [${DEFAULT_INSTALL_DIR}]: " INSTALL_DIR_INPUT
   INSTALL_DIR="${INSTALL_DIR_INPUT:-$DEFAULT_INSTALL_DIR}"
@@ -275,6 +264,8 @@ install_or_reinstall() {
     configure_config_py
   fi
 
+  # Create log file and set permissions
+  touch "${INSTALL_DIR}/src/bot.log"
   create_system_user
   chown -R vpn-bot:vpn-bot "${INSTALL_DIR}"
 
@@ -318,6 +309,10 @@ update_bot() {
   fi
   deactivate_venv
 
+  # Ensure log file exists and has correct permissions
+  touch "${INSTALL_DIR}/src/bot.log"
+  chown vpn-bot:vpn-bot "${INSTALL_DIR}/src/bot.log"
+
   print_color yellow "Restarting service..."
   systemctl start "${SERVICE_NAME}"
 
@@ -347,13 +342,12 @@ follow_bot_log() {
   ensure_root
   load_conf
   local LOG_FILE="${INSTALL_DIR:-/opt/vpn-bot}/src/bot.log"
-  print_color yellow "Attempting to tail bot.log (last 200 lines, live)..."
   if [ -f "$LOG_FILE" ]; then
+    print_color yellow "Tailing bot.log (last 200 lines, live). Ctrl+C to exit."
     tail -n 200 -f "$LOG_FILE"
   else
     print_color red "bot.log not found at: $LOG_FILE"
-    print_color yellow "Falling back to journalctl -u ${SERVICE_NAME} (last 200 lines, live)."
-    journalctl -u "${SERVICE_NAME}" -n 200 -f
+    print_color yellow "Use the Journalctl option instead."
   fi
 }
 
@@ -400,7 +394,7 @@ show_menu() {
   echo "3) Restart"
   echo "4) Status"
   echo "5) Journalctl (live logs)"
-  echo "6) bot.log (fallback to journalctl)"
+  echo "6) bot.log (file logs)"
   echo "7) Uninstall"
   echo "0) Exit"
   echo
