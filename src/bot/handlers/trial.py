@@ -18,7 +18,6 @@ def _build_note_for_user(user_id: int, username: str | None) -> str:
         return f"tg:@{u}|id:{user_id}"
     return f"tg:id:{user_id}"
 
-
 async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
@@ -42,13 +41,12 @@ async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
     loading = await update.message.reply_text("⏳ در حال ایجاد سرویس تست شما...")
 
     try:
-        # device_limit=0 را پاس می‌دهیم
+        # پارامتر device_limit حذف شد
         provision = await hiddify_api.create_hiddify_user(
             plan_days=TRIAL_DAYS,
             plan_gb=TRIAL_GB,
-            device_limit=0,
-            user_telegram_id=user_id,
-            custom_name=panel_name
+            user_telegram_id=note,
+            custom_name="سرویس تست" # نام کوتاه‌تر برای پنل
         )
         if not provision or not provision.get("uuid"):
             raise RuntimeError("Provisioning failed or no uuid returned.")
@@ -60,7 +58,7 @@ async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_id=user_id,
             name="سرویس تست",  # نام کوتاه‌تر در ربات
             sub_uuid=sub_uuid,
-            sub_link="",  # لینک بعداً ساخته می‌شود
+            sub_link="",
             plan_id=None
         )
         db.set_user_trial_used(user_id)
