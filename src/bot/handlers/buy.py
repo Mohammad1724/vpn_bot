@@ -1,20 +1,17 @@
 # -*- coding: utf-8 -*-
 
 import logging
-import random
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 
 import database as db
 import hiddify_api
-from config import SUB_DOMAINS, PANEL_DOMAIN, SUB_PATH, ADMIN_PATH
 from bot.constants import GET_CUSTOM_NAME, CMD_CANCEL, CMD_SKIP
 from bot.handlers import user_services as us_h
 
 logger = logging.getLogger(__name__)
 
 # ===== Helpers =====
-
 def _maint_on() -> bool:
     val = db.get_setting("maintenance_enabled")
     return str(val).lower() in ("1", "true", "on", "yes")
@@ -22,42 +19,25 @@ def _maint_on() -> bool:
 def _maint_msg() -> str:
     return db.get_setting("maintenance_message") or "⛔️ ربات در حال بروزرسانی است. لطفاً کمی بعد مراجعه کنید."
 
-def _build_default_sub_link(sub_uuid: str, config_name: str) -> str:
-    default_link_type = db.get_setting('default_sub_link_type') or 'sub'
-    sub_path = SUB_PATH or ADMIN_PATH
-    sub_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
-    base_link = f"https://{sub_domain}/{sub_path}/{sub_uuid}"
-    return f"{base_link}/{default_link_type}/?name={config_name.replace(' ', '_')}"
-
-def _build_note_for_user(user_id: int, username: str | None) -> str:
-    if username:
-        u = username.lstrip('@')
-        return f"tg:@{u}|id:{user_id}"
-    return f"tg:id:{user_id}"
-
 # ===== Public handlers =====
 async def buy_service_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if _maint_on():
         await update.message.reply_text(_maint_msg())
         return
-
     plans = db.list_plans(only_visible=True)
     if not plans:
         await update.message.reply_text("در حال حاضر پلنی برای خرید موجود نیست.")
         return
-
     text = "🛍️ لطفاً یکی از پلن‌های زیر را برای خرید انتخاب کنید:"
     kb = []
     for p in plans:
         title = f"{p['name']} | {p['price']:.0f} تومان | {p['days']} روز | {p['gb']} گیگ"
         kb.append([InlineKeyboardButton(title, callback_data=f"user_buy_{p['plan_id']}")])
-
     await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
 async def buy_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-
     if _maint_on():
         await q.answer(_maint_msg(), show_alert=True)
         return ConversationHandler.END
@@ -91,14 +71,16 @@ async def get_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not name:
         await update.message.reply_text("لطفاً یک نام معتبر وارد کنید یا /skip بزنید.")
         return GET_CUSTOM_NAME
+    if db.get_service_by_name(update.effective_user.id, name):
+        await update.message.reply_text("⚠️ شما قبلاً سرویسی با این نام داشته‌اید. لطفاً نام دیگری انتخاب کنید.")
+        return GET_CUSTOM_NAME
     return await _process_purchase(update, context, custom_name=name)
 
 async def skip_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await _process_purchase(update, context, custom_name="سرویس من")
+    return await _process_purchase(update, context, custom_name="")
 
 async def _process_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE, custom_name: str):
     user_id = update.effective_user.id
-    username = update.effective_user.username
     plan_id = context.user_data.get('buy_plan_id')
     plan = db.get_plan(plan_id) if plan_id else None
 
@@ -119,25 +101,21 @@ async def _process_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     try:
         await update.message.reply_text("⏳ در حال ایجاد سرویس شما...")
 
-        # Note را به نام سرویس اضافه می‌کنیم
-        note = _build_note_for_user(user_id, username)
-        panel_name = f"{custom_name} | {note}"
+        final_name = custom_name or f"سرویس {plan['gb']} گیگ"
 
-        # device_limit را 0 می‌فرستیم چون حذف شده است
         provision = await hiddify_api.create_hiddify_user(
             plan_days=plan['days'],
             plan_gb=plan['gb'],
             device_limit=0,
             user_telegram_id=user_id,
-            custom_name=panel_name
+            custom_name=final_name
         )
         if not provision or not provision.get("uuid"):
             raise RuntimeError("Provisioning failed or no uuid returned.")
 
         sub_uuid = provision["uuid"]
-        sub_link = _build_default_sub_link(sub_uuid, custom_name)
-
-        db.finalize_purchase_transaction(txn_id, sub_uuid, sub_link, custom_name)
+        sub_link = ""  # لینک در send_service_details ساخته می‌شود
+        db.finalize_purchase_transaction(txn_id, sub_uuid, sub_link, final_name)
 
         svc = db.get_service_by_uuid(sub_uuid)
         if svc:
@@ -145,8 +123,6 @@ async def _process_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE, 
                 context=context,
                 chat_id=user_id,
                 service_id=svc['service_id'],
-                original_message=None,
-                is_from_menu=False,
                 minimal=True
             )
         else:
