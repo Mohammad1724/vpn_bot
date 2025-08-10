@@ -9,7 +9,6 @@ from bot.keyboards import get_main_menu_keyboard, get_admin_menu_keyboard
 from bot.constants import ADMIN_MENU
 from config import SUPPORT_USERNAME, REFERRAL_BONUS_AMOUNT
 
-# jdatetime را نصب کن: pip install jdatetime
 try:
     import jdatetime
 except ImportError:
@@ -31,12 +30,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_info = db.get_user(user.id)
     if user_info and user_info.get('is_banned'):
-        if update.message:
-            await update.message.reply_text("شما از استفاده از این ربات منع شده‌اید.")
+        await update.message.reply_text("شما از استفاده از این ربات منع شده‌اید.")
         return ConversationHandler.END
 
-    if update.message:
-        await update.message.reply_text("👋 به ربات خوش آمدید!", reply_markup=get_main_menu_keyboard(user.id))
+    await update.message.reply_text("👋 به ربات خوش آمدید!", reply_markup=get_main_menu_keyboard(user.id))
     return ConversationHandler.END
 
 async def user_generic_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -97,6 +94,7 @@ async def show_account_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
+
 async def show_purchase_history_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -112,6 +110,7 @@ async def show_purchase_history_callback(update: Update, context: ContextTypes.D
 
     kb = [[InlineKeyboardButton("🔙 بازگشت", callback_data="acc_back_to_main")]]
     await q.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
 
 async def show_charge_history_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -129,12 +128,14 @@ async def show_charge_history_callback(update: Update, context: ContextTypes.DEF
     kb = [[InlineKeyboardButton("🔙 بازگشت", callback_data="acc_back_to_main")]]
     await q.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
+
 async def show_charging_guide_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     guide = db.get_setting("payment_instruction_text") or "راهنمایی ثبت نشده است."
     kb = [[InlineKeyboardButton("🔙 بازگشت", callback_data="acc_back_to_main")]]
     await q.edit_message_text(guide, reply_markup=InlineKeyboardMarkup(kb))
+
 
 async def show_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if SUPPORT_USERNAME:
