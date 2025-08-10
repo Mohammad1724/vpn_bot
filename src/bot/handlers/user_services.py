@@ -5,6 +5,7 @@ import random
 import qrcode
 import logging
 import httpx
+import inspect
 from telegram.ext import ContextTypes
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Message, InputFile
 from telegram.error import BadRequest
@@ -18,14 +19,31 @@ logger = logging.getLogger(__name__)
 
 # ===== Helper: renew API compatibility (with/without device_limit) =====
 async def _renew_user_subscription_compat(sub_uuid: str, days: int, gb: int):
-    import inspect
     fn = hiddify_api.renew_user_subscription
     params = inspect.signature(fn).parameters
     if "device_limit" in params:
         return await fn(sub_uuid, days, gb, None)  # device_limit حذف شده → None پاس بده
     return await fn(sub_uuid, days, gb)
 
-# ===== لیست سرویس‌ها =====
+def _normalize_link_type(t: str) -> str:
+    t = (t or "sub").strip().lower()
+    t = t.replace("clash-meta", "clashmeta")
+    return t
+
+def _link_label(link_type: str) -> str:
+    lt = _normalize_link_type(link_type)
+    mapping = {
+        "sub": "V2Ray (sub)",
+        "auto": "هوشمند (Auto)",
+        "sub64": "Base64 (sub64)",
+        "singbox": "SingBox",
+        "xray": "Xray",
+        "clash": "Clash",
+        "clashmeta": "Clash Meta",
+    }
+    return mapping.get(lt, "V2Ray (sub)")
+
+# لیست سرویس‌ها
 async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     services = db.get_user_services(user_id)
@@ -42,7 +60,7 @@ async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# ===== نمایش جزئیات سرویس =====
+# نمایش جزئیات سرویس
 async def view_service_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -52,7 +70,7 @@ async def view_service_callback(update: Update, context: ContextTypes.DEFAULT_TY
     msg = await context.bot.send_message(chat_id=q.from_user.id, text="در حال دریافت اطلاعات سرویس... ⏳")
     await send_service_details(context, q.from_user.id, service_id, original_message=msg, is_from_menu=True)
 
-async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int, service_id: int, original_message=None, is_from_menu: bool = False):
+async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int, service_id: int, original_message=None, is_from_menu: bool = False, minimal: bool = False):
     service = db.get_service(service_id)
     if not service:
         text = "❌ سرویس مورد نظر یافت نشد."
@@ -75,44 +93,49 @@ async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
             return
 
         status, expiry_jalali, _ = get_service_status(info)
-        default_link_type = db.get_setting('default_sub_link_type') or 'sub'
-        sub_path = SUB_PATH or ADMIN_PATH
-        sub_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
-        base_link = f"https://{sub_domain}/{sub_path}/{service['sub_uuid']}"
-        config_name = info.get('name', 'config')
-        final_link = f"{base_link}/{default_link_type}/?name={config_name.replace(' ', '_')}"
-        img = qrcode.make(final_link)
-        bio = io.BytesIO(); bio.name = 'qrcode.png'; img.save(bio, 'PNG'); bio.seek(0)
 
         caption = (
             f"🏷️ نام سرویس: **{service['name']}**\n\n"
             f"📊 حجم مصرفی: **{info.get('current_usage_GB', 0):.2f} / {info.get('usage_limit_GB', 0):.0f}** گیگ\n"
             f"🗓️ تاریخ انقضا: **{expiry_jalali}**\n"
             f"🚦 وضعیت: {status}\n\n"
-            f"🔗 لینک اشتراک (پیش‌فرض):\n`{final_link}`"
+            f"برای دریافت لینک‌ها از دکمه‌های زیر استفاده کنید:"
         )
 
-        # ساخت کیبورد
-        keyboard = [[InlineKeyboardButton("🔄 به‌روزرسانی اطلاعات", callback_data=f"refresh_{service['service_id']}")]]
+        # فقط این دو دکمه در حالت minimal
+        keyboard_rows = []
+        default_link_type = _normalize_link_type(db.get_setting('default_sub_link_type') or 'sub')
 
-        # فیکس: اگر plan_id None بود یا پلن حذف شده بود، دکمه تمدید را نشان نده
-        plan_id = service.get('plan_id')
-        plan = db.get_plan(plan_id) if plan_id is not None else None
-        if plan:
-            keyboard.append([InlineKeyboardButton(f"⏳ تمدید سرویس ({plan['price']:.0f} تومان)", callback_data=f"renew_{service['service_id']}")])
+        keyboard_rows.append([
+            InlineKeyboardButton(
+                f"⚡ دریافت لینک { _link_label(default_link_type) }",
+                callback_data=f"getlink_{default_link_type}_{service['sub_uuid']}"
+            )
+        ])
 
-        keyboard.append([InlineKeyboardButton("🔗 دریافت لینک‌های بیشتر", callback_data=f"more_links_{service['sub_uuid']}")])
-        keyboard.append([InlineKeyboardButton("🗑️ حذف سرویس", callback_data=f"delete_service_{service['service_id']}")])
-        if is_from_menu:
-            keyboard.append([InlineKeyboardButton("⬅️ بازگشت به لیست سرویس‌ها", callback_data="back_to_services")])
+        keyboard_rows.append([
+            InlineKeyboardButton("🧩 سایر لینک‌ها", callback_data=f"more_links_{service['sub_uuid']}")
+        ])
+
+        if not minimal:
+            keyboard_rows.append([InlineKeyboardButton("🔄 به‌روزرسانی اطلاعات", callback_data=f"refresh_{service['service_id']}")])
+            plan_id = service.get('plan_id')
+            plan = db.get_plan(plan_id) if plan_id is not None else None
+            if plan:
+                keyboard_rows.append([InlineKeyboardButton(f"⏳ تمدید سرویس ({plan['price']:.0f} تومان)", callback_data=f"renew_{service['service_id']}")])
+            keyboard_rows.append([InlineKeyboardButton("🗑️ حذف سرویس", callback_data=f"delete_service_{service['service_id']}")])
+            if is_from_menu:
+                keyboard_rows.append([InlineKeyboardButton("⬅️ بازگشت به لیست سرویس‌ها", callback_data="back_to_services")])
 
         if original_message:
             try: await original_message.delete()
             except BadRequest: pass
 
-        await context.bot.send_photo(
-            chat_id=chat_id, photo=bio, caption=caption, parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=caption,
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard_rows)
         )
     except Exception as e:
         logger.error("send_service_details error for service_id %s: %s", service_id, e, exc_info=True)
@@ -123,7 +146,7 @@ async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
         else:
             await context.bot.send_message(chat_id=chat_id, text=text)
 
-# ===== لینک‌های بیشتر =====
+# لینک‌های بیشتر
 async def more_links_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -158,7 +181,7 @@ async def show_link_options_menu(message: Message, user_uuid: str, service_id: i
         if "message is not modified" not in str(e):
             logger.error("show_link_options_menu error: %s", e)
 
-# ===== تولید لینک‌ها و QR =====
+# تولید لینک‌ها و QR
 async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -181,7 +204,6 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 response = await client.get(full_config_link)
                 response.raise_for_status()
             configs_bytes = response.content
-            # ارسال به صورت فایل
             await q.message.delete()
             await context.bot.send_document(
                 chat_id=q.from_user.id,
@@ -216,7 +238,7 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=get_main_menu_keyboard(q.from_user.id)
     )
 
-# ===== به‌روزرسانی جزئیات =====
+# به‌روزرسانی جزئیات
 async def refresh_service_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -232,7 +254,7 @@ async def refresh_service_details(update: Update, context: ContextTypes.DEFAULT_
     else:
         await q.answer("خطا: این سرویس متعلق به شما نیست.", show_alert=True)
 
-# ===== بازگشت به لیست =====
+# بازگشت به لیست
 async def back_to_services_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -242,13 +264,12 @@ async def back_to_services_callback(update: Update, context: ContextTypes.DEFAUL
         pass
     await list_my_services(update, context)
 
-# ===== حذف سرویس (با تایید دو مرحله‌ای) =====
+# حذف سرویس (با تایید دو مرحله‌ای)
 async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    data = q.data  # delete_service_{id} | delete_service_confirm_{id} | delete_service_cancel_{id}
+    data = q.data
 
-    # استخراج شناسه
     try:
         service_id = int(data.split('_')[-1])
     except Exception:
@@ -266,7 +287,6 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
             pass
         return
 
-    # تایید حذف
     if data.startswith("delete_service_confirm_"):
         try:
             db.delete_service(service_id)
@@ -290,7 +310,6 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
         await context.bot.send_message(chat_id=q.from_user.id, text="✅ سرویس با موفقیت حذف شد.", reply_markup=kb)
         return
 
-    # لغو حذف → برگرداندن صفحه جزئیات
     if data.startswith("delete_service_cancel_"):
         try:
             await send_service_details(context, q.from_user.id, service_id, original_message=q.message, is_from_menu=True)
@@ -298,7 +317,6 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
             pass
         return
 
-    # مرحله درخواست اولیه → نمایش تایید
     confirm_kb = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("❌ انصراف", callback_data=f"delete_service_cancel_{service_id}"),
@@ -317,7 +335,7 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
             reply_markup=confirm_kb
         )
 
-# ===== تمدید (شروع → تایید/لغو) =====
+# تمدید (شروع → تایید/لغو)
 async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -387,8 +405,6 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
 
     service = db.get_service(service_id)
     plan = db.get_plan(plan_id)
-
-    # سازگار با API جدید/قدیم (با/بی device_limit)
     new_info = await _renew_user_subscription_compat(service['sub_uuid'], plan['days'], plan['gb'])
 
     if new_info:
@@ -403,6 +419,7 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
 
     context.user_data.clear()
 
+# لغو تمدید
 async def cancel_renewal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
