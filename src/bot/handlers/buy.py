@@ -2,10 +2,8 @@
 
 import logging
 import random
-import inspect
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, Message
-from telegram.error import BadRequest
 
 import database as db
 import hiddify_api
@@ -15,7 +13,13 @@ from bot.handlers import user_services as us_h
 
 logger = logging.getLogger(__name__)
 
-# ===== Helpers =====
+def _maint_on() -> bool:
+    val = db.get_setting("maintenance_enabled")
+    return str(val).lower() in ("1", "true", "on", "yes")
+
+def _maint_msg() -> str:
+    return db.get_setting("maintenance_message") or "⛔️ ربات در حال بروزرسانی است. لطفاً کمی بعد مراجعه کنید."
+
 def _build_default_sub_link(sub_uuid: str, config_name: str) -> str:
     default_link_type = db.get_setting('default_sub_link_type') or 'sub'
     sub_path = SUB_PATH or ADMIN_PATH
@@ -23,63 +27,44 @@ def _build_default_sub_link(sub_uuid: str, config_name: str) -> str:
     base_link = f"https://{sub_domain}/{sub_path}/{sub_uuid}"
     return f"{base_link}/{default_link_type}/?name={config_name.replace(' ', '_')}"
 
+# سازگاری با APIهای متفاوت
 async def _create_user_subscription_compat(user_id: int, name: str, days: int, gb: int) -> dict | None:
-    """
-    تلاش برای ساخت سرویس در پنل با توابع متداول hiddify_api.
-    خروجی نرمالایز شده: {'sub_uuid': '...'} یا None
-    """
-    candidates = []
-
     # 1) create_hiddify_user(days, gb, user_id, custom_name=...)
     if hasattr(hiddify_api, "create_hiddify_user"):
-        async def call_create_hiddify_user():
-            return await hiddify_api.create_hiddify_user(days, gb, user_id, custom_name=name)
-        candidates.append(("create_hiddify_user", call_create_hiddify_user))
-
-    # 2) create_user_subscription(name=..., days=..., gb=...)
-    if hasattr(hiddify_api, "create_user_subscription"):
-        async def call_cus_kw():
-            return await hiddify_api.create_user_subscription(name=name, days=days, gb=gb)
-        candidates.append(("create_user_subscription_kw", call_cus_kw))
-
-        async def call_cus_pos():
-            return await hiddify_api.create_user_subscription(days, gb, name)
-        candidates.append(("create_user_subscription_pos", call_cus_pos))
-
-    # 3) create_user(...)
-    if hasattr(hiddify_api, "create_user"):
-        async def call_cu_kw():
-            return await hiddify_api.create_user(name=name, days=days, gb=gb)
-        candidates.append(("create_user_kw", call_cu_kw))
-
-        async def call_cu_pos():
-            return await hiddify_api.create_user(days, gb, name)
-        candidates.append(("create_user_pos", call_cu_pos))
-
-    # 4) provision_user_subscription(...)
-    if hasattr(hiddify_api, "provision_user_subscription"):
-        async def call_prov():
-            return await hiddify_api.provision_user_subscription(name=name, days=days, gb=gb)
-        candidates.append(("provision_user_subscription", call_prov))
-
-    for tag, fn in candidates:
         try:
-            result = await fn()
-            if isinstance(result, dict):
-                if result.get("sub_uuid"):
-                    return {"sub_uuid": result["sub_uuid"]}
-                if result.get("uuid"):
-                    return {"sub_uuid": result["uuid"]}
-            if isinstance(result, str) and len(result) >= 8:
-                return {"sub_uuid": result}
+            res = await hiddify_api.create_hiddify_user(days, gb, user_id, custom_name=name)
+            if isinstance(res, dict) and (res.get("sub_uuid") or res.get("uuid")):
+                return {"sub_uuid": res.get("sub_uuid") or res.get("uuid")}
         except Exception as e:
-            logger.debug("Provision attempt %s failed: %s", tag, e)
-            continue
+            logger.debug("create_hiddify_user failed: %s", e)
 
+    # 2) سایر نام‌ها
+    for func_name, kwargs, pos in [
+        ("create_user_subscription", dict(name=name, days=days, gb=gb), None),
+        ("create_user_subscription", {}, (days, gb, name)),
+        ("create_user", dict(name=name, days=days, gb=gb), None),
+        ("create_user", {}, (days, gb, name)),
+        ("provision_user_subscription", dict(name=name, days=days, gb=gb), None),
+    ]:
+        if hasattr(hiddify_api, func_name):
+            try:
+                fn = getattr(hiddify_api, func_name)
+                res = await (fn(**kwargs) if not pos else fn(*pos))
+                if isinstance(res, dict) and res.get("sub_uuid"):
+                    return {"sub_uuid": res["sub_uuid"]}
+                if isinstance(res, str) and len(res) >= 8:
+                    return {"sub_uuid": res}
+            except Exception as e:
+                logger.debug("%s failed: %s", func_name, e)
+                continue
     return None
 
-# ===== Public handlers =====
 async def buy_service_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Maintenance gate
+    if _maint_on():
+        await update.message.reply_text(_maint_msg())
+        return
+
     plans = db.list_plans(only_visible=True)
     if not plans:
         await update.message.reply_text("در حال حاضر پلنی برای خرید موجود نیست.")
@@ -96,6 +81,11 @@ async def buy_service_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def buy_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
+
+    # Maintenance gate (برای کلیک روی دکمه‌های قدیمی)
+    if _maint_on():
+        await q.answer(_maint_msg(), show_alert=True)
+        return ConversationHandler.END
 
     try:
         plan_id = int(q.data.split('_')[-1])
@@ -170,7 +160,7 @@ async def _process_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE, 
                 service_id=svc['service_id'],
                 original_message=None,
                 is_from_menu=False,
-                minimal=True  # فقط دو دکمه
+                minimal=True
             )
         else:
             await update.message.reply_text("خرید انجام شد، اما نمایش سرویس با خطا مواجه شد. از «📋 سرویس‌های من» وارد شوید.")
