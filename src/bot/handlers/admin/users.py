@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import re
-import asyncio
+import logging
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.error import Forbidden, BadRequest
@@ -15,14 +15,10 @@ import database as db
 
 
 async def _send_user_panel(update: Update, target_id: int):
-    """
-    برای جلوگیری از تکرار کد، پنل کاربر را می‌سازد و می‌فرستد.
-    """
     info = db.get_user(target_id)
     if not info:
         await update.message.reply_text("کاربر یافت نشد.")
         return
-
     ban_text = "آزاد کردن کاربر" if info['is_banned'] else "مسدود کردن کاربر"
     keyboard = [["افزایش موجودی", "کاهش موجودی"], ["📜 سوابق خرید", ban_text], [BTN_BACK_TO_ADMIN_MENU]]
     text = (
@@ -109,7 +105,7 @@ async def manage_user_amount_received(update: Update, context: ContextTypes.DEFA
         db.update_balance(target, amount if is_add else -amount)
         await update.message.reply_text(f"✅ مبلغ {amount:.0f} تومان از حساب کاربر {'کسر' if not is_add else 'افزوده'} شد.")
 
-        # ارسال پیام به کاربر
+        # ارسال اطلاعیه به کاربر
         try:
             if is_add:
                 await context.bot.send_message(
