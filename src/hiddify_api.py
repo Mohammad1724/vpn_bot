@@ -9,7 +9,7 @@ from config import PANEL_DOMAIN, ADMIN_PATH, API_KEY, SUB_DOMAINS, SUB_PATH
 logger = logging.getLogger(__name__)
 
 def _get_base_url() -> str:
-    # URL برای API v2
+    # URL برای API v2.2.0
     return f"https://{PANEL_DOMAIN}/{ADMIN_PATH}/api/v2/admin/"
 
 def _get_api_headers() -> dict:
@@ -73,14 +73,18 @@ async def get_user_info(user_uuid: str) -> dict | None:
         return None
 
 async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: int) -> dict | None:
-    endpoint = f"{_get_base_url()}user/{user_uuid}/renew/"
+    """
+    سرویس کاربر را با PATCH به endpoint کاربر تمدید می‌کند (سازگار با Hiddify API v2.2.0).
+    """
+    endpoint = f"{_get_base_url()}user/{user_uuid}/"
     payload = {
         "package_days": int(plan_days),
         "usage_limit_GB": int(plan_gb),
     }
     try:
         async with await _make_client(timeout=30.0) as client:
-            resp = await client.post(endpoint, json=payload, headers=_get_api_headers())
+            # از متد PATCH برای ویرایش/تمدید استفاده می‌کنیم
+            resp = await client.patch(endpoint, json=payload, headers=_get_api_headers())
             resp.raise_for_status()
             return resp.json()
     except httpx.HTTPStatusError as e:
@@ -92,13 +96,12 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: int) 
 
 async def delete_user_from_panel(user_uuid: str) -> bool:
     """
-    کاربر را از پنل هیدیفای (API v2) حذف می‌کند.
+    کاربر را از پنل هیدیفای (API v2.2.0) حذف می‌کند.
     """
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
     try:
         async with await _make_client(timeout=15.0) as client:
             resp = await client.delete(endpoint, headers=_get_api_headers())
-            # اگر کاربر از قبل حذف شده بود (404)، آن را موفقیت در نظر می‌گیریم.
             if 200 <= resp.status_code < 300 or resp.status_code == 404:
                 logger.info(f"Successfully deleted/not-found user {user_uuid} from panel.")
                 return True
