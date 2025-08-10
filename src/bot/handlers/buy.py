@@ -102,7 +102,11 @@ async def _process_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         await update.message.reply_text("⏳ در حال ایجاد سرویس شما...")
 
         final_name = custom_name or f"سرویس {plan['gb']} گیگ"
-
+        
+        # Note را به user_telegram_id پاس می‌دهیم
+        # اگر می‌خواهید username را هم ثبت کنید، note را بسازید و به user_telegram_id بدهید:
+        # note = f"tg:@{(update.effective_user.username or '').lstrip('@')} id:{user_id}"
+        
         provision = await hiddify_api.create_hiddify_user(
             plan_days=plan['days'],
             plan_gb=plan['gb'],
