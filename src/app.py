@@ -126,11 +126,9 @@ def build_application():
                 MessageHandler(filters.Regex('^ارسال به کاربر خاص$') & admin_filter, admin_users.broadcast_to_user_start),
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.back_to_admin_menu),
             ],
-            # پذیرش هر نوع پیام برای پیش‌نمایش و تایید
             constants.BROADCAST_MESSAGE: [
                 MessageHandler((~filters.COMMAND) & admin_filter, admin_users.broadcast_to_all_confirm),
             ],
-            # تایید/لغو با متن
             constants.BROADCAST_CONFIRM: [
                 MessageHandler(filters.Regex('^(بله، ارسال کن|خیر، لغو کن)$') & admin_filter, admin_users.broadcast_confirm_received),
             ],
@@ -166,7 +164,7 @@ def build_application():
                 create_gift_conv,
                 settings_conv,
                 broadcast_conv,
-                # برگشت از تنظیمات به منوی ادمین (دکمه اینلاین)
+                # برگشت از تنظیمات به منوی ادمین
                 CallbackQueryHandler(admin_settings.back_to_admin_menu_cb, pattern="^admin_back_to_menu$"),
             ],
             constants.REPORTS_MENU: [
@@ -230,6 +228,8 @@ def build_application():
     application.add_handler(CallbackQueryHandler(admin_settings.toggle_report_setting, pattern="^toggle_report_"))
     application.add_handler(CallbackQueryHandler(admin_settings.edit_auto_backup_start, pattern="^edit_auto_backup$"))
     application.add_handler(CallbackQueryHandler(admin_settings.set_backup_interval, pattern="^set_backup_interval_"))
+    # Maintenance toggle
+    application.add_handler(CallbackQueryHandler(admin_settings.toggle_maintenance, pattern="^toggle_maintenance$"))
 
     # User services callbacks (group 2 to avoid conflicts)
     application.add_handler(CallbackQueryHandler(us_h.view_service_callback, pattern="^view_service_"), group=2)
