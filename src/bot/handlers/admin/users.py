@@ -119,7 +119,7 @@ async def manage_user_amount_received(update: Update, context: ContextTypes.DEFA
             db.add_charge_transaction(target, amount, type_="manual_charge_add")
         else:
             db.add_charge_transaction(target, -amount, type_="manual_charge_sub")
-
+        
         db.update_balance(target, amount if is_add else -amount)
         await update.message.reply_text(f"✅ مبلغ {amount:.0f} تومان از حساب کاربر {'کسر' if not is_add else 'افزوده'} شد.")
 
@@ -227,7 +227,6 @@ async def broadcast_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("بخش ارسال پیام", reply_markup=_broadcast_menu_keyboard())
     return BROADCAST_MENU
 
-# --- Broadcast to all users ---
 async def broadcast_to_all_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     context.user_data["broadcast_mode"] = "all"
@@ -301,7 +300,6 @@ async def broadcast_confirm_callback(update: Update, context: ContextTypes.DEFAU
     context.user_data.clear()
     return ConversationHandler.END
 
-# --- Broadcast to a specific user ---
 async def broadcast_to_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     context.user_data["broadcast_mode"] = "single"
