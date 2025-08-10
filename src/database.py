@@ -38,16 +38,14 @@ def _remove_device_limit_alert_column_if_exists(conn: sqlite3.Connection):
         cur.execute("PRAGMA table_info(active_services)")
         cols = [row["name"] for row in cur.fetchall()]
         if "device_limit_alert_sent" not in cols:
-            return  # nothing to do
+            return
 
         version_tuple = tuple(map(int, sqlite3.sqlite_version.split(".")))
         if version_tuple >= (3, 35, 0):
-            # SQLite جدید: حذف مستقیم ستون
             cur.execute("ALTER TABLE active_services DROP COLUMN device_limit_alert_sent")
             conn.commit()
             logger.info("Removed column device_limit_alert_sent from active_services (SQLite >= 3.35).")
         else:
-            # SQLite قدیمی: بازسازی جدول بدون ستون
             logger.info("Rebuilding active_services to drop device_limit_alert_sent (SQLite < 3.35).")
             cur.execute("BEGIN")
             cur.execute('''
@@ -69,7 +67,6 @@ def _remove_device_limit_alert_column_if_exists(conn: sqlite3.Connection):
             cur.execute("DROP TABLE active_services")
             cur.execute("ALTER TABLE active_services_new RENAME TO active_services")
             conn.commit()
-            # ایندکس‌ها را دوباره بساز
             conn.execute("CREATE INDEX IF NOT EXISTS idx_active_services_user ON active_services(user_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_active_services_uuid ON active_services(sub_uuid)")
             conn.commit()
@@ -81,12 +78,14 @@ def init_db():
     conn = _connect_db()
     cursor = conn.cursor()
 
+    # users
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY, username TEXT, balance REAL DEFAULT 0.0,
             join_date TEXT NOT NULL, is_banned INTEGER DEFAULT 0, has_used_trial INTEGER DEFAULT 0,
             referred_by INTEGER, has_received_referral_bonus INTEGER DEFAULT 0
-        )''')
+        )
+    ''')
     try:
         cursor.execute("SELECT referred_by FROM users LIMIT 1")
     except sqlite3.OperationalError:
@@ -96,15 +95,18 @@ def init_db():
     except sqlite3.OperationalError:
         cursor.execute("ALTER TABLE users ADD COLUMN has_received_referral_bonus INTEGER DEFAULT 0")
 
+    # plans
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS plans (
             plan_id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, price REAL NOT NULL,
             days INTEGER NOT NULL, gb INTEGER NOT NULL, is_visible INTEGER DEFAULT 1
-        )''')
+        )
+    ''')
 
+    # settings
     cursor.execute('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)''')
 
-    # active_services بدون device_limit_alert_sent
+    # active_services (بدون device_limit_alert_sent)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS active_services (
             service_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, name TEXT,
@@ -112,30 +114,40 @@ def init_db():
             created_at TEXT NOT NULL, low_usage_alert_sent INTEGER DEFAULT 0,
             FOREIGN KEY(user_id) REFERENCES users(user_id),
             FOREIGN KEY(plan_id) REFERENCES plans(plan_id) ON DELETE SET NULL
-        )''')
+        )
+    ''')
 
-    # ستون device_limit_alert_sent اگر در دیتابیس‌های قدیمی وجود دارد، حذفش کن
+    # مهاجرت حذف device_limit_alert_sent برای دیتابیس‌های قدیمی
     _remove_device_limit_alert_column_if_exists(conn)
 
+    # sales_log
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS sales_log (
             sale_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, plan_id INTEGER,
             price REAL NOT NULL, sale_date TEXT NOT NULL,
             FOREIGN KEY(user_id) REFERENCES users(user_id),
             FOREIGN KEY(plan_id) REFERENCES plans(plan_id) ON DELETE SET NULL
-        )''')
+        )
+    ''')
+
+    # gift_codes
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS gift_codes (
             code TEXT PRIMARY KEY, amount REAL NOT NULL, is_used INTEGER DEFAULT 0,
             used_by INTEGER, used_date TEXT, FOREIGN KEY(used_by) REFERENCES users(user_id)
-        )''')
+        )
+    ''')
+
+    # transactions
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS transactions (
             transaction_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, plan_id INTEGER,
             service_id INTEGER, type TEXT NOT NULL, amount REAL NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
             created_at TEXT NOT NULL, updated_at TEXT NOT NULL, FOREIGN KEY(user_id) REFERENCES users(user_id)
-        )''')
+        )
+    ''')
 
+    # Default settings
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_number', '0000-0000-0000-0000'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_holder', 'نام صاحب حساب'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('referral_bonus_amount', '5000'))
@@ -143,7 +155,11 @@ def init_db():
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('daily_report_enabled', '1'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('weekly_report_enabled', '1'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('auto_backup_interval_hours', '24'))
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('maintenance_enabled', '0'))
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('maintenance_message', '⛔️ ربات در حال بروزرسانی است. لطفاً کمی بعد مراجعه کنید.'))
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('connection_guide', '📚 راهنمای اتصال:\n1) اپ مناسب را نصب کنید.\n2) از ربات لینک را بگیرید.\n3) وارد اپ کنید و متصل شوید.'))
 
+    # Indexes
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_services_user ON active_services(user_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_services_uuid ON active_services(sub_uuid)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_sales_log_user ON sales_log(user_id)")
@@ -151,6 +167,7 @@ def init_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions(status)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
+
     conn.commit()
     logger.info("Database initialized successfully.")
 
@@ -225,7 +242,10 @@ def apply_referral_bonus(user_id: int):
     if user and user.get('referred_by') and not user.get('has_received_referral_bonus'):
         referrer_id = user['referred_by']
         bonus_str = get_setting('referral_bonus_amount')
-        bonus_amount = float(bonus_str) if bonus_str else 0.0
+        try:
+            bonus_amount = float(bonus_str) if bonus_str else 0.0
+        except (ValueError, TypeError):
+            bonus_amount = 0.0
         if bonus_amount > 0:
             conn = _connect_db()
             conn.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (bonus_amount, user_id))
@@ -334,9 +354,8 @@ def set_low_usage_alert_sent(service_id: int, status=True):
     conn.commit()
 
 def set_device_limit_alert_sent(service_id: int, status: bool = True):
-    # حذف ویژگی device limit: این تابع عملاً کاری انجام نمی‌دهد و برای سازگاری نگه داشته شده است.
-    logger.debug("set_device_limit_alert_sent() is deprecated and ignored (device limit feature removed).")
-    return
+    # ویژگی device limit حذف شده؛ برای سازگاری نگه داشته شده است.
+    logger.debug("set_device_limit_alert_sent() ignored (device limit removed).")
 
 def delete_service(service_id: int):
     conn = _connect_db()
@@ -426,7 +445,7 @@ def finalize_renewal_transaction(transaction_id: int, new_plan_id: int):
         if not txn:
             raise ValueError("Renewal transaction not found or not pending.")
         cur.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (txn['amount'], txn['user_id']))
-        # ریست فقط low_usage_alert_sent؛ device_limit حذف شد
+        # reset low_usage_alert_sent؛ device_limit حذف شده
         cur.execute("UPDATE active_services SET plan_id = ?, low_usage_alert_sent = 0 WHERE service_id = ?", (new_plan_id, txn['service_id']))
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cur.execute("INSERT INTO sales_log (user_id, plan_id, price, sale_date) VALUES (?, ?, ?, ?)", (txn['user_id'], txn['plan_id'], txn['amount'], now_str))
