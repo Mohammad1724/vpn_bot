@@ -15,6 +15,14 @@ from bot.handlers import user_services as us_h
 logger = logging.getLogger(__name__)
 
 # ===== Helpers =====
+
+def _maint_on() -> bool:
+    val = db.get_setting("maintenance_enabled")
+    return str(val).lower() in ("1", "true", "on", "yes")
+
+def _maint_msg() -> str:
+    return db.get_setting("maintenance_message") or "⛔️ ربات در حال بروزرسانی است. لطفاً کمی بعد مراجعه کنید."
+
 def _build_default_sub_link(sub_uuid: str, config_name: str) -> str:
     default_link_type = db.get_setting('default_sub_link_type') or 'sub'
     sub_path = SUB_PATH or ADMIN_PATH
@@ -23,12 +31,18 @@ def _build_default_sub_link(sub_uuid: str, config_name: str) -> str:
     return f"{base_link}/{default_link_type}/?name={config_name.replace(' ', '_')}"
 
 def _build_note_for_user(user_id: int, username: str | None) -> str:
+    # اگر می‌خوای فقط آی‌دی ذخیره بشه، این خط رو نگه دار:
+    # return f"tg_id:{user_id}"
+    # آی‌دی + یوزرنیم (اگر وجود داشته باشد):
     if username:
         u = username.lstrip('@')
         return f"tg:@{u} id:{user_id}"
     return f"tg:id:{user_id}"
 
 async def _get_panel_user_id(sub_uuid: str) -> int | None:
+    """
+    تلاش برای دریافت شناسه کاربر پنل از get_user_info
+    """
     try:
         info = await hiddify_api.get_user_info(sub_uuid)
         if isinstance(info, dict):
@@ -52,7 +66,7 @@ async def _call_api(fn, *args, **kwargs):
 async def _set_user_note_compat(sub_uuid: str, note: str):
     """
     بعد از ساخت، تلاش برای ثبت Note روی کاربر/سرویس در پنل (سازگار با چند امضا).
-    هم با uuid امتحان می‌کنیم هم با panel_user_id (اگر در دسترس باشد).
+    هم با uuid و هم با panel_user_id (اگر موجود باشد) تست می‌کند.
     """
     panel_user_id = await _get_panel_user_id(sub_uuid)
 
@@ -69,6 +83,7 @@ async def _set_user_note_compat(sub_uuid: str, note: str):
         attempts.append((hiddify_api.update_user, (), {"uuid": sub_uuid, "description": note}))
         attempts.append((hiddify_api.update_user, (), {"uuid": sub_uuid, "comment": note}))
         attempts.append((hiddify_api.update_user, (), {"uuid": sub_uuid, "telegram": note}))
+        attempts.append((hiddify_api.update_user, (), {"uuid": sub_uuid, "telegram_id": note}))
     if hasattr(hiddify_api, "edit_user"):
         attempts.append((hiddify_api.edit_user, (), {"uuid": sub_uuid, "note": note}))
         attempts.append((hiddify_api.edit_user, (), {"uuid": sub_uuid, "description": note}))
@@ -76,6 +91,10 @@ async def _set_user_note_compat(sub_uuid: str, note: str):
         attempts.append((hiddify_api.edit_user, (), {"uuid": sub_uuid, "telegram": note}))
     if hasattr(hiddify_api, "update_user_subscription"):
         attempts.append((hiddify_api.update_user_subscription, (), {"uuid": sub_uuid, "note": note}))
+    if hasattr(hiddify_api, "set_user_comment"):
+        attempts.append((hiddify_api.set_user_comment, (), {"uuid": sub_uuid, "comment": note}))
+    if hasattr(hiddify_api, "set_comment"):
+        attempts.append((hiddify_api.set_comment, (), {"uuid": sub_uuid, "comment": note}))
 
     # با panel_user_id (اگر شناسایی شد)
     if panel_user_id is not None:
@@ -86,6 +105,7 @@ async def _set_user_note_compat(sub_uuid: str, note: str):
             attempts.append((hiddify_api.update_user, (), {"id": panel_user_id, "description": note}))
             attempts.append((hiddify_api.update_user, (), {"id": panel_user_id, "comment": note}))
             attempts.append((hiddify_api.update_user, (), {"id": panel_user_id, "telegram": note}))
+            attempts.append((hiddify_api.update_user, (), {"id": panel_user_id, "telegram_id": note}))
         if hasattr(hiddify_api, "edit_user"):
             attempts.append((hiddify_api.edit_user, (), {"id": panel_user_id, "note": note}))
             attempts.append((hiddify_api.edit_user, (), {"id": panel_user_id, "description": note}))
@@ -93,6 +113,10 @@ async def _set_user_note_compat(sub_uuid: str, note: str):
             attempts.append((hiddify_api.edit_user, (), {"id": panel_user_id, "telegram": note}))
         if hasattr(hiddify_api, "update_user_subscription"):
             attempts.append((hiddify_api.update_user_subscription, (), {"id": panel_user_id, "note": note}))
+        if hasattr(hiddify_api, "set_user_comment"):
+            attempts.append((hiddify_api.set_user_comment, (), {"id": panel_user_id, "comment": note}))
+        if hasattr(hiddify_api, "set_comment"):
+            attempts.append((hiddify_api.set_comment, (), {"id": panel_user_id, "comment": note}))
 
     for fn, args, kwargs in attempts:
         ok = await _call_api(fn, *args, **kwargs)
@@ -100,7 +124,7 @@ async def _set_user_note_compat(sub_uuid: str, note: str):
             logger.info("Note set via %s with %s", getattr(fn, '__name__', fn), ("uuid" if "uuid" in kwargs else "id"))
             return True
 
-    logger.warning("All note-setting attempts failed for uuid=%s (panel_user_id=%s)", sub_uuid, panel_user_id)
+    logger.warning("All note attempts failed for uuid=%s (panel_user_id=%s)", sub_uuid, panel_user_id)
     return False
 
 async def _create_user_subscription_compat(user_id: int, name: str, days: int, gb: int, note: str | None = None) -> dict | None:
@@ -109,13 +133,13 @@ async def _create_user_subscription_compat(user_id: int, name: str, days: int, g
     اگر ساخت از note پشتیبانی نکند، بعد از ساخت Note را ست می‌کنیم.
     خروجی نرمالایز: {'sub_uuid': '...'}
     """
-    # 1) create_hiddify_user(days, gb, user_id, custom_name=..., [note/description/comment/telegram])
+    # 1) create_hiddify_user(days, gb, user_id, custom_name=..., [note/description/comment/telegram/telegram_id])
     if hasattr(hiddify_api, "create_hiddify_user"):
         fn = hiddify_api.create_hiddify_user
         sig = inspect.signature(fn)
         kwargs = {"custom_name": name}
         injected_key = None
-        for alt in ("note", "description", "comment", "telegram"):
+        for alt in ("note", "description", "comment", "telegram", "telegram_id"):
             if alt in sig.parameters and note:
                 kwargs[alt] = note
                 injected_key = alt
@@ -131,7 +155,7 @@ async def _create_user_subscription_compat(user_id: int, name: str, days: int, g
         except Exception as e:
             logger.debug("create_hiddify_user failed: %s", e)
 
-    # 2) سایر نام‌ها/امضاها (با تزریق note/description/comment/telegram اگر پشتیبانی شود)
+    # 2) سایر نام‌ها/امضاها (با تزریق فیلدهای شناخته‌شده)
     for func_name, kwargs, pos in [
         ("create_user_subscription", dict(name=name, days=days, gb=gb), None),
         ("create_user_subscription", dict(), (days, gb, name)),
@@ -146,7 +170,7 @@ async def _create_user_subscription_compat(user_id: int, name: str, days: int, g
             sig = inspect.signature(fn)
             injected_key = None
             if note:
-                for alt in ("note", "description", "comment", "telegram"):
+                for alt in ("note", "description", "comment", "telegram", "telegram_id"):
                     if alt in sig.parameters:
                         kwargs[alt] = note
                         injected_key = alt
@@ -168,7 +192,13 @@ async def _create_user_subscription_compat(user_id: int, name: str, days: int, g
     return None
 
 # ===== Public handlers =====
+
 async def buy_service_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Maintenance gate
+    if _maint_on():
+        await update.message.reply_text(_maint_msg())
+        return
+
     plans = db.list_plans(only_visible=True)
     if not plans:
         await update.message.reply_text("در حال حاضر پلنی برای خرید موجود نیست.")
@@ -185,6 +215,11 @@ async def buy_service_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def buy_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
+
+    # Maintenance gate (برای کلیک روی دکمه‌های قدیمی)
+    if _maint_on():
+        await q.answer(_maint_msg(), show_alert=True)
+        return ConversationHandler.END
 
     try:
         plan_id = int(q.data.split('_')[-1])
@@ -255,6 +290,7 @@ async def _process_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 
         svc = db.get_service_by_uuid(sub_uuid)
         if svc:
+            # نمایش مینیمال: فقط «لینک پیش‌فرض» + «سایر لینک‌ها»
             await us_h.send_service_details(
                 context=context,
                 chat_id=user_id,
