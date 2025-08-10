@@ -14,6 +14,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db.get_or_create_user(user.id, user.username)
 
+    # Referral handling: /start ref_<user_id>
     if context.args and context.args[0].startswith('ref_'):
         try:
             referrer_id = int(context.args[0].split('_')[1])
@@ -24,10 +25,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_info = db.get_user(user.id)
     if user_info and user_info.get('is_banned'):
-        await update.message.reply_text("شما از استفاده از این ربات منع شده‌اید.")
+        if update.message:
+            await update.message.reply_text("شما از استفاده از این ربات منع شده‌اید.")
         return ConversationHandler.END
 
-    await update.message.reply_text("👋 به ربات فروش VPN خوش آمدید!", reply_markup=get_main_menu_keyboard(user.id))
+    if update.message:
+        await update.message.reply_text("👋 به ربات فروش VPN خوش آمدید!", reply_markup=get_main_menu_keyboard(user.id))
     return ConversationHandler.END
 
 async def user_generic_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -56,10 +59,22 @@ async def show_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def show_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"برای پشتیبانی به @{SUPPORT_USERNAME} پیام دهید.")
+    if SUPPORT_USERNAME:
+        await update.message.reply_text(f"📞 برای پشتیبانی پیام دهید: @{SUPPORT_USERNAME}")
+    else:
+        await update.message.reply_text("📞 پشتیبانی در دسترس است.")
 
 async def show_guide(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("راهنمای اتصال:\n\n(اینجا آموزش‌های اتصال را قرار دهید)")
+    guide = db.get_setting("connection_guide")
+    if not guide:
+        guide = (
+            "📚 راهنمای اتصال\n\n"
+            "1) اپ مناسب (V2Ray/Clash/SingBox) را نصب کنید.\n"
+            "2) بعد از خرید، روی «⚡ دریافت لینک پیش‌فرض» بزنید.\n"
+            "3) لینک را در اپ وارد کنید و متصل شوید.\n"
+            "سؤال داشتید؟ از «📞 پشتیبانی» بپرسید."
+        )
+    await update.message.reply_text(guide, disable_web_page_preview=True)
 
 async def show_referral_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
