@@ -28,30 +28,80 @@ def _build_note_for_user(user_id: int, username: str | None) -> str:
         return f"tg:@{u} id:{user_id}"
     return f"tg:id:{user_id}"
 
+async def _get_panel_user_id(sub_uuid: str) -> int | None:
+    try:
+        info = await hiddify_api.get_user_info(sub_uuid)
+        if isinstance(info, dict):
+            for k in ("id", "user_id", "uid"):
+                if k in info and info[k]:
+                    return int(info[k])
+    except Exception as e:
+        logger.debug("get_panel_user_id failed: %s", e)
+    return None
+
+async def _call_api(fn, *args, **kwargs):
+    try:
+        res = fn(*args, **kwargs)
+        if inspect.isawaitable(res):
+            await res
+        return True
+    except Exception as e:
+        logger.debug("API call %s failed: %s", getattr(fn, '__name__', fn), e)
+        return False
+
 async def _set_user_note_compat(sub_uuid: str, note: str):
     """
     بعد از ساخت، تلاش برای ثبت Note روی کاربر/سرویس در پنل (سازگار با چند امضا).
+    هم با uuid امتحان می‌کنیم هم با panel_user_id (اگر در دسترس باشد).
     """
-    candidates = [
-        ("set_user_note", dict(uuid=sub_uuid, note=note), None),
-        ("set_user_note", None, (sub_uuid, note)),
-        ("update_user_note", None, (sub_uuid, note)),
-        ("update_user", dict(uuid=sub_uuid, note=note), None),
-        ("edit_user", dict(uuid=sub_uuid, note=note), None),
-        ("edit_user", None, (sub_uuid, note)),
-        ("update_user_subscription", dict(uuid=sub_uuid, note=note), None),
-    ]
-    for func, kwargs, pos in candidates:
-        try:
-            if not hasattr(hiddify_api, func):
-                continue
-            fn = getattr(hiddify_api, func)
-            res = await (fn(**kwargs) if kwargs is not None else fn(*pos))
-            return
-        except Exception as e:
-            logger.debug("set note compat %s failed: %s", func, e)
-            continue
-    logger.debug("No compatible set_note endpoint found; skipped setting note.")
+    panel_user_id = await _get_panel_user_id(sub_uuid)
+
+    attempts = []
+
+    # با uuid
+    if hasattr(hiddify_api, "set_user_note"):
+        attempts.append((hiddify_api.set_user_note, (), {"uuid": sub_uuid, "note": note}))
+        attempts.append((hiddify_api.set_user_note, (sub_uuid, note), {}))
+    if hasattr(hiddify_api, "update_user_note"):
+        attempts.append((hiddify_api.update_user_note, (sub_uuid, note), {}))
+    if hasattr(hiddify_api, "update_user"):
+        attempts.append((hiddify_api.update_user, (), {"uuid": sub_uuid, "note": note}))
+        attempts.append((hiddify_api.update_user, (), {"uuid": sub_uuid, "description": note}))
+        attempts.append((hiddify_api.update_user, (), {"uuid": sub_uuid, "comment": note}))
+        attempts.append((hiddify_api.update_user, (), {"uuid": sub_uuid, "telegram": note}))
+    if hasattr(hiddify_api, "edit_user"):
+        attempts.append((hiddify_api.edit_user, (), {"uuid": sub_uuid, "note": note}))
+        attempts.append((hiddify_api.edit_user, (), {"uuid": sub_uuid, "description": note}))
+        attempts.append((hiddify_api.edit_user, (), {"uuid": sub_uuid, "comment": note}))
+        attempts.append((hiddify_api.edit_user, (), {"uuid": sub_uuid, "telegram": note}))
+    if hasattr(hiddify_api, "update_user_subscription"):
+        attempts.append((hiddify_api.update_user_subscription, (), {"uuid": sub_uuid, "note": note}))
+
+    # با panel_user_id (اگر شناسایی شد)
+    if panel_user_id is not None:
+        if hasattr(hiddify_api, "set_user_note"):
+            attempts.append((hiddify_api.set_user_note, (), {"id": panel_user_id, "note": note}))
+        if hasattr(hiddify_api, "update_user"):
+            attempts.append((hiddify_api.update_user, (), {"id": panel_user_id, "note": note}))
+            attempts.append((hiddify_api.update_user, (), {"id": panel_user_id, "description": note}))
+            attempts.append((hiddify_api.update_user, (), {"id": panel_user_id, "comment": note}))
+            attempts.append((hiddify_api.update_user, (), {"id": panel_user_id, "telegram": note}))
+        if hasattr(hiddify_api, "edit_user"):
+            attempts.append((hiddify_api.edit_user, (), {"id": panel_user_id, "note": note}))
+            attempts.append((hiddify_api.edit_user, (), {"id": panel_user_id, "description": note}))
+            attempts.append((hiddify_api.edit_user, (), {"id": panel_user_id, "comment": note}))
+            attempts.append((hiddify_api.edit_user, (), {"id": panel_user_id, "telegram": note}))
+        if hasattr(hiddify_api, "update_user_subscription"):
+            attempts.append((hiddify_api.update_user_subscription, (), {"id": panel_user_id, "note": note}))
+
+    for fn, args, kwargs in attempts:
+        ok = await _call_api(fn, *args, **kwargs)
+        if ok:
+            logger.info("Note set via %s with %s", getattr(fn, '__name__', fn), ("uuid" if "uuid" in kwargs else "id"))
+            return True
+
+    logger.warning("All note-setting attempts failed for uuid=%s (panel_user_id=%s)", sub_uuid, panel_user_id)
+    return False
 
 async def _create_user_subscription_compat(user_id: int, name: str, days: int, gb: int, note: str | None = None) -> dict | None:
     """
@@ -59,29 +109,29 @@ async def _create_user_subscription_compat(user_id: int, name: str, days: int, g
     اگر ساخت از note پشتیبانی نکند، بعد از ساخت Note را ست می‌کنیم.
     خروجی نرمالایز: {'sub_uuid': '...'}
     """
-    # 1) create_hiddify_user(days, gb, user_id, custom_name=..., [note/description/comment])
+    # 1) create_hiddify_user(days, gb, user_id, custom_name=..., [note/description/comment/telegram])
     if hasattr(hiddify_api, "create_hiddify_user"):
         fn = hiddify_api.create_hiddify_user
         sig = inspect.signature(fn)
         kwargs = {"custom_name": name}
-        injected = False
-        for alt in ("note", "description", "comment"):
+        injected_key = None
+        for alt in ("note", "description", "comment", "telegram"):
             if alt in sig.parameters and note:
                 kwargs[alt] = note
-                injected = True
+                injected_key = alt
                 break
         try:
             res = await fn(days, gb, user_id, **kwargs)
             if isinstance(res, dict):
                 sub_uuid = res.get("sub_uuid") or res.get("uuid")
                 if sub_uuid:
-                    if note and not injected:
+                    if note and injected_key is None:
                         await _set_user_note_compat(sub_uuid, note)
                     return {"sub_uuid": sub_uuid}
         except Exception as e:
             logger.debug("create_hiddify_user failed: %s", e)
 
-    # 2) سایر نام‌ها/امضاها
+    # 2) سایر نام‌ها/امضاها (با تزریق note/description/comment/telegram اگر پشتیبانی شود)
     for func_name, kwargs, pos in [
         ("create_user_subscription", dict(name=name, days=days, gb=gb), None),
         ("create_user_subscription", dict(), (days, gb, name)),
@@ -93,23 +143,23 @@ async def _create_user_subscription_compat(user_id: int, name: str, days: int, g
             continue
         try:
             fn = getattr(hiddify_api, func_name)
-            injected = False
+            sig = inspect.signature(fn)
+            injected_key = None
             if note:
-                sig = inspect.signature(fn)
-                for alt in ("note", "description", "comment"):
+                for alt in ("note", "description", "comment", "telegram"):
                     if alt in sig.parameters:
                         kwargs[alt] = note
-                        injected = True
+                        injected_key = alt
                         break
             res = await (fn(**kwargs) if not pos else fn(*pos))
             if isinstance(res, dict):
                 sub_uuid = res.get("sub_uuid") or res.get("uuid")
                 if sub_uuid:
-                    if note and not injected:
+                    if note and injected_key is None:
                         await _set_user_note_compat(sub_uuid, note)
                     return {"sub_uuid": sub_uuid}
             if isinstance(res, str) and len(res) >= 8:
-                if note and not injected:
+                if note and injected_key is None:
                     await _set_user_note_compat(res, note)
                 return {"sub_uuid": res}
         except Exception as e:
@@ -211,7 +261,7 @@ async def _process_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE, 
                 service_id=svc['service_id'],
                 original_message=None,
                 is_from_menu=False,
-                minimal=True  # فقط دو دکمه: لینک پیش‌فرض + سایر لینک‌ها
+                minimal=True
             )
         else:
             await update.message.reply_text("خرید انجام شد، اما نمایش سرویس با خطا مواجه شد. از «📋 سرویس‌های من» وارد شوید.")
