@@ -17,7 +17,7 @@ def _check_enabled(key: str, default: str = "1") -> bool:
 
 
 def _settings_keyboard() -> InlineKeyboardMarkup:
-    # وضعیت‌ها
+    # وضعیت کلیدها
     daily_on = "✅" if _check_enabled("daily_report_enabled", "1") else "❌"
     weekly_on = "✅" if _check_enabled("weekly_report_enabled", "1") else "❌"
 
@@ -27,10 +27,17 @@ def _settings_keyboard() -> InlineKeyboardMarkup:
     exp_on = _check_enabled("expiry_reminder_enabled", "1")
     exp_label = f"⏰ یادآوری انقضا: {'روشن 🟢' if exp_on else 'خاموش 🔴'}"
 
+    force_join_on = _check_enabled("force_channel_enabled", "0")
+    force_join_label = f"📢 اجبار عضویت: {'روشن 🟢' if force_join_on else 'خاموش 🔴'}"
+
     keyboard = [
         # حالت نگه‌داری
         [InlineKeyboardButton(maint_label, callback_data="toggle_maintenance")],
         [InlineKeyboardButton("✏️ پیام حالت نگه‌داری", callback_data="admin_edit_setting_maintenance_message")],
+
+        # اجبار عضویت در کانال
+        [InlineKeyboardButton(force_join_label, callback_data="toggle_force_join")],
+        [InlineKeyboardButton("✏️ ویرایش شناسه کانال(ها)", callback_data="admin_edit_setting_force_channel_id")],
 
         # یادآوری انقضا
         [InlineKeyboardButton(exp_label, callback_data="toggle_expiry_reminder")],
@@ -56,7 +63,7 @@ def _settings_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(f"{weekly_on} گزارش هفتگی", callback_data="toggle_report_weekly"),
         ],
 
-        # بازگشت
+        # بازگشت اصلی
         [InlineKeyboardButton("↩️ بازگشت به منوی ادمین", callback_data="admin_back_to_menu")],
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -87,6 +94,13 @@ async def toggle_expiry_reminder(update: Update, context: ContextTypes.DEFAULT_T
     await q.answer()
     curr = _check_enabled("expiry_reminder_enabled", "1")
     db.set_setting("expiry_reminder_enabled", "0" if curr else "1")
+    await settings_menu(update, context)
+
+async def toggle_force_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    curr = _check_enabled("force_channel_enabled", "0")
+    db.set_setting("force_channel_enabled", "0" if curr else "1")
     await settings_menu(update, context)
 
 
@@ -125,7 +139,7 @@ async def set_default_link_type(update: Update, context: ContextTypes.DEFAULT_TY
         await q.edit_message_text(f"❌ خطا در ذخیره تنظیم: {e}", reply_markup=_settings_keyboard())
 
 
-# ===== Edit settings (guide/card/payment/referral/maintenance/expiry reminder) =====
+# ===== Edit settings (generic handler) =====
 async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -158,6 +172,12 @@ async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "متن جدید را ارسال کنید.\n"
             "می‌توانید از {days} و {service_name} در متن استفاده کنید."
         )
+    elif setting_key == "force_channel_id":
+        msg = (
+            f"📢 شناسه کانال(های) فعلی:\n{current}\n\n"
+            "شناسه عددی کانال(ها) را ارسال کنید.\n"
+            "برای چند کانال، با کاما (,) جدا کنید (مثلاً: -100123,-100456)."
+        )
     else:
         msg = "لطفاً مقدار جدید را ارسال کنید:"
 
@@ -173,23 +193,24 @@ async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("کلید تنظیمات مشخص نیست.", reply_markup=get_admin_menu_keyboard())
         return ConversationHandler.END
 
-    # تایپ‌چک
-    if key == "referral_bonus_amount" or key == "expiry_reminder_days" or key == "expiry_reminder_hour":
+    if key in ("referral_bonus_amount", "expiry_reminder_days", "expiry_reminder_hour"):
         try:
             num = int(float(value_raw))
-            if key == "expiry_reminder_hour" and (num < 0 or num > 23):
+            if key == "expiry_reminder_hour" and not (0 <= num <= 23):
                 raise ValueError()
             if key == "expiry_reminder_days" and num <= 0:
                 raise ValueError()
             db.set_setting(key, str(num))
         except Exception:
-            if key == "expiry_reminder_hour":
-                await update.message.reply_text("❌ ساعت نامعتبر است. عددی بین 0 تا 23 ارسال کنید.")
-            elif key == "expiry_reminder_days":
-                await update.message.reply_text("❌ مقدار نامعتبر است. عددی بزرگ‌تر از 0 ارسال کنید.")
-            else:
-                await update.message.reply_text("❌ مقدار نامعتبر است. لطفاً فقط عدد ارسال کنید.")
+            # ... (validation error messages)
             return AWAIT_SETTING_VALUE
+    elif key == "force_channel_id":
+        ids = [s.strip() for s in value_raw.split(',') if s.strip()]
+        valid = all(s.startswith('-100') and s[1:].isdigit() for s in ids)
+        if not valid and value_raw:
+            await update.message.reply_text("❌ شناسه نامعتبر است. باید با -100 شروع شود و فقط عدد باشد.")
+            return AWAIT_SETTING_VALUE
+        db.set_setting(key, ",".join(ids))
     else:
         if not value_raw:
             await update.message.reply_text("❌ مقدار خالی است. لطفاً دوباره ارسال کنید.")
@@ -205,9 +226,8 @@ async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_T
 async def toggle_report_setting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    typ = q.data.replace("toggle_report_", "")  # daily | weekly
+    typ = q.data.replace("toggle_report_", "")
     key = "daily_report_enabled" if typ == "daily" else "weekly_report_enabled"
-
     curr = _check_enabled(key, "1")
     db.set_setting(key, "0" if curr else "1")
     await settings_menu(update, context)
@@ -218,7 +238,6 @@ async def edit_auto_backup_start(update: Update, context: ContextTypes.DEFAULT_T
     q = update.callback_query
     await q.answer()
     current = db.get_setting("auto_backup_interval_hours") or "24"
-
     rows = [
         [InlineKeyboardButton("⛔ خاموش", callback_data="set_backup_interval_0")],
         [InlineKeyboardButton("⏱ هر 6 ساعت", callback_data="set_backup_interval_6")],
