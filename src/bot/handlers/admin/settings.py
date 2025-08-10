@@ -4,7 +4,7 @@ from telegram.ext import ContextTypes, ConversationHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.error import BadRequest
 
-from bot.constants import AWAIT_SETTING_VALUE
+from bot.constants import AWAIT_SETTING_VALUE, ADMIN_MENU
 from bot.keyboards import get_admin_menu_keyboard
 import database as db
 
@@ -29,7 +29,7 @@ def _settings_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(f"{daily_on} گزارش روزانه", callback_data="toggle_report_daily"),
             InlineKeyboardButton(f"{weekly_on} گزارش هفتگی", callback_data="toggle_report_weekly"),
         ],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_settings")],
+        [InlineKeyboardButton("↩️ بازگشت به منوی ادمین", callback_data="admin_back_to_menu")],  # دکمه بازگشت اصلی
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -66,6 +66,7 @@ async def edit_default_link_start(update: Update, context: ContextTypes.DEFAULT_
     for key, title in mapping:
         mark = "✅ " if key == current else ""
         rows.append([InlineKeyboardButton(f"{mark}{title}", callback_data=f"set_default_link_{key}")])
+    # بازگشت به منوی تنظیمات
     rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_settings")])
 
     await q.edit_message_text("نوع لینک پیش‌فرض را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(rows))
@@ -101,7 +102,7 @@ async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await q.message.reply_text(msg, reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True))
         return AWAIT_SETTING_VALUE
 
-    # اگر کلیدهای دیگری را هم از این مسیر تنظیم می‌کنید:
+    # سایر کلیدها (در صورت وجود)
     await q.edit_message_text("لطفاً مقدار جدید را ارسال کنید.")
     return AWAIT_SETTING_VALUE
 
@@ -144,7 +145,7 @@ async def edit_auto_backup_start(update: Update, context: ContextTypes.DEFAULT_T
         [InlineKeyboardButton("🕒 هر 12 ساعت", callback_data="set_backup_interval_12")],
         [InlineKeyboardButton("📅 روزانه", callback_data="set_backup_interval_24")],
         [InlineKeyboardButton("🗓 هفتگی", callback_data="set_backup_interval_168")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_settings")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_settings")],  # ← بازگشت به منوی تنظیمات
     ]
     await q.edit_message_text(f"بازه پشتیبان‌گیری خودکار (فعلی: {current}h):", reply_markup=InlineKeyboardMarkup(rows))
 
@@ -158,3 +159,16 @@ async def set_backup_interval(update: Update, context: ContextTypes.DEFAULT_TYPE
         await q.edit_message_text("✅ بازه پشتیبان‌گیری ذخیره شد.", reply_markup=_settings_keyboard())
     except Exception as e:
         await q.edit_message_text(f"❌ خطا در ذخیره تنظیم: {e}", reply_markup=_settings_keyboard())
+
+
+# ========== Back to admin menu (Callback) ==========
+async def back_to_admin_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # این تابع با دکمه «↩️ بازگشت به منوی ادمین» فراخوانی می‌شود
+    q = update.callback_query
+    await q.answer()
+    try:
+        await q.message.delete()
+    except Exception:
+        pass
+    await q.from_user.send_message("به منوی ادمین بازگشتید.", reply_markup=get_admin_menu_keyboard())
+    return ADMIN_MENU
