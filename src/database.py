@@ -43,9 +43,9 @@ def _remove_device_limit_alert_column_if_exists(conn: sqlite3.Connection):
         if version_tuple >= (3, 35, 0):
             cur.execute("ALTER TABLE active_services DROP COLUMN device_limit_alert_sent")
             conn.commit()
-            logger.info("Removed device_limit_alert_sent (SQLite >= 3.35)")
+            logger.info("Removed column device_limit_alert_sent from active_services (SQLite >= 3.35).")
         else:
-            logger.info("Rebuilding active_services to drop device_limit_alert_sent (SQLite < 3.35)")
+            logger.info("Rebuilding active_services to drop device_limit_alert_sent (SQLite < 3.35).")
             cur.execute("BEGIN")
             cur.execute('''
                 CREATE TABLE IF NOT EXISTS active_services_new (
@@ -69,13 +69,15 @@ def _remove_device_limit_alert_column_if_exists(conn: sqlite3.Connection):
             conn.execute("CREATE INDEX IF NOT EXISTS idx_active_services_user ON active_services(user_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_active_services_uuid ON active_services(sub_uuid)")
             conn.commit()
+            logger.info("Rebuild completed; device_limit_alert_sent removed.")
     except Exception as e:
-        logger.warning(f"Couldn't drop column device_limit_alert_sent: {e}")
+        logger.warning(f"Couldn't remove device_limit_alert_sent column: {e}")
 
 def init_db():
     conn = _connect_db()
     cursor = conn.cursor()
 
+    # users
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY, username TEXT, balance REAL DEFAULT 0.0,
@@ -92,6 +94,7 @@ def init_db():
     except sqlite3.OperationalError:
         cursor.execute("ALTER TABLE users ADD COLUMN has_received_referral_bonus INTEGER DEFAULT 0")
 
+    # plans
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS plans (
             plan_id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, price REAL NOT NULL,
@@ -99,8 +102,10 @@ def init_db():
         )
     ''')
 
+    # settings
     cursor.execute('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)''')
 
+    # active_services
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS active_services (
             service_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, name TEXT,
@@ -111,8 +116,10 @@ def init_db():
         )
     ''')
 
+    # مهاجرت حذف device_limit_alert_sent
     _remove_device_limit_alert_column_if_exists(conn)
 
+    # sales_log
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS sales_log (
             sale_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, plan_id INTEGER,
@@ -122,6 +129,7 @@ def init_db():
         )
     ''')
 
+    # gift_codes
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS gift_codes (
             code TEXT PRIMARY KEY, amount REAL NOT NULL, is_used INTEGER DEFAULT 0,
@@ -129,6 +137,7 @@ def init_db():
         )
     ''')
 
+    # transactions
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS transactions (
             transaction_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, plan_id INTEGER,
@@ -137,7 +146,7 @@ def init_db():
         )
     ''')
 
-    # Log table for reminders to avoid duplicates
+    # reminder_log
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS reminder_log (
             service_id INTEGER NOT NULL,
@@ -150,6 +159,7 @@ def init_db():
     # Default settings
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_number', '0000-0000-0000-0000'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_holder', 'نام صاحب حساب'))
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('payment_instruction_text', 'لطفاً مبلغ را به شماره کارت بالا واریز کرده و از رسید اسکرین‌شات بگیرید.'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('referral_bonus_amount', '5000'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('default_sub_link_type', 'sub'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('daily_report_enabled', '1'))
@@ -157,16 +167,13 @@ def init_db():
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('auto_backup_interval_hours', '24'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('maintenance_enabled', '0'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('maintenance_message', '⛔️ ربات در حال بروزرسانی است. لطفاً کمی بعد مراجعه کنید.'))
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('connection_guide',
-        '📚 راهنمای اتصال:\n1) اپ مناسب را نصب کنید.\n2) از ربات لینک را بگیرید.\n3) وارد اپ کنید و متصل شوید.'))
-
-    # Expiry reminder settings
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('connection_guide', '📚 راهنمای اتصال:\n1) اپ مناسب را نصب کنید.\n2) از ربات لینک را بگیرید.\n3) وارد اپ کنید و متصل شوید.'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('expiry_reminder_enabled', '1'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('expiry_reminder_days', '3'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('expiry_reminder_hour', '9'))
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('expiry_reminder_message',
-        '⏰ سرویس «{service_name}» شما {days} روز دیگر منقضی می‌شود.\nبرای جلوگیری از قطعی، از «📋 سرویس‌های من» تمدید کنید.'))
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('expiry_reminder_message', '⏰ سرویس «{service_name}» شما {days} روز دیگر منقضی می‌شود.\nبرای جلوگیری از قطعی، از «📋 سرویس‌های من» تمدید کنید.'))
 
+    # Indexes
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_services_user ON active_services(user_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_services_uuid ON active_services(sub_uuid)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_sales_log_user ON sales_log(user_id)")
@@ -517,17 +524,6 @@ def set_setting(key: str, value: str):
     conn.execute("REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
     conn.commit()
 
-def was_reminder_sent(service_id: int, type_: str, date: str) -> bool:
-    conn = _connect_db()
-    cur = conn.cursor()
-    cur.execute("SELECT 1 FROM reminder_log WHERE service_id = ? AND date = ? AND type = ?", (service_id, date, type_))
-    return cur.fetchone() is not None
-
-def mark_reminder_sent(service_id: int, type_: str, date: str):
-    conn = _connect_db()
-    conn.execute("INSERT OR IGNORE INTO reminder_log (service_id, date, type) VALUES (?, ?, ?)", (service_id, date, type_))
-    conn.commit()
-
 def get_stats() -> dict:
     conn = _connect_db()
     total_users = conn.execute("SELECT COUNT(user_id) FROM users").fetchone()[0]
@@ -569,3 +565,44 @@ def get_user_sales_history(user_id: int) -> list:
     cur = conn.cursor()
     cur.execute(query, (user_id,))
     return [dict(r) for r in cur.fetchall()]
+
+# ===== New: Referral count & Charge history =====
+
+def get_user_referral_count(user_id: int) -> int:
+    """
+    تعداد کاربرانی که این user_id را به‌عنوان معرف (referred_by) دارند.
+    """
+    conn = _connect_db()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM users WHERE referred_by = ?", (user_id,))
+    row = cur.fetchone()
+    return row[0] if row else 0
+
+def get_user_charge_history(user_id: int) -> list:
+    """
+    تاریخچه شارژ موفق کاربر از جدول transactions.
+    اگر برای شارژها رکوردی ثبت نمی‌کنید، این لیست خالی می‌ماند.
+    """
+    conn = _connect_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT created_at, amount
+        FROM transactions
+        WHERE user_id = ?
+          AND type IN ('charge', 'manual_charge')
+          AND status = 'completed'
+        ORDER BY transaction_id DESC
+    """, (user_id,))
+    return [dict(r) for r in cur.fetchall()]
+
+def add_charge_transaction(user_id: int, amount: float, type_: str = "charge"):
+    """
+    یک شارژ موفق را در جدول transactions ثبت می‌کند تا در تاریخچه شارژ نمایش داده شود.
+    """
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn = _connect_db()
+    conn.execute("""
+        INSERT INTO transactions (user_id, plan_id, service_id, type, amount, status, created_at, updated_at)
+        VALUES (?, NULL, NULL, ?, ?, 'completed', ?, ?)
+    """, (user_id, type_, amount, now_str, now_str))
+    conn.commit()
