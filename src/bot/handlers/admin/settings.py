@@ -22,14 +22,26 @@ def _settings_keyboard() -> InlineKeyboardMarkup:
     weekly_on = "✅" if _check_enabled("weekly_report_enabled", "1") else "❌"
 
     keyboard = [
+        # تنظیمات لینک/راهنما
         [InlineKeyboardButton("🔗 ویرایش نوع لینک پیش‌فرض", callback_data="edit_default_link_type")],
         [InlineKeyboardButton("📝 ویرایش راهنمای اتصال", callback_data="admin_edit_setting_connection_guide")],
+
+        # تنظیمات مالی
+        [
+            InlineKeyboardButton("💳 ویرایش شماره کارت", callback_data="admin_edit_setting_card_number"),
+            InlineKeyboardButton("👤 ویرایش نام صاحب حساب", callback_data="admin_edit_setting_card_holder"),
+        ],
+        [InlineKeyboardButton("🎁 ویرایش هدیه دعوت (تومان)", callback_data="admin_edit_setting_referral_bonus_amount")],
+
+        # تنظیمات گزارش/بکاپ
         [InlineKeyboardButton("⚙️ تنظیمات پشتیبان‌گیری خودکار", callback_data="edit_auto_backup")],
         [
             InlineKeyboardButton(f"{daily_on} گزارش روزانه", callback_data="toggle_report_daily"),
             InlineKeyboardButton(f"{weekly_on} گزارش هفتگی", callback_data="toggle_report_weekly"),
         ],
-        [InlineKeyboardButton("↩️ بازگشت به منوی ادمین", callback_data="admin_back_to_menu")],  # دکمه بازگشت اصلی
+
+        # بازگشت اصلی
+        [InlineKeyboardButton("↩️ بازگشت به منوی ادمین", callback_data="admin_back_to_menu")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -83,7 +95,7 @@ async def set_default_link_type(update: Update, context: ContextTypes.DEFAULT_TY
         await q.edit_message_text(f"❌ خطا در ذخیره تنظیم: {e}", reply_markup=_settings_keyboard())
 
 
-# ========== Edit “connection_guide” ==========
+# ========== Edit settings (connection_guide / card_number / card_holder / referral_bonus_amount) ==========
 async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -95,27 +107,52 @@ async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     setting_key = data.replace("admin_edit_setting_", "")
     context.user_data["setting_key"] = setting_key
 
-    if setting_key == "connection_guide":
-        current = db.get_setting("connection_guide") or "—"
-        msg = "📝 متن فعلی راهنمای اتصال:\n\n" + current + "\n\nلطفاً متن جدید را ارسال کنید:"
-        # برای دریافت متن، از ReplyKeyboard ساده استفاده می‌کنیم
-        await q.message.reply_text(msg, reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True))
-        return AWAIT_SETTING_VALUE
+    # متن فعلی برای نمایش
+    current = db.get_setting(setting_key) or "—"
 
-    # سایر کلیدها (در صورت وجود)
-    await q.edit_message_text("لطفاً مقدار جدید را ارسال کنید.")
+    # پیام راهنما بر اساس نوع کلید
+    if setting_key == "connection_guide":
+        msg = "📝 متن فعلی راهنمای اتصال:\n\n" + current + "\n\nلطفاً متن جدید را ارسال کنید:"
+    elif setting_key == "card_number":
+        msg = f"💳 شماره کارت فعلی:\n{current}\n\nشماره کارت جدید را ارسال کنید:"
+    elif setting_key == "card_holder":
+        msg = f"👤 نام صاحب حساب فعلی:\n{current}\n\nنام جدید را ارسال کنید:"
+    elif setting_key == "referral_bonus_amount":
+        msg = f"🎁 هدیه دعوت فعلی (تومان):\n{current}\n\nمبلغ جدید را به صورت عدد (تومان) ارسال کنید:"
+    else:
+        msg = "لطفاً مقدار جدید را ارسال کنید:"
+
+    # دریافت مقدار با ReplyKeyboard ساده
+    await q.message.reply_text(msg, reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True))
     return AWAIT_SETTING_VALUE
 
 
 async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     key = context.user_data.get("setting_key")
-    value = (update.message.text or "").strip()
+    value_raw = (update.message.text or "").strip()
 
     if not key:
         await update.message.reply_text("کلید تنظیمات مشخص نیست.", reply_markup=get_admin_menu_keyboard())
         return ConversationHandler.END
 
-    db.set_setting(key, value)
+    # اعتبارسنجی مختصر
+    if key == "referral_bonus_amount":
+        try:
+            # فقط عدد (تومان) ذخیره شود
+            amount = int(float(value_raw))
+            if amount < 0:
+                raise ValueError()
+            db.set_setting(key, str(amount))
+        except Exception:
+            await update.message.reply_text("❌ مقدار نامعتبر است. لطفاً فقط عدد (تومان) ارسال کنید.")
+            return AWAIT_SETTING_VALUE
+    else:
+        # card_number / card_holder / connection_guide (متن آزاد)
+        if not value_raw:
+            await update.message.reply_text("❌ مقدار خالی است. لطفاً دوباره ارسال کنید.")
+            return AWAIT_SETTING_VALUE
+        db.set_setting(key, value_raw)
+
     await update.message.reply_text("✅ مقدار با موفقیت ذخیره شد.", reply_markup=get_admin_menu_keyboard())
     context.user_data.clear()
     return ConversationHandler.END
@@ -145,7 +182,7 @@ async def edit_auto_backup_start(update: Update, context: ContextTypes.DEFAULT_T
         [InlineKeyboardButton("🕒 هر 12 ساعت", callback_data="set_backup_interval_12")],
         [InlineKeyboardButton("📅 روزانه", callback_data="set_backup_interval_24")],
         [InlineKeyboardButton("🗓 هفتگی", callback_data="set_backup_interval_168")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_settings")],  # ← بازگشت به منوی تنظیمات
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_settings")],  # بازگشت به منوی تنظیمات
     ]
     await q.edit_message_text(f"بازه پشتیبان‌گیری خودکار (فعلی: {current}h):", reply_markup=InlineKeyboardMarkup(rows))
 
@@ -163,7 +200,6 @@ async def set_backup_interval(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 # ========== Back to admin menu (Callback) ==========
 async def back_to_admin_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # این تابع با دکمه «↩️ بازگشت به منوی ادمین» فراخوانی می‌شود
     q = update.callback_query
     await q.answer()
     try:
