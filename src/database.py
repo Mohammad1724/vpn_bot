@@ -171,6 +171,9 @@ def init_db():
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('expiry_reminder_days', '3'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('expiry_reminder_hour', '9'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('expiry_reminder_message', '⏰ سرویس «{service_name}» شما {days} روز دیگر منقضی می‌شود.\nبرای جلوگیری از قطعی، از «📋 سرویس‌های من» تمدید کنید.'))
+    # New: Force Join Channel settings
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('force_channel_enabled', '0'))
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('force_channel_id', ''))
 
     # Indexes
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_services_user ON active_services(user_id)")
@@ -283,7 +286,6 @@ def get_plan(plan_id: int) -> dict:
 def list_plans(only_visible: bool = False) -> list:
     conn = _connect_db()
     cur = conn.cursor()
-    # مرتب‌سازی جدید: اول بر اساس روز، بعد بر اساس حجم
     sort_order = "ORDER BY days ASC, gb ASC"
     if only_visible:
         cur.execute(f"SELECT * FROM plans WHERE is_visible = 1 {sort_order}")
