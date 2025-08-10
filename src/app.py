@@ -79,7 +79,7 @@ def build_application():
             constants.PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_days_received)],
             constants.PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_gb_received)],
         },
-        fallbacks=[CommandHandler('cancel', admin_c.admin_conv_cancel)],
+        fallbacks=[CommandHandler('cancel', admin_plans.cancel_add_plan)],
         map_to_parent={ConversationHandler.END: constants.PLAN_MENU}
     )
 
@@ -91,7 +91,7 @@ def build_application():
             constants.EDIT_PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_days_received), CommandHandler('skip', admin_plans.skip_edit_plan_days)],
             constants.EDIT_PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_gb_received), CommandHandler('skip', admin_plans.skip_edit_plan_gb)],
         },
-        fallbacks=[CommandHandler('cancel', admin_c.admin_conv_cancel)],
+        fallbacks=[CommandHandler('cancel', admin_plans.cancel_edit_plan)],
         map_to_parent={
             constants.PLAN_MENU: constants.PLAN_MENU,
             ConversationHandler.END: constants.PLAN_MENU
@@ -126,9 +126,11 @@ def build_application():
                 MessageHandler(filters.Regex('^ارسال به کاربر خاص$') & admin_filter, admin_users.broadcast_to_user_start),
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.back_to_admin_menu),
             ],
+            # پذیرش هر نوع پیام برای پیش‌نمایش و تایید
             constants.BROADCAST_MESSAGE: [
                 MessageHandler((~filters.COMMAND) & admin_filter, admin_users.broadcast_to_all_confirm),
             ],
+            # تایید/لغو با متن
             constants.BROADCAST_CONFIRM: [
                 MessageHandler(filters.Regex('^(بله، ارسال کن|خیر، لغو کن)$') & admin_filter, admin_users.broadcast_confirm_received),
             ],
