@@ -90,7 +90,7 @@ async def transfer_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def transfer_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("عملیات انتقال لغو شد.")
-    await show_account_info(update, context)  # بازگشت به منوی حساب
+    await show_account_info(update, context)
     return ConversationHandler.END
 
 
@@ -145,10 +145,10 @@ async def create_gift_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE
     db.update_balance(user_id, -amount)
     db.create_gift_code(code, amount)
 
-    await q.edit_message_text(f"✅ کد هدیه با موفقیت ساخته شد:\n\n`{code}`\n\nاین کد را برای دوستان خود ارسال کنید.")
+    await q.edit_message_text(f"✅ کد هدیه با موفقیت ساخته شد:\n\n`{code}`\n\nاین کد را برای دوستان خود ارسال کنید.", parse_mode="Markdown")
     return ConversationHandler.END
 
 async def create_gift_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("عملیات ساخت کد هدیه لغو شد.")
-    await show_account_info(update, context)  # بازگشت به منوی حساب
+    await show_account_info(update, context)
     return ConversationHandler.END
