@@ -38,7 +38,7 @@ def _settings_keyboard() -> InlineKeyboardMarkup:
         # اجبار عضویت در کانال
         [InlineKeyboardButton(force_join_label, callback_data="toggle_force_join")],
         [InlineKeyboardButton("✏️ ویرایش شناسه کانال(ها)", callback_data="admin_edit_setting_force_channel_id")],
-
+        
         # یادآوری انقضا
         [InlineKeyboardButton(exp_label, callback_data="toggle_expiry_reminder")],
         [InlineKeyboardButton("📅 روزهای مانده تا یادآوری", callback_data="admin_edit_setting_expiry_reminder_days")],
@@ -48,6 +48,11 @@ def _settings_keyboard() -> InlineKeyboardMarkup:
         # لینک/راهنما
         [InlineKeyboardButton("🔗 ویرایش نوع لینک پیش‌فرض", callback_data="edit_default_link_type")],
         [InlineKeyboardButton("📝 ویرایش راهنمای اتصال", callback_data="admin_edit_setting_connection_guide")],
+        
+        # ساب‌دامین‌ها
+        [InlineKeyboardButton("🌐 ویرایش ساب‌دامین‌های حجمی", callback_data="admin_edit_setting_volume_based_sub_domains")],
+        [InlineKeyboardButton("♾️ ویرایش ساب‌دامین‌های نامحدود", callback_data="admin_edit_setting_unlimited_sub_domains")],
+        [InlineKeyboardButton("🌍 ویرایش ساب‌دامین‌های عمومی (Fallback)", callback_data="admin_edit_setting_sub_domains")],
 
         # مالی
         [
@@ -152,7 +157,15 @@ async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data["setting_key"] = setting_key
 
     current = db.get_setting(setting_key) or "—"
-    if setting_key == "connection_guide":
+    msg = ""
+
+    if setting_key in ("sub_domains", "volume_based_sub_domains", "unlimited_sub_domains"):
+        msg = (
+            f"🌐 ساب‌دامین‌های فعلی:\n{current}\n\n"
+            "لطفاً لیست جدید ساب‌دامین‌ها را با کاما (,) جدا کرده و ارسال کنید (مثلاً: sub1.domain.com,sub2.domain.com).\n"
+            "برای خالی کردن، یک خط تیره (-) بفرستید."
+        )
+    elif setting_key == "connection_guide":
         msg = "📝 متن فعلی راهنمای اتصال:\n\n" + current + "\n\nلطفاً متن جدید را ارسال کنید:"
     elif setting_key == "card_number":
         msg = f"💳 شماره کارت فعلی:\n{current}\n\nشماره کارت جدید را ارسال کنید:"
@@ -193,17 +206,29 @@ async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("کلید تنظیمات مشخص نیست.", reply_markup=get_admin_menu_keyboard())
         return ConversationHandler.END
 
-    if key in ("referral_bonus_amount", "expiry_reminder_days", "expiry_reminder_hour"):
+    # پردازش ساب‌دامین‌ها
+    if key in ("sub_domains", "volume_based_sub_domains", "unlimited_sub_domains"):
+        if value_raw == "-":
+            db.set_setting(key, "")
+        else:
+            domains = [d.strip() for d in value_raw.split(',') if d.strip()]
+            if not all("." in d for d in domains):
+                await update.message.reply_text("❌ فرمت نامعتبر است. لطفاً دامنه‌ها را با کاما جدا کنید.")
+                return AWAIT_SETTING_VALUE
+            db.set_setting(key, ",".join(domains))
+    # پردازش عددی
+    elif key in ("referral_bonus_amount", "expiry_reminder_days", "expiry_reminder_hour"):
         try:
             num = int(float(value_raw))
             if key == "expiry_reminder_hour" and not (0 <= num <= 23):
-                raise ValueError()
+                raise ValueError("ساعت باید بین 0 تا 23 باشد.")
             if key == "expiry_reminder_days" and num <= 0:
-                raise ValueError()
+                raise ValueError("روز باید بزرگ‌تر از 0 باشد.")
             db.set_setting(key, str(num))
-        except Exception:
-            # ... (validation error messages)
+        except ValueError as e:
+            await update.message.reply_text(f"❌ مقدار نامعتبر است. {e}")
             return AWAIT_SETTING_VALUE
+    # پردازش شناسه کانال
     elif key == "force_channel_id":
         ids = [s.strip() for s in value_raw.split(',') if s.strip()]
         valid = all(s.startswith('-100') and s[1:].isdigit() for s in ids)
@@ -211,6 +236,7 @@ async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("❌ شناسه نامعتبر است. باید با -100 شروع شود و فقط عدد باشد.")
             return AWAIT_SETTING_VALUE
         db.set_setting(key, ",".join(ids))
+    # پردازش متنی
     else:
         if not value_raw:
             await update.message.reply_text("❌ مقدار خالی است. لطفاً دوباره ارسال کنید.")
