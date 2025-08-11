@@ -4,6 +4,9 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Union
 import logging
+import random
+import database as db
+from config import PANEL_DOMAIN
 
 try:
     import jdatetime
@@ -12,12 +15,36 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+def get_domain_for_plan(plan: dict | None) -> str:
+    """
+    بر اساس نوع پلن (حجمی یا نامحدود)، یک ساب‌دامین مناسب را از دیتابیس می‌خواند و انتخاب می‌کند.
+    """
+    is_unlimited = plan and plan.get('gb', 1) == 0
+
+    if is_unlimited:
+        unlimited_domains_str = db.get_setting("unlimited_sub_domains")
+        if unlimited_domains_str:
+            return random.choice([d.strip() for d in unlimited_domains_str.split(',')])
+    
+    else: # Volume-based
+        volume_domains_str = db.get_setting("volume_based_sub_domains")
+        if volume_domains_str:
+            return random.choice([d.strip() for d in volume_domains_str.split(',')])
+
+    # Fallback to general list
+    general_domains_str = db.get_setting("sub_domains")
+    if general_domains_str:
+        return random.choice([d.strip() for d in general_domains_str.split(',')])
+    
+    # Final fallback to panel domain
+    return PANEL_DOMAIN
+
+
 def parse_date_flexible(date_str: str) -> Union[datetime, None]:
     if not date_str:
         return None
     s = str(date_str).strip().replace("Z", "+00:00")
     
-    # Handle ISO format with timezone
     try:
         dt = datetime.fromisoformat(s)
         if dt.tzinfo is None:
@@ -26,7 +53,6 @@ def parse_date_flexible(date_str: str) -> Union[datetime, None]:
     except Exception:
         pass
 
-    # Handle other common formats
     fmts = (
         "%Y-%m-%d %H:%M:%S",
         "%Y-%m-%d",
@@ -35,7 +61,7 @@ def parse_date_flexible(date_str: str) -> Union[datetime, None]:
     )
     for fmt in fmts:
         try:
-            dt = datetime.strptime(s.split('.')[0], fmt) # ignore milliseconds
+            dt = datetime.strptime(s.split('.')[0], fmt)
             return dt.replace(tzinfo=timezone.utc)
         except Exception:
             continue
@@ -44,34 +70,25 @@ def parse_date_flexible(date_str: str) -> Union[datetime, None]:
     return None
 
 def get_service_status(hiddify_info: dict) -> tuple[str, str, bool]:
-    """
-    وضعیت سرویس را بر اساس اطلاعات پنل محاسبه می‌کند.
-    خروجی: (رشته وضعیت, رشته تاریخ انقضای شمسی, بولین منقضی شده)
-    """
     now = datetime.now(timezone.utc)
     is_expired = False
     
-    # 1. اولویت با فلگ‌های مستقیم پنل
     if hiddify_info.get('status') in ('disabled', 'limited'):
         is_expired = True
     elif hiddify_info.get('days_left', 999) < 0:
         is_expired = True
 
-    # 2. بررسی حجم مصرفی
     usage_limit = hiddify_info.get('usage_limit_GB', 0)
     current_usage = hiddify_info.get('current_usage_GB', 0)
     if usage_limit > 0 and current_usage >= usage_limit:
         is_expired = True
 
-    # 3. محاسبه تاریخ انقضا برای نمایش و بررسی نهایی
     jalali_display_str = "N/A"
     
-    # اولویت با timestamp `expire` اگر وجود داشته باشد
     expire_ts = hiddify_info.get('expire')
     if isinstance(expire_ts, (int, float)) and expire_ts > 0:
         expiry_dt_utc = datetime.fromtimestamp(expire_ts, tz=timezone.utc)
     else:
-        # اگر نبود، از start_date + package_days محاسبه کن
         date_keys = ['start_date', 'last_reset_time', 'created_at']
         start_date_str = next((hiddify_info.get(k) for k in date_keys if hiddify_info.get(k)), None)
         package_days = hiddify_info.get('package_days', 0)
@@ -85,14 +102,11 @@ def get_service_status(hiddify_info: dict) -> tuple[str, str, bool]:
             
         expiry_dt_utc = start_dt_utc + timedelta(days=package_days)
 
-    # بررسی نهایی تاریخ
     if not is_expired and now > expiry_dt_utc:
         is_expired = True
 
-    # تبدیل به شمسی برای نمایش
     if jdatetime:
         try:
-            # تبدیل به زمان محلی سرور برای نمایش صحیح
             local_expiry_dt = expiry_dt_utc.astimezone()
             jalali_display_str = jdatetime.date.fromgregorian(date=local_expiry_dt.date()).strftime('%Y/%m/%d')
         except Exception:
