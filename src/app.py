@@ -230,6 +230,16 @@ def build_application():
     # Global callbacks (with higher priority)
     application.add_handler(CallbackQueryHandler(admin_users.admin_confirm_charge_callback, pattern="^admin_confirm_charge_"), group=1)
     application.add_handler(CallbackQueryHandler(admin_users.admin_reject_charge_callback, pattern="^admin_reject_charge_"), group=1)
+    
+    # Settings Submenus
+    application.add_handler(CallbackQueryHandler(admin_settings.maintenance_submenu, pattern="^settings_maintenance$"), group=1)
+    application.add_handler(CallbackQueryHandler(admin_settings.force_join_submenu, pattern="^settings_force_join$"), group=1)
+    application.add_handler(CallbackQueryHandler(admin_settings.expiry_submenu, pattern="^settings_expiry$"), group=1)
+    application.add_handler(CallbackQueryHandler(admin_settings.payment_submenu, pattern="^settings_payment$"), group=1)
+    application.add_handler(CallbackQueryHandler(admin_settings.subdomains_submenu, pattern="^settings_subdomains$"), group=1)
+    application.add_handler(CallbackQueryHandler(admin_settings.other_settings_submenu, pattern="^settings_other$"), group=1)
+    
+    # Other settings callbacks
     application.add_handler(CallbackQueryHandler(admin_settings.edit_default_link_start, pattern="^edit_default_link_type$"), group=1)
     application.add_handler(CallbackQueryHandler(admin_settings.set_default_link_type, pattern="^set_default_link_"), group=1)
     application.add_handler(CallbackQueryHandler(admin_settings.settings_menu, pattern="^back_to_settings$"), group=1)
