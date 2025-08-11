@@ -157,6 +157,15 @@ def build_application():
         map_to_parent={ConversationHandler.END: constants.ADMIN_MENU}
     )
 
+    backup_settings_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(admin_backup.edit_backup_target_start, pattern="^edit_backup_target$")],
+        states={
+            constants.AWAIT_SETTING_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_backup.backup_target_received)],
+        },
+        fallbacks=[CommandHandler('cancel', admin_c.admin_conv_cancel)],
+        map_to_parent={constants.BACKUP_MENU: constants.BACKUP_MENU, ConversationHandler.END: constants.BACKUP_MENU}
+    )
+
     # --- Main Admin Conversation (Parent) ---
     admin_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f'^{constants.BTN_ADMIN_PANEL}$') & admin_filter, admin_c.admin_entry)],
@@ -198,6 +207,8 @@ def build_application():
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.back_to_admin_menu),
                 CallbackQueryHandler(admin_backup.admin_confirm_restore_callback, pattern="^admin_confirm_restore$"),
                 CallbackQueryHandler(admin_backup.admin_cancel_restore_callback, pattern="^admin_cancel_restore$"),
+                CallbackQueryHandler(admin_backup.edit_backup_interval_start, pattern="^edit_backup_interval$"),
+                backup_settings_conv,
             ],
             constants.RESTORE_UPLOAD: [
                 MessageHandler(filters.Document.ALL & admin_filter, admin_backup.restore_receive_file),
