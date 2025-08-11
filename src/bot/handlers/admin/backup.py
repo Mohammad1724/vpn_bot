@@ -133,8 +133,8 @@ async def admin_cancel_restore_callback(update: Update, context: ContextTypes.DE
 
 # ===== Auto-backup settings =====
 async def edit_auto_backup_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    if q:
+    if update.callback_query:
+        q = update.callback_query
         await q.answer()
         send_func = q.edit_message_text
     else:
@@ -212,4 +212,12 @@ async def backup_target_received(update: Update, context: ContextTypes.DEFAULT_T
             return AWAIT_SETTING_VALUE
             
     await update.message.reply_text("✅ مقصد بکاپ با موفقیت ذخیره شد.", reply_markup=_backup_menu_keyboard())
+    return ConversationHandler.END
+
+async def cancel_backup_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Fallback اختصاصی برای لغو عملیات در زیرمنوی تنظیمات بکاپ.
+    """
+    context.user_data.clear()
+    await update.message.reply_text("عملیات لغو شد.", reply_markup=_backup_menu_keyboard())
     return ConversationHandler.END
