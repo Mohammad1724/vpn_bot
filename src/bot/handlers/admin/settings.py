@@ -16,15 +16,8 @@ def _check_enabled(key: str, default: str = "1") -> bool:
     return str(val).lower() in ("1", "true", "on", "yes")
 
 
-# ===== Main Settings Menu =====
-async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    if q:
-        await q.answer()
-        send_func = q.edit_message_text
-    else:
-        send_func = update.message.reply_text
-
+def _main_settings_keyboard() -> InlineKeyboardMarkup:
+    """کیبورد اصلی منوی تنظیمات"""
     keyboard = [
         [InlineKeyboardButton("🛠️ حالت نگه‌داری", callback_data="settings_maintenance")],
         [InlineKeyboardButton("📢 اجبار عضویت", callback_data="settings_force_join")],
@@ -34,7 +27,19 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("⚙️ سایر تنظیمات", callback_data="settings_other")],
         [InlineKeyboardButton("↩️ بازگشت به منوی ادمین", callback_data="admin_back_to_menu")],
     ]
-    await send_func("بخش تنظیمات اصلی:", reply_markup=InlineKeyboardMarkup(keyboard))
+    return InlineKeyboardMarkup(keyboard)
+
+
+# ===== Main Settings Menu =====
+async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if q:
+        await q.answer()
+        send_func = q.edit_message_text
+    else:
+        send_func = update.message.reply_text
+
+    await send_func("بخش تنظیمات اصلی:", reply_markup=_main_settings_keyboard())
 
 
 # ===== Submenus =====
@@ -243,7 +248,38 @@ async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("کلید تنظیمات مشخص نیست.", reply_markup=get_admin_menu_keyboard())
         return ConversationHandler.END
 
-    # ... (اعتبارسنجی‌ها مثل قبل)
+    if key in ("referral_bonus_amount", "expiry_reminder_days", "expiry_reminder_hour"):
+        try:
+            num = int(float(value_raw))
+            if key == "expiry_reminder_hour" and not (0 <= num <= 23):
+                raise ValueError("ساعت باید بین 0 تا 23 باشد.")
+            if key == "expiry_reminder_days" and num <= 0:
+                raise ValueError("روز باید بزرگ‌تر از 0 باشد.")
+            db.set_setting(key, str(num))
+        except ValueError as e:
+            await update.message.reply_text(f"❌ مقدار نامعتبر است. {e}")
+            return AWAIT_SETTING_VALUE
+    elif key == "force_channel_id":
+        ids = [s.strip() for s in value_raw.split(',') if s.strip()]
+        valid = all(s.startswith('-100') and s[1:].isdigit() for s in ids)
+        if not valid and value_raw:
+            await update.message.reply_text("❌ شناسه نامعتبر است. باید با -100 شروع شود و فقط عدد باشد.")
+            return AWAIT_SETTING_VALUE
+        db.set_setting(key, ",".join(ids))
+    elif key in ("sub_domains", "volume_based_sub_domains", "unlimited_sub_domains"):
+        if value_raw == "-":
+            db.set_setting(key, "")
+        else:
+            domains = [d.strip() for d in value_raw.split(',') if d.strip()]
+            if not all("." in d for d in domains):
+                await update.message.reply_text("❌ فرمت نامعتبر است. لطفاً دامنه‌ها را با کاما جدا کنید.")
+                return AWAIT_SETTING_VALUE
+            db.set_setting(key, ",".join(domains))
+    else:
+        if not value_raw:
+            await update.message.reply_text("❌ مقدار خالی است. لطفاً دوباره ارسال کنید.")
+            return AWAIT_SETTING_VALUE
+        db.set_setting(key, value_raw)
 
     await update.message.reply_text("✅ مقدار با موفقیت ذخیره شد.", reply_markup=get_admin_menu_keyboard())
     context.user_data.clear()
@@ -253,7 +289,12 @@ async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_T
 # ===== Auto-backup interval =====
 async def edit_auto_backup_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer()
+    if q:
+        await q.answer()
+        send_func = q.edit_message_text
+    else:
+        send_func = update.message.reply_text
+
     current = db.get_setting("auto_backup_interval_hours") or "24"
     rows = [
         [InlineKeyboardButton("⛔ خاموش", callback_data="set_backup_interval_0")],
@@ -263,7 +304,7 @@ async def edit_auto_backup_start(update: Update, context: ContextTypes.DEFAULT_T
         [InlineKeyboardButton("🗓 هفتگی", callback_data="set_backup_interval_168")],
         [InlineKeyboardButton("🔙 بازگشت", callback_data="settings_other")],
     ]
-    await q.edit_message_text(f"بازه پشتیبان‌گیری خودکار (فعلی: {current}h):", reply_markup=InlineKeyboardMarkup(rows))
+    await send_func(f"بازه پشتیبان‌گیری خودکار (فعلی: {current}h):", reply_markup=InlineKeyboardMarkup(rows))
 
 
 async def set_backup_interval(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -272,6 +313,14 @@ async def set_backup_interval(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         hours = int(q.data.replace("set_backup_interval_", ""))
         db.set_setting("auto_backup_interval_hours", str(hours))
+        
+        # بعد از تغییر، جاب‌ها را دوباره زمان‌بندی می‌کنیم
+        from bot import jobs
+        if context.application.job_queue:
+            for job in context.application.job_queue.jobs():
+                job.schedule_removal()
+            await jobs.post_init(context.application)
+        
         await q.edit_message_text("✅ بازه پشتیبان‌گیری ذخیره شد.", reply_markup=_main_settings_keyboard())
     except Exception as e:
         await q.edit_message_text(f"❌ خطا در ذخیره تنظیم: {e}", reply_markup=_main_settings_keyboard())
