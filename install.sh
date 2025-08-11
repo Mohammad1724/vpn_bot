@@ -335,7 +335,9 @@ status_bot() {
 follow_journal() {
   ensure_root
   print_color yellow "Following live journal logs (Ctrl+C to exit)"
-  journalctl -u "${SERVICE_NAME}" -f
+  # Run in a subshell so Ctrl+C doesn't exit the main script
+  ( journalctl -u "${SERVICE_NAME}" -f )
+  print_color yellow "Stopped following logs."
 }
 
 follow_bot_log() {
@@ -344,10 +346,10 @@ follow_bot_log() {
   local LOG_FILE="${INSTALL_DIR:-/opt/vpn-bot}/src/bot.log"
   if [ -f "$LOG_FILE" ]; then
     print_color yellow "Tailing bot.log (last 200 lines, live). Ctrl+C to exit."
-    tail -n 200 -f "$LOG_FILE"
+    ( tail -n 200 -f "$LOG_FILE" )
+    print_color yellow "Stopped following logs."
   else
     print_color red "bot.log not found at: $LOG_FILE"
-    print_color yellow "Use the Journalctl option instead."
   fi
 }
 
@@ -411,8 +413,8 @@ main_loop() {
       2) update_bot; pause ;;
       3) restart_bot; pause ;;
       4) status_bot; pause ;;
-      5) follow_journal ;;
-      6) follow_bot_log ;;
+      5) follow_journal; pause ;;
+      6) follow_bot_log; pause ;;
       7) uninstall_bot; pause ;;
       0) exit 0 ;;
       *) print_color red "Invalid option!"; pause ;;
