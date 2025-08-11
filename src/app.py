@@ -194,7 +194,6 @@ def build_application():
             constants.BACKUP_MENU: [
                 MessageHandler(filters.Regex('^📥 دریافت فایل پشتیبان$') & admin_filter, admin_backup.send_backup_file),
                 MessageHandler(filters.Regex('^📤 بارگذاری فایل پشتیبان$') & admin_filter, admin_backup.restore_start),
-                MessageHandler(filters.Regex('^⚙️ تنظیمات پشتیبان‌گیری خودکار$') & admin_filter, admin_settings.edit_auto_backup_start),
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.back_to_admin_menu),
                 CallbackQueryHandler(admin_backup.admin_confirm_restore_callback, pattern="^admin_confirm_restore$"),
                 CallbackQueryHandler(admin_backup.admin_cancel_restore_callback, pattern="^admin_cancel_restore$"),
@@ -246,6 +245,7 @@ def build_application():
     application.add_handler(CallbackQueryHandler(admin_settings.settings_menu, pattern="^back_to_settings$"), group=1)
     application.add_handler(CallbackQueryHandler(admin_gift.delete_gift_code_callback, pattern="^delete_gift_code_"), group=1)
     application.add_handler(CallbackQueryHandler(admin_settings.toggle_report_setting, pattern="^toggle_report_"), group=1)
+    application.add_handler(CallbackQueryHandler(admin_settings.edit_auto_backup_start, pattern="^edit_auto_backup$"), group=1)
     application.add_handler(CallbackQueryHandler(admin_settings.set_backup_interval, pattern="^set_backup_interval_"), group=1)
     application.add_handler(CallbackQueryHandler(admin_settings.toggle_maintenance, pattern="^toggle_maintenance$"), group=1)
     application.add_handler(CallbackQueryHandler(admin_settings.toggle_expiry_reminder, pattern="^toggle_expiry_reminder$"), group=1)
