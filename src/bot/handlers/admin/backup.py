@@ -16,7 +16,11 @@ from bot.constants import CMD_CANCEL, BACKUP_MENU, ADMIN_MENU, RESTORE_UPLOAD, B
 import database as db
 
 def _backup_menu_keyboard() -> ReplyKeyboardMarkup:
-    kb = [["📥 دریافت فایل پشتیبان", "📤 بارگذاری فایل پشتیبان"], [BTN_BACK_TO_ADMIN_MENU]]
+    kb = [
+        ["📥 دریافت فایل پشتیبان", "📤 بارگذاری فایل پشتیبان"],
+        ["⚙️ تنظیمات پشتیبان‌گیری خودکار"],
+        [BTN_BACK_TO_ADMIN_MENU],
+    ]
     return ReplyKeyboardMarkup(kb, resize_keyboard=True)
 
 async def backup_restore_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
