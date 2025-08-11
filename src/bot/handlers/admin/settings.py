@@ -16,20 +16,6 @@ def _check_enabled(key: str, default: str = "1") -> bool:
     return str(val).lower() in ("1", "true", "on", "yes")
 
 
-def _main_settings_keyboard() -> InlineKeyboardMarkup:
-    """کیبورد اصلی منوی تنظیمات"""
-    keyboard = [
-        [InlineKeyboardButton("🛠️ حالت نگه‌داری", callback_data="settings_maintenance")],
-        [InlineKeyboardButton("📢 اجبار عضویت", callback_data="settings_force_join")],
-        [InlineKeyboardButton("⏰ یادآوری انقضا", callback_data="settings_expiry")],
-        [InlineKeyboardButton("💳 تنظیمات پرداخت", callback_data="settings_payment")],
-        [InlineKeyboardButton("🌐 تنظیمات ساب‌دامین‌ها", callback_data="settings_subdomains")],
-        [InlineKeyboardButton("⚙️ سایر تنظیمات", callback_data="settings_other")],
-        [InlineKeyboardButton("↩️ بازگشت به منوی ادمین", callback_data="admin_back_to_menu")],
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
 # ===== Main Settings Menu =====
 async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -39,7 +25,24 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         send_func = update.message.reply_text
 
-    await send_func("بخش تنظیمات اصلی:", reply_markup=_main_settings_keyboard())
+    daily_on = "✅" if _check_enabled("daily_report_enabled", "1") else "❌"
+    weekly_on = "✅" if _check_enabled("weekly_report_enabled", "1") else "❌"
+
+    keyboard = [
+        [InlineKeyboardButton("🛠️ حالت نگه‌داری", callback_data="settings_maintenance")],
+        [InlineKeyboardButton("📢 اجبار عضویت", callback_data="settings_force_join")],
+        [InlineKeyboardButton("⏰ یادآوری انقضا", callback_data="settings_expiry")],
+        [InlineKeyboardButton("💳 تنظیمات پرداخت", callback_data="settings_payment")],
+        [InlineKeyboardButton("🌐 تنظیمات ساب‌دامین‌ها", callback_data="settings_subdomains")],
+        [
+            InlineKeyboardButton(f"{daily_on} گزارش روزانه", callback_data="toggle_report_daily"),
+            InlineKeyboardButton(f"{weekly_on} گزارش هفتگی", callback_data="toggle_report_weekly"),
+        ],
+        [InlineKeyboardButton("🔗 ویرایش نوع لینک پیش‌فرض", callback_data="edit_default_link_type")],
+        [InlineKeyboardButton("📝 ویرایش راهنمای اتصال", callback_data="admin_edit_setting_connection_guide")],
+        [InlineKeyboardButton("↩️ بازگشت به منوی ادمین", callback_data="admin_back_to_menu")],
+    ]
+    await send_func("بخش تنظیمات اصلی:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 # ===== Submenus =====
@@ -103,23 +106,6 @@ async def subdomains_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     ]
     await q.edit_message_text("تنظیمات ساب‌دامین‌ها:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-async def other_settings_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    daily_on = "✅" if _check_enabled("daily_report_enabled", "1") else "❌"
-    weekly_on = "✅" if _check_enabled("weekly_report_enabled", "1") else "❌"
-    keyboard = [
-        [InlineKeyboardButton("🔗 ویرایش نوع لینک پیش‌فرض", callback_data="edit_default_link_type")],
-        [InlineKeyboardButton("📝 ویرایش راهنمای اتصال", callback_data="admin_edit_setting_connection_guide")],
-        [InlineKeyboardButton("⚙️ تنظیمات پشتیبان‌گیری خودکار", callback_data="edit_auto_backup")],
-        [
-            InlineKeyboardButton(f"{daily_on} گزارش روزانه", callback_data="toggle_report_daily"),
-            InlineKeyboardButton(f"{weekly_on} گزارش هفتگی", callback_data="toggle_report_weekly"),
-        ],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_settings")],
-    ]
-    await q.edit_message_text("سایر تنظیمات:", reply_markup=InlineKeyboardMarkup(keyboard))
-
 # ===== Toggles =====
 async def toggle_maintenance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -149,7 +135,7 @@ async def toggle_report_setting(update: Update, context: ContextTypes.DEFAULT_TY
     key = "daily_report_enabled" if typ == "daily" else "weekly_report_enabled"
     curr = _check_enabled(key, "1")
     db.set_setting(key, "0" if curr else "1")
-    await other_settings_submenu(update, context)
+    await settings_menu(update, context)
 
 # ===== Default link type =====
 async def edit_default_link_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -170,7 +156,7 @@ async def edit_default_link_start(update: Update, context: ContextTypes.DEFAULT_
     for key, title in mapping:
         mark = "✅ " if key == current else ""
         rows.append([InlineKeyboardButton(f"{mark}{title}", callback_data=f"set_default_link_{key}")])
-    rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="settings_other")])
+    rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_settings")])
 
     await q.edit_message_text("نوع لینک پیش‌فرض را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(rows))
 
@@ -181,9 +167,9 @@ async def set_default_link_type(update: Update, context: ContextTypes.DEFAULT_TY
     try:
         val = q.data.replace("set_default_link_", "")
         db.set_setting("default_sub_link_type", val)
-        await q.edit_message_text(f"✅ نوع لینک پیش‌فرض تنظیم شد: {val}", reply_markup=_main_settings_keyboard())
+        await settings_menu(update, context)
     except Exception as e:
-        await q.edit_message_text(f"❌ خطا در ذخیره تنظیم: {e}", reply_markup=_main_settings_keyboard())
+        await q.edit_message_text(f"❌ خطا در ذخیره تنظیم: {e}")
 
 
 # ===== Edit settings (generic handler) =====
@@ -192,7 +178,7 @@ async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await q.answer()
     data = q.data
     if not data.startswith("admin_edit_setting_"):
-        await q.edit_message_text("دستور نامعتبر است.", reply_markup=_main_settings_keyboard())
+        await q.edit_message_text("دستور نامعتبر است.")
         return ConversationHandler.END
 
     setting_key = data.replace("admin_edit_setting_", "")
@@ -284,46 +270,6 @@ async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_T
     await update.message.reply_text("✅ مقدار با موفقیت ذخیره شد.", reply_markup=get_admin_menu_keyboard())
     context.user_data.clear()
     return ConversationHandler.END
-
-
-# ===== Auto-backup interval =====
-async def edit_auto_backup_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    if q:
-        await q.answer()
-        send_func = q.edit_message_text
-    else:
-        send_func = update.message.reply_text
-
-    current = db.get_setting("auto_backup_interval_hours") or "24"
-    rows = [
-        [InlineKeyboardButton("⛔ خاموش", callback_data="set_backup_interval_0")],
-        [InlineKeyboardButton("⏱ هر 6 ساعت", callback_data="set_backup_interval_6")],
-        [InlineKeyboardButton("🕒 هر 12 ساعت", callback_data="set_backup_interval_12")],
-        [InlineKeyboardButton("📅 روزانه", callback_data="set_backup_interval_24")],
-        [InlineKeyboardButton("🗓 هفتگی", callback_data="set_backup_interval_168")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="settings_other")],
-    ]
-    await send_func(f"بازه پشتیبان‌گیری خودکار (فعلی: {current}h):", reply_markup=InlineKeyboardMarkup(rows))
-
-
-async def set_backup_interval(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    try:
-        hours = int(q.data.replace("set_backup_interval_", ""))
-        db.set_setting("auto_backup_interval_hours", str(hours))
-        
-        # بعد از تغییر، جاب‌ها را دوباره زمان‌بندی می‌کنیم
-        from bot import jobs
-        if context.application.job_queue:
-            for job in context.application.job_queue.jobs():
-                job.schedule_removal()
-            await jobs.post_init(context.application)
-        
-        await q.edit_message_text("✅ بازه پشتیبان‌گیری ذخیره شد.", reply_markup=_main_settings_keyboard())
-    except Exception as e:
-        await q.edit_message_text(f"❌ خطا در ذخیره تنظیم: {e}", reply_markup=_main_settings_keyboard())
 
 
 # ===== Back to admin menu =====
