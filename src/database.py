@@ -176,6 +176,7 @@ def init_db():
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('sub_domains', ''))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('volume_based_sub_domains', ''))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('unlimited_sub_domains', ''))
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('backup_target_chat_id', ''))
 
     # Indexes
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_services_user ON active_services(user_id)")
