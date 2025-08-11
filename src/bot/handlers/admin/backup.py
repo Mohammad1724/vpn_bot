@@ -12,7 +12,7 @@ from telegram.error import BadRequest
 
 from bot.utils import is_valid_sqlite
 from bot.keyboards import get_admin_menu_keyboard
-from bot.constants import CMD_CANCEL, BACKUP_MENU, ADMIN_MENU, RESTORE_UPLOAD, BTN_BACK_TO_ADMIN_MENU
+from bot.constants import CMD_CANCEL, BACKUP_MENU, ADMIN_MENU, RESTORE_UPLOAD, BTN_BACK_TO_ADMIN_MENU, AWAIT_SETTING_VALUE
 import database as db
 
 def _backup_menu_keyboard() -> ReplyKeyboardMarkup:
@@ -28,7 +28,6 @@ async def backup_restore_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
         q = update.callback_query
         await q.answer()
         try:
-            # اگر از زیرمنو برمیگردیم، پیام را ویرایش می‌کنیم
             await q.edit_message_text("بخش پشتیبان‌گیری و بازیابی.", reply_markup=None)
             await q.message.reply_text("منوی پشتیبان‌گیری:", reply_markup=_backup_menu_keyboard())
         except BadRequest:
@@ -132,16 +131,29 @@ async def admin_cancel_restore_callback(update: Update, context: ContextTypes.DE
     context.user_data.clear()
     return BACKUP_MENU
 
-# ===== Auto-backup interval =====
+# ===== Auto-backup settings =====
 async def edit_auto_backup_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # این تابع هم با Message و هم CallbackQuery کار می‌کند
-    if update.callback_query:
-        q = update.callback_query
+    q = update.callback_query
+    if q:
         await q.answer()
         send_func = q.edit_message_text
     else:
         send_func = update.message.reply_text
         
+    current_interval = db.get_setting("auto_backup_interval_hours") or "24"
+    current_target = db.get_setting("backup_target_chat_id") or "ادمین اصلی"
+
+    rows = [
+        [InlineKeyboardButton(f"🕒 بازه فعلی: {current_interval}h", callback_data="edit_backup_interval")],
+        [InlineKeyboardButton(f"🎯 مقصد فعلی: {current_target}", callback_data="edit_backup_target")],
+        [InlineKeyboardButton("🔙 بازگشت به منوی پشتیبان‌گیری", callback_data="back_to_backup_menu")],
+    ]
+    await send_func("تنظیمات پشتیبان‌گیری خودکار:", reply_markup=InlineKeyboardMarkup(rows))
+    return BACKUP_MENU
+
+async def edit_backup_interval_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
     current = db.get_setting("auto_backup_interval_hours") or "24"
     rows = [
         [InlineKeyboardButton("⛔ خاموش", callback_data="set_backup_interval_0")],
@@ -149,9 +161,9 @@ async def edit_auto_backup_start(update: Update, context: ContextTypes.DEFAULT_T
         [InlineKeyboardButton("🕒 هر 12 ساعت", callback_data="set_backup_interval_12")],
         [InlineKeyboardButton("📅 روزانه", callback_data="set_backup_interval_24")],
         [InlineKeyboardButton("🗓 هفتگی", callback_data="set_backup_interval_168")],
-        [InlineKeyboardButton("🔙 بازگشت به منوی پشتیبان‌گیری", callback_data="back_to_backup_menu")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="edit_auto_backup")],
     ]
-    await send_func(f"بازه پشتیبان‌گیری خودکار (فعلی: {current}h):", reply_markup=InlineKeyboardMarkup(rows))
+    await q.edit_message_text(f"بازه پشتیبان‌گیری خودکار (فعلی: {current}h):", reply_markup=InlineKeyboardMarkup(rows))
     return BACKUP_MENU
 
 async def set_backup_interval(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -161,16 +173,43 @@ async def set_backup_interval(update: Update, context: ContextTypes.DEFAULT_TYPE
         hours = int(q.data.replace("set_backup_interval_", ""))
         db.set_setting("auto_backup_interval_hours", str(hours))
         
-        # بعد از تغییر، جاب‌ها را دوباره زمان‌بندی می‌کنیم
         from bot import jobs
         if context.application.job_queue:
-            # حذف جاب‌های قدیمی و زمان‌بندی مجدد
             for job in context.application.job_queue.jobs():
-                job.schedule_removal()
-            await jobs.post_init(context.application)
+                if job.name == 'auto_backup_job':
+                    job.schedule_removal()
+            if hours > 0:
+                context.application.job_queue.run_repeating(jobs.auto_backup_job, interval=timedelta(hours=hours), first=timedelta(hours=1))
         
         await q.edit_message_text("✅ بازه پشتیبان‌گیری ذخیره شد.")
-        await q.message.reply_text("منوی پشتیبان‌گیری:", reply_markup=_backup_menu_keyboard())
+        await edit_auto_backup_start(update, context)
     except Exception as e:
         await q.edit_message_text(f"❌ خطا در ذخیره تنظیم: {e}")
     return BACKUP_MENU
+
+async def edit_backup_target_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    current = db.get_setting("backup_target_chat_id") or "ادمین اصلی"
+    msg = (
+        f"🎯 مقصد فعلی بکاپ‌ها: {current}\n\n"
+        "شناسه عددی چت مقصد (ربات، کانال خصوصی یا کاربر) را ارسال کنید.\n"
+        "برای بازگشت به حالت پیش‌فرض (ارسال به ادمین اصلی)، یک خط تیره (-) بفرستید."
+    )
+    await q.message.reply_text(msg, reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True))
+    return AWAIT_SETTING_VALUE
+
+async def backup_target_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    value_raw = (update.message.text or "").strip()
+    if value_raw == "-":
+        db.set_setting("backup_target_chat_id", "")
+    else:
+        try:
+            int(value_raw)
+            db.set_setting("backup_target_chat_id", value_raw)
+        except ValueError:
+            await update.message.reply_text("❌ شناسه نامعتبر است. لطفاً فقط عدد ارسال کنید.")
+            return AWAIT_SETTING_VALUE
+            
+    await update.message.reply_text("✅ مقصد بکاپ با موفقیت ذخیره شد.", reply_markup=_backup_menu_keyboard())
+    return ConversationHandler.END
