@@ -171,9 +171,11 @@ def init_db():
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('expiry_reminder_days', '3'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('expiry_reminder_hour', '9'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('expiry_reminder_message', '⏰ سرویس «{service_name}» شما {days} روز دیگر منقضی می‌شود.\nبرای جلوگیری از قطعی، از «📋 سرویس‌های من» تمدید کنید.'))
-    # New: Force Join Channel settings
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('force_channel_enabled', '0'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('force_channel_id', ''))
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('sub_domains', ''))
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('volume_based_sub_domains', ''))
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('unlimited_sub_domains', ''))
 
     # Indexes
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_services_user ON active_services(user_id)")
