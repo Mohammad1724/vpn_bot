@@ -156,13 +156,13 @@ def build_application():
         fallbacks=[CommandHandler('cancel', admin_c.admin_conv_cancel)],
         map_to_parent={ConversationHandler.END: constants.ADMIN_MENU}
     )
-
+    
     backup_settings_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_backup.edit_backup_target_start, pattern="^edit_backup_target$")],
         states={
             constants.AWAIT_SETTING_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_backup.backup_target_received)],
         },
-        fallbacks=[CommandHandler('cancel', admin_c.admin_conv_cancel)],
+        fallbacks=[CommandHandler('cancel', admin_backup.cancel_backup_settings)],
         map_to_parent={constants.BACKUP_MENU: constants.BACKUP_MENU, ConversationHandler.END: constants.BACKUP_MENU}
     )
 
