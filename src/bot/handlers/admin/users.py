@@ -9,12 +9,13 @@ from telegram.error import Forbidden, BadRequest, RetryAfter, TimedOut, NetworkE
 
 from bot.constants import (
     MANAGE_USER_ID, MANAGE_USER_ACTION, MANAGE_USER_AMOUNT, CMD_CANCEL,
-    BTN_BACK_TO_ADMIN_MENU,
+    BTN_BACK_TO_ADMIN_MENU, MANAGE_SERVICE_ACTION,
     BROADCAST_MENU, BROADCAST_MESSAGE, BROADCAST_CONFIRM,
     BROADCAST_TO_USER_ID, BROADCAST_TO_USER_MESSAGE
 )
 from bot.keyboards import get_admin_menu_keyboard
 import database as db
+import hiddify_api
 
 logger = logging.getLogger(__name__)
 
@@ -26,8 +27,13 @@ async def _send_user_panel(update: Update, target_id: int):
     if not info:
         await update.message.reply_text("کاربر یافت نشد.")
         return
+
     ban_text = "آزاد کردن کاربر" if info['is_banned'] else "مسدود کردن کاربر"
-    keyboard = [["افزایش موجودی", "کاهش موجودی"], ["📜 سوابق خرید", ban_text], [BTN_BACK_TO_ADMIN_MENU]]
+    keyboard = [
+        ["افزایش موجودی", "کاهش موجودی"],
+        ["🔧 مدیریت سرویس‌ها", ban_text],
+        ["📜 سوابق خرید", BTN_BACK_TO_ADMIN_MENU]
+    ]
     text = (
         f"👤 کاربر: `{info['user_id']}`\n"
         f"یوزرنیم: @{info.get('username', 'N/A')}\n"
@@ -48,30 +54,55 @@ async def user_management_menu(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def manage_user_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """دریافت آیدی یا یوزرنیم و نمایش پنل کاربر"""
-    user_input = update.message.text.strip()
+    if update.callback_query:
+        q = update.callback_query
+        await q.answer()
+        user_input = q.data.split('_')[-1]
+        try:
+            await q.message.delete()
+        except Exception:
+            pass
+        send_func = q.from_user.send_message
+    else:
+        user_input = update.message.text.strip()
+        send_func = update.message.reply_text
+
     info = None
     if user_input.isdigit():
         info = db.get_user(int(user_input))
     elif re.fullmatch(r'@?[A-Za-z0-9_]{5,32}', user_input):
         info = db.get_user_by_username(user_input)
     else:
-        await update.message.reply_text("ورودی نامعتبر است. یک آیدی عددی یا یوزرنیم صحیح وارد کنید.")
+        await send_func("ورودی نامعتبر است. یک آیدی عددی یا یوزرنیم صحیح وارد کنید.")
         return MANAGE_USER_ID
 
     if not info:
-        await update.message.reply_text("کاربری با این مشخصات یافت نشد.")
+        await send_func("کاربری با این مشخصات یافت نشد.")
         return MANAGE_USER_ID
 
     context.user_data['target_user_id'] = info['user_id']
-    await _send_user_panel(update, info['user_id'])
+    
+    ban_text = "آزاد کردن کاربر" if info['is_banned'] else "مسدود کردن کاربر"
+    keyboard = [
+        ["افزایش موجودی", "کاهش موجودی"],
+        ["🔧 مدیریت سرویس‌ها", ban_text],
+        ["📜 سوابق خرید", BTN_BACK_TO_ADMIN_MENU]
+    ]
+    text = (
+        f"👤 کاربر: `{info['user_id']}`\n"
+        f"یوزرنیم: @{info.get('username', 'N/A')}\n"
+        f"💰 موجودی: {info['balance']:.0f} تومان\n"
+        f"وضعیت: {'مسدود' if info['is_banned'] else 'فعال'}"
+    )
+    await send_func(text, reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True), parse_mode="Markdown")
     return MANAGE_USER_ACTION
 
 
 async def manage_user_action_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """هندل‌کننده اکشن‌های ادمین روی کاربر"""
     action = update.message.text
-    target = context.user_data.get('target_user_id')
-    if not target:
+    target_id = context.user_data.get('target_user_id')
+    if not target_id:
         await update.message.reply_text("خطا: کاربر هدف مشخص نیست.")
         return await user_management_menu(update, context)
 
@@ -81,15 +112,19 @@ async def manage_user_action_handler(update: Update, context: ContextTypes.DEFAU
         return MANAGE_USER_AMOUNT
 
     elif "مسدود" in action or "آزاد" in action:
-        info = db.get_user(target)
+        info = db.get_user(target_id)
         new_status = not info['is_banned']
-        db.set_user_ban_status(target, new_status)
+        db.set_user_ban_status(target_id, new_status)
         await update.message.reply_text(f"✅ وضعیت کاربر به {'مسدود' if new_status else 'فعال'} تغییر کرد.")
-        await _send_user_panel(update, target)
+        await _send_user_panel(update, target_id)
         return MANAGE_USER_ACTION
+        
+    elif action == "🔧 مدیریت سرویس‌ها":
+        await manage_user_services_menu(update, context)
+        return MANAGE_SERVICE_ACTION
 
     elif action == "📜 سوابق خرید":
-        history = db.get_user_sales_history(target)
+        history = db.get_user_sales_history(target_id)
         if not history:
             await update.message.reply_text("این کاربر تاکنون خریدی نداشته است.")
             return MANAGE_USER_ACTION
@@ -114,7 +149,6 @@ async def manage_user_amount_received(update: Update, context: ContextTypes.DEFA
         target = context.user_data['target_user_id']
         is_add = action == "افزایش موجودی"
 
-        # ثبت تراکنش برای تاریخچه شارژ
         if is_add:
             db.add_charge_transaction(target, amount, type_="manual_charge_add")
         else:
@@ -123,7 +157,6 @@ async def manage_user_amount_received(update: Update, context: ContextTypes.DEFA
         db.update_balance(target, amount if is_add else -amount)
         await update.message.reply_text(f"✅ مبلغ {amount:.0f} تومان از حساب کاربر {'کسر' if not is_add else 'افزوده'} شد.")
 
-        # ارسال اطلاعیه به کاربر
         try:
             if is_add:
                 await context.bot.send_message(
@@ -169,7 +202,6 @@ async def admin_confirm_charge_callback(update: Update, context: ContextTypes.DE
                 pass
         return
 
-    # ثبت تراکنش برای تاریخچه شارژ
     db.add_charge_transaction(target_user_id, amount, type_="charge")
     db.update_balance(target_user_id, amount)
     original_caption = q.message.caption or ""
@@ -213,6 +245,91 @@ async def admin_reject_charge_callback(update: Update, context: ContextTypes.DEF
             await q.edit_message_caption(caption=feedback, reply_markup=None, parse_mode="Markdown")
         except Exception:
             await context.bot.send_message(chat_id=q.from_user.id, text=feedback, parse_mode="Markdown")
+
+
+# ===== Admin Manage User's Services =====
+
+async def manage_user_services_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    target_id = context.user_data.get('target_user_id')
+    if update.callback_query:
+        q = update.callback_query
+        await q.answer()
+        send_func = q.edit_message_text
+    else:
+        send_func = update.message.reply_text
+
+    services = db.get_user_services(target_id)
+    if not services:
+        await send_func("این کاربر هیچ سرویس فعالی ندارد.")
+        return MANAGE_USER_ACTION
+
+    text = "سرویس‌های کاربر را انتخاب کنید:"
+    keyboard = []
+    for svc in services:
+        keyboard.append([InlineKeyboardButton(f"{svc['name']} (ID: {svc['service_id']})", callback_data=f"admin_view_service_{svc['service_id']}")])
+    
+    back_button = InlineKeyboardButton("🔙 بازگشت به پنل کاربر", callback_data=f"admin_back_to_user_{target_id}")
+    keyboard.append([back_button])
+    
+    await send_func(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    return MANAGE_SERVICE_ACTION
+
+async def admin_view_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    service_id = int(q.data.split('_')[-1])
+    
+    svc = db.get_service(service_id)
+    if not svc:
+        await q.edit_message_text("❌ سرویس یافت نشد.")
+        return
+        
+    text = f"سرویس: {svc['name']} (ID: {service_id})"
+    keyboard = [
+        [InlineKeyboardButton("🔄 تمدید", callback_data=f"admin_renew_service_{service_id}"),
+         InlineKeyboardButton("🗑️ حذف", callback_data=f"admin_delete_service_{service_id}")],
+        [InlineKeyboardButton("🔙 بازگشت به لیست سرویس‌ها", callback_data="admin_manage_services")]
+    ]
+    await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def admin_renew_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    service_id = int(q.data.split('_')[-1])
+    
+    svc = db.get_service(service_id)
+    plan = db.get_plan(svc['plan_id']) if svc and svc['plan_id'] else None
+    
+    if not plan:
+        await q.answer("❌ پلن این سرویس برای تمدید یافت نشد.", show_alert=True)
+        return
+    
+    await q.edit_message_text("در حال تمدید سرویس در پنل...")
+    res = await hiddify_api.renew_user_subscription(svc['sub_uuid'], plan['days'], plan['gb'])
+    
+    if res:
+        await q.edit_message_text(f"✅ سرویس {svc['name']} با موفقیت تمدید شد.")
+    else:
+        await q.edit_message_text("❌ تمدید سرویس در پنل ناموفق بود.")
+
+async def admin_delete_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    service_id = int(q.data.split('_')[-1])
+    
+    svc = db.get_service(service_id)
+    if not svc:
+        await q.edit_message_text("❌ سرویس یافت نشد.")
+        return
+        
+    await q.edit_message_text("در حال حذف سرویس از پنل...")
+    success = await hiddify_api.delete_user_from_panel(svc['sub_uuid'])
+    
+    if success:
+        db.delete_service(service_id)
+        await q.edit_message_text(f"✅ سرویس {svc['name']} با موفقیت از پنل و ربات حذف شد.")
+    else:
+        await q.edit_message_text("❌ حذف سرویس از پنل ناموفق بود.")
 
 
 # =============== Broadcast (Admin) ===============
