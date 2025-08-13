@@ -7,7 +7,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 import database as db
 from bot.keyboards import get_main_menu_keyboard, get_admin_menu_keyboard
 from bot.constants import ADMIN_MENU
-from config import SUPPORT_USERNAME, REFERRAL_BONUS_AMOUNT
+from config import REFERRAL_BONUS_AMOUNT
 
 try:
     import jdatetime
@@ -38,9 +38,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = "👋 به ربات خوش آمدید!"
     
-    # تشخیص نوع آپدیت (Message یا CallbackQuery)
     if update.callback_query:
-        # اگر از دکمه "بررسی عضویت" آمده بود، پیام قبلی را حذف کن و پیام جدید بفرست
         q = update.callback_query
         await q.answer("عضویت شما تایید شد. خوش آمدید!")
         try:
@@ -49,7 +47,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         await q.from_user.send_message(text, reply_markup=get_main_menu_keyboard(user.id))
     else:
-        # اگر از /start آمده بود
         await update.message.reply_text(text, reply_markup=get_main_menu_keyboard(user.id))
     
     return ConversationHandler.END
@@ -77,7 +74,6 @@ async def show_account_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     referral_count = db.get_user_referral_count(user_id)
     join_date = user.get('join_date', 'N/A')
 
-    # تبدیل به تاریخ شمسی
     join_date_jalali = "N/A"
     if jdatetime and join_date != "N/A":
         try:
@@ -155,12 +151,6 @@ async def show_charging_guide_callback(update: Update, context: ContextTypes.DEF
     kb = [[InlineKeyboardButton("🔙 بازگشت", callback_data="acc_back_to_main")]]
     await q.edit_message_text(guide, reply_markup=InlineKeyboardMarkup(kb))
 
-
-async def show_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if SUPPORT_USERNAME:
-        await update.message.reply_text(f"📞 برای پشتیبانی پیام دهید: @{SUPPORT_USERNAME}")
-    else:
-        await update.message.reply_text("📞 پشتیبانی در دسترس است.")
 
 async def show_guide(update: Update, context: ContextTypes.DEFAULT_TYPE):
     guide = db.get_setting("connection_guide")
