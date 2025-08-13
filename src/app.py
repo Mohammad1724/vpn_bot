@@ -17,7 +17,6 @@ from bot.handlers import charge as charge_h
 from bot.handlers import buy as buy_h
 from bot.handlers import user_services as us_h
 from bot.handlers import account_actions as acc_act
-from bot.handlers import support as support_h
 from bot.handlers.common_handlers import check_channel_membership
 from bot.handlers.admin import common as admin_c
 from bot.handlers.admin import plans as admin_plans
@@ -233,6 +232,13 @@ def build_application():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, admin_users.manage_user_action_handler)
             ],
             constants.MANAGE_USER_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_users.manage_user_amount_received)],
+            constants.MANAGE_SERVICE_ACTION: [
+                CallbackQueryHandler(admin_users.admin_view_service, pattern="^admin_view_service_"),
+                CallbackQueryHandler(admin_users.admin_renew_service, pattern="^admin_renew_service_"),
+                CallbackQueryHandler(admin_users.admin_delete_service, pattern="^admin_delete_service_"),
+                CallbackQueryHandler(admin_users.manage_user_services_menu, pattern="^admin_manage_services$"),
+                CallbackQueryHandler(admin_users.manage_user_id_received, pattern="^admin_back_to_user_"),
+            ],
         },
         fallbacks=[
             MessageHandler(filters.Regex(f'^{constants.BTN_EXIT_ADMIN_PANEL}$'), admin_c.exit_admin_panel),
@@ -249,8 +255,6 @@ def build_application():
     application.add_handler(transfer_conv)
     application.add_handler(gift_from_balance_conv)
     application.add_handler(support_conv)
-
-    # Handler for admin replies to support tickets
     application.add_handler(MessageHandler(filters.REPLY & admin_filter, support_h.admin_reply_handler))
 
     # Global callbacks (with higher priority)
