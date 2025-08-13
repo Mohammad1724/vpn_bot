@@ -17,6 +17,7 @@ from bot.handlers import charge as charge_h
 from bot.handlers import buy as buy_h
 from bot.handlers import user_services as us_h
 from bot.handlers import account_actions as acc_act
+from bot.handlers import support as support_h
 from bot.handlers.common_handlers import check_channel_membership
 from bot.handlers.admin import common as admin_c
 from bot.handlers.admin import plans as admin_plans
@@ -99,6 +100,15 @@ def build_application():
             constants.GIFT_FROM_BALANCE_CONFIRM: [CallbackQueryHandler(acc_act.create_gift_confirm, pattern="^gift_confirm_")],
         },
         fallbacks=[CommandHandler('cancel', acc_act.create_gift_cancel)]
+    )
+
+    support_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex('^📞 پشتیبانی$') & user_filter, check_channel_membership(support_h.support_ticket_start))],
+        states={
+            constants.SUPPORT_TICKET_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, support_h.support_message_received)],
+        },
+        fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
+        per_user=True, per_chat=True
     )
 
     # --- Admin Nested Conversations ---
@@ -238,6 +248,10 @@ def build_application():
     application.add_handler(admin_conv)
     application.add_handler(transfer_conv)
     application.add_handler(gift_from_balance_conv)
+    application.add_handler(support_conv)
+
+    # Handler for admin replies to support tickets
+    application.add_handler(MessageHandler(filters.REPLY & admin_filter, support_h.admin_reply_handler))
 
     # Global callbacks (with higher priority)
     application.add_handler(CallbackQueryHandler(admin_users.admin_confirm_charge_callback, pattern="^admin_confirm_charge_"), group=1)
@@ -286,7 +300,7 @@ def build_application():
     application.add_handler(MessageHandler(filters.Regex('^🛍️ خرید سرویس$'), check_channel_membership(buy_h.buy_service_list)), group=3)
     application.add_handler(MessageHandler(filters.Regex('^📋 سرویس‌های من$'), check_channel_membership(us_h.list_my_services)), group=3)
     application.add_handler(MessageHandler(filters.Regex('^👤 اطلاعات حساب کاربری$'), check_channel_membership(start_h.show_account_info)), group=3)
-    application.add_handler(MessageHandler(filters.Regex('^📞 پشتیبانی$'), check_channel_membership(start_h.show_support)), group=3)
+    application.add_handler(MessageHandler(filters.Regex('^📞 پشتیبانی$'), check_channel_membership(support_h.support_ticket_start)), group=3)
     application.add_handler(MessageHandler(filters.Regex('^📚 راهنمای اتصال$'), check_channel_membership(start_h.show_guide)), group=3)
     application.add_handler(MessageHandler(filters.Regex('^🧪 دریافت سرویس تست رایگان$'), check_channel_membership(trial_get_trial_service)), group=3)
     application.add_handler(MessageHandler(filters.Regex('^🎁 معرفی دوستان$'), check_channel_membership(start_h.show_referral_link)), group=3)
