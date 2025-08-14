@@ -54,13 +54,15 @@ async def admin_reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     replied_msg = update.message.reply_to_message
     
-    if replied_msg.forward_from:
-        user_to_reply_id = replied_msg.forward_from.id
+    # FIX: Use forward_origin for newer PTB versions
+    if replied_msg.forward_origin and replied_msg.forward_origin.type == 'user':
+        user_to_reply_id = replied_msg.forward_origin.sender_user.id
         
         try:
             await context.bot.send_message(
                 chat_id=user_to_reply_id,
-                text=f"✉️ **پاسخ پشتیبانی:**\n\n{update.message.text}"
+                text=f"✉️ **پاسخ پشتیبانی:**\n\n{update.message.text}",
+                parse_mode="Markdown"
             )
             await update.message.reply_text("✅ پاسخ شما برای کاربر ارسال شد.")
         except Exception:
