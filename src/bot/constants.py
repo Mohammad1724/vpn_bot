@@ -21,4 +21,4 @@ CMD_SKIP = "/skip"
     SUPPORT_TICKET_MESSAGE, ADMIN_REPLY_TO_TICKET,
     # Admin manage user's services
     MANAGE_SERVICE_ACTION
-) = range(40)
+) = range(36)
