@@ -13,6 +13,10 @@ async def support_ticket_start(update: Update, context: ContextTypes.DEFAULT_TYP
     """
     آغاز کانورسیشن پشتیبانی برای کاربر.
     """
+    user_id = update.effective_user.id
+    # پاک کردن فلگ بسته بودن تیکت قدیمی
+    context.bot_data.get('tickets', {}).pop(user_id, None)
+    
     await update.message.reply_text(
         "شما به پشتیبانی متصل شدید. لطفاً پیام خود را ارسال کنید.\n"
         f"برای پایان گفتگو، دستور {CMD_CANCEL} را بفرستید.",
@@ -22,11 +26,19 @@ async def support_ticket_start(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def forward_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    پیام کاربر را دریافت و برای ادمین ارسال می‌کند و مکالمه را باز نگه می‌دارد.
+    پیام کاربر را دریافت و برای ادمین ارسال می‌کند.
     """
     user = update.effective_user
     
-    # اگر این اولین پیام در این مکالمه است، اطلاعات کاربر را هم بفرست
+    # چک کردن اینکه آیا ادمین تیکت را بسته است یا نه
+    if context.bot_data.get('tickets', {}).get(user.id, {}).get('closed'):
+        await update.message.reply_text(
+            "این مکالمه توسط ادمین بسته شده است. برای شروع مکالمه جدید، دوباره دکمه «📞 پشتیبانی» را بزنید.",
+            reply_markup=get_main_menu_keyboard(user.id)
+        )
+        return ConversationHandler.END
+
+    # اگر این اولین پیام است، اطلاعات کاربر را بفرست
     if not context.user_data.get('ticket_active'):
         context.user_data['ticket_active'] = True
         user_info = (
@@ -37,18 +49,14 @@ async def forward_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await context.bot.send_message(chat_id=ADMIN_ID, text=user_info, parse_mode="Markdown")
 
-    # فروارد پیام کاربر به ادمین
     fwd_msg = await update.message.forward(chat_id=ADMIN_ID)
     
-    # ایجاد یک لینک دو طرفه بین پیام اصلی کاربر و پیام فروارد شده
-    # این به ما اجازه می‌دهد در هر دو جهت پاسخ‌ها را ردیابی کنیم
-    if 'ticket_mappings' not in context.bot_data:
-        context.bot_data['ticket_mappings'] = {}
+    if 'tickets' not in context.bot_data:
+        context.bot_data['tickets'] = {}
     
-    # user_id -> message_id in admin chat
-    # message_id in admin_chat -> user_id
-    context.bot_data['ticket_mappings'][f"user_{user.id}"] = fwd_msg.message_id
-    context.bot_data['ticket_mappings'][f"admin_{fwd_msg.message_id}"] = user.id
+    # نگهداری اطلاعات تیکت
+    context.bot_data['tickets'][user.id] = {'admin_msg_id': fwd_msg.message_id, 'closed': False}
+    context.bot_data['tickets'][f"admin_{fwd_msg.message_id}"] = user.id
 
     # فقط زیر اولین پیام دکمه بستن تیکت را قرار بده
     if not context.user_data.get('close_button_sent'):
@@ -60,15 +68,17 @@ async def forward_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def admin_reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    پاسخ ادمین (که با ریپلای ارسال شده) را برای کاربر اصلی می‌فرستد.
+    پاسخ ادمین را برای کاربر می‌فرستد.
     """
     if not update.message.reply_to_message:
         return
 
-    replied_msg_id = update.message.reply_to_message.message_id
+    replied_msg = update.message.reply_to_message
     
-    # پیدا کردن کاربر مقصد از طریق دیکشنری
-    user_to_reply_id = context.bot_data.get('ticket_mappings', {}).get(f"admin_{replied_msg_id}")
+    # پیدا کردن کاربر مقصد
+    user_to_reply_id = context.bot_data.get('tickets', {}).get(f"admin_{replied_msg.message_id}")
+    if not user_to_reply_id and replied_msg.forward_origin and replied_msg.forward_origin.type == 'user':
+        user_to_reply_id = replied_msg.forward_origin.sender_user.id
     
     if user_to_reply_id:
         try:
@@ -90,13 +100,10 @@ async def close_ticket(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     user_id_to_close = int(q.data.split('_')[-1])
     
-    # پاک کردن لینک‌ها از دیکشنری
-    if 'ticket_mappings' in context.bot_data:
-        admin_msg_id = context.bot_data['ticket_mappings'].pop(f"user_{user_id_to_close}", None)
-        if admin_msg_id:
-            context.bot_data['ticket_mappings'].pop(f"admin_{admin_msg_id}", None)
-            
-    # اطلاع به ادمین و کاربر
+    # تنظیم فلگ "بسته شده" برای کاربر
+    if 'tickets' in context.bot_data and user_id_to_close in context.bot_data['tickets']:
+        context.bot_data['tickets'][user_id_to_close]['closed'] = True
+        
     await q.edit_message_text("✅ تیکت با موفقیت بسته شد.")
     try:
         await context.bot.send_message(
@@ -105,21 +112,21 @@ async def close_ticket(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_main_menu_keyboard(user_id_to_close)
         )
     except Exception:
-        pass # User may have blocked the bot
+        pass
 
 async def support_ticket_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     وقتی کاربر /cancel می‌زند، مکالمه را تمام می‌کند.
     """
     user_id = update.effective_user.id
-    if 'ticket_mappings' in context.bot_data:
-        admin_msg_id = context.bot_data['ticket_mappings'].pop(f"user_{user_id}", None)
-        if admin_msg_id:
-            context.bot_data['ticket_mappings'].pop(f"admin_{admin_msg_id}", None)
-            try:
-                await context.bot.send_message(ADMIN_ID, f"کاربر با شناسه {user_id} گفتگوی پشتیبانی را بست.")
-            except Exception:
-                pass
+    if 'tickets' in context.bot_data:
+        # فلگ را روی بسته تنظیم می‌کنیم
+        if user_id in context.bot_data['tickets']:
+            context.bot_data['tickets'][user_id]['closed'] = True
+        try:
+            await context.bot.send_message(ADMIN_ID, f"کاربر با شناسه {user_id} گفتگوی پشتیبانی را بست.")
+        except Exception:
+            pass
 
     context.user_data.clear()
     await update.message.reply_text(
