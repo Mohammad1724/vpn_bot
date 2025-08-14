@@ -1,4 +1,4 @@
-python-telegram-bot[persistence]==21.0.1
+python-telegram-bot[job-queue]==21.0.1
 jdatetime
 qrcode[pil]
 aiosqlite
