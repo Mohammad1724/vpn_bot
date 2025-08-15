@@ -29,16 +29,22 @@ async def _send_user_panel(update: Update, target_id: int):
         return
 
     ban_text = "آزاد کردن کاربر" if info['is_banned'] else "مسدود کردن کاربر"
+    trial_text = "🔄 ریست سرویس تست"
+    
     keyboard = [
         ["افزایش موجودی", "کاهش موجودی"],
-        ["🔧 مدیریت سرویس‌ها", ban_text],
-        ["📜 سوابق خرید", BTN_BACK_TO_ADMIN_MENU]
+        ["🔧 مدیریت سرویس‌ها", trial_text],
+        ["📜 سوابق خرید", ban_text],
+        [BTN_BACK_TO_ADMIN_MENU]
     ]
+    
+    trial_status = "استفاده کرده" if info.get('has_used_trial') else "استفاده نکرده"
     text = (
         f"👤 کاربر: `{info['user_id']}`\n"
         f"یوزرنیم: @{info.get('username', 'N/A')}\n"
         f"💰 موجودی: {info['balance']:.0f} تومان\n"
-        f"وضعیت: {'مسدود' if info['is_banned'] else 'فعال'}"
+        f"وضعیت: {'مسدود' if info['is_banned'] else 'فعال'}\n"
+        f"سرویس تست: {trial_status}"
     )
     await update.message.reply_text(text, reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True), parse_mode="Markdown")
 
@@ -83,16 +89,20 @@ async def manage_user_id_received(update: Update, context: ContextTypes.DEFAULT_
     context.user_data['target_user_id'] = info['user_id']
     
     ban_text = "آزاد کردن کاربر" if info['is_banned'] else "مسدود کردن کاربر"
+    trial_text = "🔄 ریست سرویس تست"
     keyboard = [
         ["افزایش موجودی", "کاهش موجودی"],
-        ["🔧 مدیریت سرویس‌ها", ban_text],
-        ["📜 سوابق خرید", BTN_BACK_TO_ADMIN_MENU]
+        ["🔧 مدیریت سرویس‌ها", trial_text],
+        ["📜 سوابق خرید", ban_text],
+        [BTN_BACK_TO_ADMIN_MENU]
     ]
+    trial_status = "استفاده کرده" if info.get('has_used_trial') else "استفاده نکرده"
     text = (
         f"👤 کاربر: `{info['user_id']}`\n"
         f"یوزرنیم: @{info.get('username', 'N/A')}\n"
         f"💰 موجودی: {info['balance']:.0f} تومان\n"
-        f"وضعیت: {'مسدود' if info['is_banned'] else 'فعال'}"
+        f"وضعیت: {'مسدود' if info['is_banned'] else 'فعال'}\n"
+        f"سرویس تست: {trial_status}"
     )
     await send_func(text, reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True), parse_mode="Markdown")
     return MANAGE_USER_ACTION
@@ -116,6 +126,12 @@ async def manage_user_action_handler(update: Update, context: ContextTypes.DEFAU
         new_status = not info['is_banned']
         db.set_user_ban_status(target_id, new_status)
         await update.message.reply_text(f"✅ وضعیت کاربر به {'مسدود' if new_status else 'فعال'} تغییر کرد.")
+        await _send_user_panel(update, target_id)
+        return MANAGE_USER_ACTION
+        
+    elif action == "🔄 ریست سرویس تست":
+        db.reset_user_trial(target_id)
+        await update.message.reply_text("✅ وضعیت سرویس تست کاربر ریست شد. اکنون می‌تواند دوباره سرویس تست دریافت کند.")
         await _send_user_panel(update, target_id)
         return MANAGE_USER_ACTION
         
@@ -245,7 +261,6 @@ async def admin_reject_charge_callback(update: Update, context: ContextTypes.DEF
             await q.edit_message_caption(caption=feedback, reply_markup=None, parse_mode="Markdown")
         except Exception:
             await context.bot.send_message(chat_id=q.from_user.id, text=feedback, parse_mode="Markdown")
-
 
 # ===== Admin Manage User's Services =====
 
