@@ -17,7 +17,7 @@ from bot.handlers import charge as charge_h
 from bot.handlers import buy as buy_h
 from bot.handlers import user_services as us_h
 from bot.handlers import account_actions as acc_act
-from bot.handlers import support as support_h  # ← این خط اضافه شده
+from bot.handlers import support as support_h
 from bot.handlers.common_handlers import check_channel_membership
 from bot.handlers.admin import common as admin_c
 from bot.handlers.admin import plans as admin_plans
@@ -53,7 +53,7 @@ def build_application():
     admin_filter = filters.User(user_id=ADMIN_ID)
     user_filter = ~admin_filter
 
-    # --- User-facing Conversations (Top-level) ---
+    # --- User-facing Conversations ---
     buy_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(check_channel_membership(buy_h.buy_start), pattern='^user_buy_')],
         states={
@@ -304,7 +304,7 @@ def build_application():
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.show_account_info), pattern="^acc_back_to_main$"))
     
     # Guide callbacks
-    application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.show_guide_content), pattern="^guide_"))
+    application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.show_guide_content), pattern="^guide_(connection|charging|buying)$"))
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.back_to_guide_menu), pattern="^guide_back_to_menu$"))
 
     # Plan category selection
