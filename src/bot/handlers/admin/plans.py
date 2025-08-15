@@ -6,14 +6,12 @@ from telegram.constants import ParseMode
 
 from bot.constants import (
     CMD_CANCEL, CMD_SKIP,
-    PLAN_MENU, PLAN_NAME, PLAN_PRICE, PLAN_DAYS, PLAN_GB,
-    EDIT_PLAN_NAME, EDIT_PLAN_PRICE, EDIT_PLAN_DAYS, EDIT_PLAN_GB,
-    BTN_BACK_TO_ADMIN_MENU
+    PLAN_MENU, PLAN_NAME, PLAN_PRICE, PLAN_DAYS, PLAN_GB, PLAN_CATEGORY,
+    EDIT_PLAN_NAME, EDIT_PLAN_PRICE, EDIT_PLAN_DAYS, EDIT_PLAN_GB, EDIT_PLAN_CATEGORY
 )
 import database as db
 
 def _plan_menu_keyboard() -> ReplyKeyboardMarkup:
-    # کیبورد مخصوص منوی مدیریت پلن‌ها
     keyboard = [["➕ افزودن پلن جدید", "📋 لیست پلن‌ها"], [BTN_BACK_TO_ADMIN_MENU]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -30,8 +28,10 @@ async def list_plans_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("لیست پلن‌های تعریف‌شده:")
     for plan in plans:
         visibility_icon = "👁️" if plan['is_visible'] else "🙈"
+        category_text = f"▫️ دسته‌بندی: {plan['category']}\n" if plan['category'] else ""
         text = (
             f"**{plan['name']}** (ID: {plan['plan_id']})\n"
+            f"{category_text}"
             f"▫️ قیمت: {plan['price']:.0f} تومان\n"
             f"▫️ مدت: {plan['days']} روز\n"
             f"▫️ حجم: {plan['gb']} گیگ\n"
@@ -44,6 +44,8 @@ async def list_plans_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]]
         await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
     return PLAN_MENU
+
+# ===== Add Plan Conversation =====
 
 async def add_plan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -69,7 +71,7 @@ async def plan_price_received(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def plan_days_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         context.user_data['plan_days'] = int(update.message.text)
-        await update.message.reply_text("حجم (گیگابایت) را وارد کنید:")
+        await update.message.reply_text("حجم (گیگابایت) را وارد کنید (برای نامحدود 0):")
         return PLAN_GB
     except ValueError:
         await update.message.reply_text("مدت را به صورت عدد وارد کنید.")
@@ -78,26 +80,34 @@ async def plan_days_received(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def plan_gb_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         context.user_data['plan_gb'] = int(update.message.text)
-        db.add_plan(
-            context.user_data['plan_name'],
-            context.user_data['plan_price'],
-            context.user_data['plan_days'],
-            context.user_data['plan_gb']
-        )
-        await update.message.reply_text(
-            "✅ پلن جدید با موفقیت اضافه شد!",
-            reply_markup=_plan_menu_keyboard()
-        )
-        context.user_data.clear()
-        return ConversationHandler.END
+        await update.message.reply_text("دسته‌بندی پلن را وارد کنید (مثلاً: یک ماهه):")
+        return PLAN_CATEGORY
     except ValueError:
         await update.message.reply_text("حجم را به صورت عدد وارد کنید.")
         return PLAN_GB
+
+async def plan_category_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['plan_category'] = update.message.text.strip()
+    db.add_plan(
+        context.user_data['plan_name'],
+        context.user_data['plan_price'],
+        context.user_data['plan_days'],
+        context.user_data['plan_gb'],
+        context.user_data['plan_category']
+    )
+    await update.message.reply_text(
+        "✅ پلن جدید با موفقیت اضافه شد!",
+        reply_markup=_plan_menu_keyboard()
+    )
+    context.user_data.clear()
+    return ConversationHandler.END
 
 async def cancel_add_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await update.message.reply_text("عملیات لغو شد.", reply_markup=_plan_menu_keyboard())
     return ConversationHandler.END
+
+# ===== Edit Plan Conversation =====
 
 async def edit_plan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -154,14 +164,23 @@ async def skip_edit_plan_days(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def edit_plan_gb_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         context.user_data['edit_plan_data']['gb'] = int(update.message.text)
-        await finish_plan_edit(update, context)
-        return ConversationHandler.END
+        await update.message.reply_text(f"دسته‌بندی جدید را وارد کنید (یا {CMD_SKIP}).")
+        return EDIT_PLAN_CATEGORY
     except ValueError:
         await update.message.reply_text("حجم را به صورت عدد وارد کنید.")
         return EDIT_PLAN_GB
 
 async def skip_edit_plan_gb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("از تغییر حجم صرف‌نظر شد.")
+    await update.message.reply_text(f"از تغییر حجم صرف‌نظر شد. دسته‌بندی جدید را وارد کنید (یا {CMD_SKIP}).")
+    return EDIT_PLAN_CATEGORY
+
+async def edit_plan_category_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['edit_plan_data']['category'] = update.message.text.strip()
+    await finish_plan_edit(update, context)
+    return ConversationHandler.END
+
+async def skip_edit_plan_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("از تغییر دسته‌بندی صرف‌نظر شد.")
     await finish_plan_edit(update, context)
     return ConversationHandler.END
 
