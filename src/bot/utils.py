@@ -33,7 +33,7 @@ def parse_date_flexible(date_str: str) -> Union[datetime, None]:
     )
     for fmt in fmts:
         try:
-            dt = datetime.strptime(s.split('.')[0], fmt)
+            dt = datetime.strptime(s.split('.')[0], fmt) # ignore milliseconds
             return dt.replace(tzinfo=timezone.utc)
         except Exception:
             continue
@@ -48,7 +48,6 @@ def get_service_status(hiddify_info: dict) -> tuple[str, str, bool]:
     # 1. اولویت با فلگ‌های مستقیم پنل
     if hiddify_info.get('status') in ('disabled', 'limited'):
         is_expired = True
-    # FIX: days_left: 0 means today is the last day, so it's still active.
     elif hiddify_info.get('days_left', 999) < 0:
         is_expired = True
 
@@ -78,7 +77,7 @@ def get_service_status(hiddify_info: dict) -> tuple[str, str, bool]:
             
         expiry_dt_utc = start_dt_utc + timedelta(days=package_days)
 
-    # بررسی نهایی تاریخ (اگر هنوز منقضی نشده بود)
+    # بررسی نهایی تاریخ
     if not is_expired and now > expiry_dt_utc:
         is_expired = True
 
