@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import io
+import json
 import random
 import qrcode
 import logging
@@ -10,9 +11,9 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from telegram.error import BadRequest
 import database as db
 import hiddify_api
-from config import SUB_DOMAINS, PANEL_DOMAIN, SUB_PATH, ADMIN_PATH
+from config import MERGER_BASE_URL, ADMIN_ID
 from bot.keyboards import get_main_menu_keyboard
-from bot.utils import get_service_status  # ← استفاده از فایل شما
+from bot.utils import get_service_status
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,7 @@ async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
         else: await context.bot.send_message(chat_id=chat_id, text=text)
         return
     try:
-        info = await hiddify_api.get_user_info(service['sub_uuid'])
+        info = await hiddify_api.get_user_info_from_panel(1, service['sub_uuid'])
         if not info or (isinstance(info, dict) and info.get('_not_found')):
             kb = [
                 [InlineKeyboardButton("🗑️ حذف سرویس از ربات", callback_data=f"delete_service_{service['service_id']}")],
@@ -94,18 +95,10 @@ async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
         )
 
         keyboard_rows = []
-        default_link_type = _normalize_link_type(db.get_setting('default_sub_link_type') or 'sub')
-
         keyboard_rows.append([
-            InlineKeyboardButton(
-                f"⚡ دریافت لینک { _link_label(default_link_type) }",
-                callback_data=f"getlink_{default_link_type}_{service['sub_uuid']}"
-            )
+            InlineKeyboardButton("⚡ دریافت لینک ادغام‌شده", callback_data=f"getlink_merged_{service['sub_uuid']}")
         ])
-        keyboard_rows.append([
-            InlineKeyboardButton("🧩 سایر لینک‌ها", callback_data=f"more_links_{service['sub_uuid']}")
-        ])
-
+        
         if not minimal:
             keyboard_rows.append([InlineKeyboardButton("🔄 به‌روزرسانی اطلاعات", callback_data=f"refresh_{service['service_id']}")])
             plan_id = service.get('plan_id')
@@ -135,41 +128,6 @@ async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
         else:
             await context.bot.send_message(chat_id=chat_id, text=text)
 
-# ===== لینک‌های بیشتر =====
-async def more_links_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    uuid = q.data.split('_')[-1]
-    service = db.get_service_by_uuid(uuid)
-    if not service:
-        await q.edit_message_text("سرویس یافت نشد.")
-        return
-    await show_link_options_menu(q.message, uuid, service['service_id'], is_edit=True, context=context)
-
-async def show_link_options_menu(message: Message, user_uuid: str, service_id: int, is_edit: bool = True, context: ContextTypes.DEFAULT_TYPE = None):
-    keyboard = [
-        [InlineKeyboardButton("لینک V2ray (sub)", callback_data=f"getlink_sub_{user_uuid}"), InlineKeyboardButton("لینک هوشمند (Auto)", callback_data=f"getlink_auto_{user_uuid}")],
-        [InlineKeyboardButton("لینک Base64 (sub64)", callback_data=f"getlink_sub64_{user_uuid}"), InlineKeyboardButton("لینک SingBox", callback_data=f"getlink_singbox_{user_uuid}")],
-        [InlineKeyboardButton("لینک Xray", callback_data=f"getlink_xray_{user_uuid}"), InlineKeyboardButton("لینک Clash", callback_data=f"getlink_clash_{user_uuid}")],
-        [InlineKeyboardButton("لینک Clash Meta", callback_data=f"getlink_clashmeta_{user_uuid}")],
-        [InlineKeyboardButton("📄 نمایش کانفیگ‌های تکی", callback_data=f"getlink_full_{user_uuid}")],
-        [InlineKeyboardButton("⬅️ بازگشت به جزئیات سرویس", callback_data=f"refresh_{service_id}")]
-    ]
-    text = "لطفاً نوع لینک اشتراک مورد نظر را انتخاب کنید:"
-    try:
-        if is_edit:
-            if message.photo:
-                await message.delete()
-                if context:
-                    await context.bot.send_message(chat_id=message.chat_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard))
-            else:
-                await message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
-        else:
-            await message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
-    except BadRequest as e:
-        if "message is not modified" not in str(e):
-            logger.error("show_link_options_menu error: %s", e)
-
 # ===== تولید لینک‌ها و QR =====
 async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -178,71 +136,62 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parts = q.data.split('_')
     link_type, user_uuid = parts[1], parts[2]
 
-    sub_path = SUB_PATH or ADMIN_PATH
-    sub_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
-    base_link = f"https://{sub_domain}/{sub_path}/{user_uuid}"
-
-    info = await hiddify_api.get_user_info(user_uuid)
-    config_name = info.get('name', 'config') if info else 'config'
-
-    if link_type == "full":
-        await q.edit_message_text("در حال دریافت کانفیگ‌های تکی... ⏳")
-        full_config_link = f"{base_link}/all.txt"
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(full_config_link)
-                response.raise_for_status()
-            configs_bytes = response.content
-            # ارسال به صورت فایل
-            await q.message.delete()
-            await context.bot.send_document(
-                chat_id=q.from_user.id,
-                document=InputFile(io.BytesIO(configs_bytes), filename=f"{config_name}_configs.txt"),
-                caption="📄 کانفیگ‌های تکی شما به صورت فایل ارسال شد."
-            )
-        except Exception as e:
-            logger.error("Failed to fetch/send full configs: %s", e)
-            await q.edit_message_text("❌ دریافت کانفیگ‌های تکی با خطا مواجه شد.")
+    if link_type == "merged":
+        final_link = f"{MERGER_BASE_URL.rstrip('/')}/sub/{user_uuid}"
+    else:
+        await q.message.edit_text("این نوع لینک دیگر پشتیبانی نمی‌شود. لطفاً از لینک ادغام‌شده استفاده کنید.")
         return
-
-    url_link_type = link_type.replace('clashmeta', 'clash-meta')
-    final_link = f"{base_link}/{url_link_type}/?name={config_name.replace(' ', '_')}"
 
     img = qrcode.make(final_link)
     bio = io.BytesIO(); bio.name = 'qrcode.png'; img.save(bio, 'PNG'); bio.seek(0)
 
-    display_link_type = link_type.replace('sub', 'V2ray').replace('meta', ' Meta').title()
     caption = (
-        f"نام کانفیگ: **{config_name}**\n"
-        f"نوع لینک: **{display_link_type}**\n\n"
-        "با اسکن QR یا استفاده از لینک زیر متصل شوید:\n\n"
+        f"🔗 لینک اشتراک ادغام‌شده شما:\n\n"
+        "با اسکن QR یا استفاده از لینک زیر، کانفیگ‌های هر دو سرور را دریافت کنید:\n\n"
         f"`{final_link}`"
     )
-
-    await q.message.delete()
+    
+    try:
+        await q.message.delete()
+    except Exception:
+        pass
+        
     await context.bot.send_photo(
         chat_id=q.message.chat_id,
         photo=bio,
         caption=caption,
-        parse_mode="Markdown",
-        reply_markup=get_main_menu_keyboard(q.from_user.id)
+        parse_mode="Markdown"
     )
 
-# ===== به‌روزرسانی جزئیات =====
+# ===== به‌روزرسانی جزئیات (با قابلیت دیباگ برای ادمین) =====
 async def refresh_service_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     service_id = int(q.data.split('_')[1])
     service = db.get_service(service_id)
-    if service and service['user_id'] == q.from_user.id:
-        try:
-            await q.message.delete()
-        except BadRequest:
-            pass
-        msg = await context.bot.send_message(chat_id=q.from_user.id, text="در حال به‌روزرسانی اطلاعات...")
-        await send_service_details(context, q.from_user.id, service_id, original_message=msg, is_from_menu=True)
-    else:
+    
+    if not service or service['user_id'] != q.from_user.id:
         await q.answer("خطا: این سرویس متعلق به شما نیست.", show_alert=True)
+        return
+        
+    try:
+        await q.message.delete()
+    except BadRequest:
+        pass
+        
+    msg = await context.bot.send_message(chat_id=q.from_user.id, text="در حال به‌روزرسانی اطلاعات...")
+    
+    # اگر کاربر ادمین است، خروجی کامل API را برای دیباگ بفرست
+    if q.from_user.id == ADMIN_ID:
+        try:
+            info = await hiddify_api.get_user_info_from_panel(1, service['sub_uuid'])
+            if info:
+                debug_text = json.dumps(info, indent=2, ensure_ascii=False)
+                await q.from_user.send_message(f"-- DEBUG INFO (Panel 1) --\n<pre>{debug_text}</pre>", parse_mode="HTML")
+        except Exception as e:
+            await q.from_user.send_message(f"Debug error: {e}")
+
+    await send_service_details(context, q.from_user.id, service_id, original_message=msg, is_from_menu=True)
 
 # ===== بازگشت به لیست =====
 async def back_to_services_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -279,24 +228,20 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
 
     if data.startswith("delete_service_confirm_"):
         try:
-            await q.edit_message_text("در حال حذف سرویس از پنل... ⏳")
-
-            # 1. حذف از پنل هیدیفای
-            success_on_panel = await hiddify_api.delete_user_from_panel(service['sub_uuid'])
-            if not success_on_panel:
-                await q.edit_message_text("❌ حذف سرویس از پنل با خطا مواجه شد. لطفاً به پشتیبانی اطلاع دهید.")
+            await q.edit_message_text("در حال حذف سرویس از پنل‌ها... ⏳")
+            
+            p1_ok = await hiddify_api.delete_user_from_panel(1, service['sub_uuid'])
+            p2_ok = await hiddify_api.delete_user_from_panel(2, service['sub_uuid'])
+            
+            if not (p1_ok and p2_ok):
+                await q.edit_message_text("❌ حذف سرویس از یک یا هر دو پنل با خطا مواجه شد. لطفاً به پشتیبانی اطلاع دهید.")
                 return
 
-            # 2. اگر موفق بود، از دیتابیس ربات حذف کن
             db.delete_service(service_id)
-
-            await q.edit_message_text("✅ سرویس با موفقیت از پنل و ربات حذف شد.")
+            await q.edit_message_text("✅ سرویس با موفقیت از هر دو پنل و ربات حذف شد.")
         except Exception as e:
             logger.error("Delete service %s failed: %s", service_id, e, exc_info=True)
-            try:
-                await q.edit_message_text("❌ حذف سرویس با خطای ناشناخته مواجه شد.")
-            except Exception:
-                pass
+            await q.edit_message_text("❌ حذف سرویس با خطای ناشناخته مواجه شد.")
             return
 
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت به سرویس‌ها", callback_data="back_to_services")]])
@@ -316,17 +261,7 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
             InlineKeyboardButton("✅ تایید حذف", callback_data=f"delete_service_confirm_{service_id}")
         ]
     ])
-    try:
-        if getattr(q.message, "photo", None):
-            await q.edit_message_reply_markup(reply_markup=confirm_kb)
-        else:
-            await q.edit_message_text("آیا از حذف این سرویس مطمئن هستید؟ این عمل سرویس را از پنل اصلی نیز حذف می‌کند و قابل بازگشت نیست.", reply_markup=confirm_kb)
-    except Exception:
-        await context.bot.send_message(
-            chat_id=q.from_user.id,
-            text="آیا از حذف این سرویس مطمئن هستید؟",
-            reply_markup=confirm_kb
-        )
+    await q.edit_message_text("آیا از حذف این سرویس مطمئن هستید؟ این عمل سرویس را از هر دو پنل حذف می‌کند و قابل بازگشت نیست.", reply_markup=confirm_kb)
 
 # ===== تمدید (شروع → تایید/لغو) =====
 async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -351,7 +286,7 @@ async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     msg = await context.bot.send_message(chat_id=user_id, text="در حال بررسی وضعیت سرویس... ⏳")
-    info = await hiddify_api.get_user_info(service['sub_uuid'])
+    info = await hiddify_api.get_user_info_from_panel(1, service['sub_uuid'])
     if not info:
         await msg.edit_text("❌ امکان دریافت اطلاعات سرویس از پنل وجود ندارد. لطفاً بعداً تلاش کنید.")
         return
@@ -388,7 +323,7 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     if original_message:
-        await original_message.edit_text("در حال ارسال درخواست تمدید به پنل... ⏳")
+        await original_message.edit_text("در حال ارسال درخواست تمدید به پنل‌ها... ⏳")
 
     txn_id = db.initiate_renewal_transaction(user_id, service_id, plan_id)
     if not txn_id:
@@ -398,13 +333,11 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
 
     service = db.get_service(service_id)
     plan = db.get_plan(plan_id)
-    new_info = await hiddify_api.renew_user_subscription(
-        user_uuid=service['sub_uuid'],
-        plan_days=plan['days'],
-        plan_gb=plan['gb']
-    )
+    
+    p1_res = await hiddify_api.renew_user_on_panel(1, service['sub_uuid'], plan['days'], plan['gb'])
+    p2_res = await hiddify_api.renew_user_on_panel(2, service['sub_uuid'], plan['days'], plan['gb'])
 
-    if new_info:
+    if p1_res and p2_res:
         db.finalize_renewal_transaction(txn_id, plan_id)
         if original_message:
             await original_message.edit_text("✅ سرویس با موفقیت تمدید شد! در حال نمایش اطلاعات جدید...")
@@ -412,7 +345,7 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
     else:
         db.cancel_renewal_transaction(txn_id)
         if original_message:
-            await original_message.edit_text("❌ خطا در تمدید سرویس. مشکلی در ارتباط با پنل وجود دارد. لطفاً به پشتیبانی اطلاع دهید.")
+            await original_message.edit_text("❌ خطا در تمدید سرویس. مشکلی در ارتباط با یک یا هر دو پنل وجود دارد. لطفاً به پشتیبانی اطلاع دهید.")
 
     context.user_data.clear()
 
