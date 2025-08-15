@@ -4,6 +4,7 @@ import logging
 from datetime import datetime
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import BadRequest
 import database as db
 from bot.keyboards import get_main_menu_keyboard, get_admin_menu_keyboard
 from bot.constants import ADMIN_MENU
@@ -168,18 +169,28 @@ async def show_guide_content(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not guide_text:
         guide_text = "متاسفانه هنوز راهنمایی برای این بخش ثبت نشده است."
         
-    kb = [[InlineKeyboardButton("🔙 بازگشت", callback_data="guide_back_to_menu")]]
-    await q.edit_message_text(guide_text, reply_markup=InlineKeyboardMarkup(kb), disable_web_page_preview=True)
+    kb = [[InlineKeyboardButton("🔙 بازگشت به منوی راهنما", callback_data="guide_back_to_menu")]]
+    try:
+        await q.edit_message_text(guide_text, reply_markup=InlineKeyboardMarkup(kb), disable_web_page_preview=True)
+    except BadRequest as e:
+        if "message is not modified" not in str(e):
+            raise e
 
 async def back_to_guide_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
+    
+    try:
+        await q.message.delete()
+    except Exception:
+        pass
+        
     keyboard = [
         [InlineKeyboardButton("📱 راهنمای اتصال", callback_data="guide_connection")],
         [InlineKeyboardButton("💳 راهنمای شارژ حساب", callback_data="guide_charging")],
         [InlineKeyboardButton("🛍️ راهنمای خرید از ربات", callback_data="guide_buying")],
     ]
-    await q.edit_message_text("📚 لطفاً موضوع راهنمای مورد نظر خود را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
+    await q.from_user.send_message("📚 لطفاً موضوع راهنمای مورد نظر خود را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def show_referral_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
