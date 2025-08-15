@@ -4,6 +4,9 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Union
 import logging
+import random
+import database as db
+from config import PANEL_DOMAIN
 
 try:
     import jdatetime
@@ -11,6 +14,31 @@ except ImportError:
     jdatetime = None
 
 logger = logging.getLogger(__name__)
+
+def get_domain_for_plan(plan: dict | None) -> str:
+    """
+    بر اساس نوع پلن (حجمی یا نامحدود)، یک ساب‌دامین مناسب را از دیتابیس می‌خواند و انتخاب می‌کند.
+    """
+    is_unlimited = plan and plan.get('gb', 1) == 0
+
+    if is_unlimited:
+        unlimited_domains_str = db.get_setting("unlimited_sub_domains")
+        if unlimited_domains_str:
+            return random.choice([d.strip() for d in unlimited_domains_str.split(',')])
+    
+    else: # Volume-based
+        volume_domains_str = db.get_setting("volume_based_sub_domains")
+        if volume_domains_str:
+            return random.choice([d.strip() for d in volume_domains_str.split(',')])
+
+    # Fallback to general list
+    general_domains_str = db.get_setting("sub_domains")
+    if general_domains_str:
+        return random.choice([d.strip() for d in general_domains_str.split(',')])
+    
+    # Final fallback to panel domain
+    return PANEL_DOMAIN
+
 
 def parse_date_flexible(date_str: str) -> Union[datetime, None]:
     if not date_str:
