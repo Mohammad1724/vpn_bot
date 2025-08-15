@@ -64,7 +64,6 @@ async def show_plans_in_category(update: Update, context: ContextTypes.DEFAULT_T
     text = f"پلن‌های دسته‌بندی «{category}»:"
     kb = []
     for p in plans:
-        # FIX: Display full plan details on the button
         volume_text = f"{p['gb']} گیگ" if p['gb'] > 0 else "نامحدود"
         title = f"{p['name']} | {p['days']} روزه {volume_text} - {p['price']:.0f} تومان"
         kb.append([InlineKeyboardButton(title, callback_data=f"user_buy_{p['plan_id']}")])
@@ -118,6 +117,7 @@ async def skip_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def _process_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE, custom_name: str):
     user_id = update.effective_user.id
+    username = update.effective_user.username
     plan_id = context.user_data.get('buy_plan_id')
     plan = db.get_plan(plan_id) if plan_id else None
 
@@ -139,7 +139,7 @@ async def _process_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         await update.message.reply_text("⏳ در حال ایجاد سرویس شما...")
 
         final_name = custom_name or f"سرویس {plan['gb']} گیگ"
-        note = f"tg:id:{user_id}"
+        note = f"tg:@{username}|id:{user_id}" if username else f"tg:id:{user_id}"
 
         provision = await hiddify_api.create_hiddify_user(
             plan_days=plan['days'],
@@ -151,7 +151,7 @@ async def _process_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             raise RuntimeError("Provisioning failed or no uuid returned.")
 
         sub_uuid = provision["uuid"]
-        sub_link = ""
+        sub_link = provision.get('full_link', '')
         db.finalize_purchase_transaction(txn_id, sub_uuid, sub_link, final_name)
 
         svc = db.get_service_by_uuid(sub_uuid)
