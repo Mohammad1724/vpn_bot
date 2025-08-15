@@ -103,9 +103,6 @@ async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
                 callback_data=f"getlink_{default_link_type}_{service['sub_uuid']}"
             )
         ])
-        keyboard_rows.append([
-            InlineKeyboardButton("🧩 سایر لینک‌ها", callback_data=f"more_links_{service['sub_uuid']}")
-        ])
         
         if not minimal:
             keyboard_rows.append([InlineKeyboardButton("🔄 به‌روزرسانی اطلاعات", callback_data=f"refresh_{service['service_id']}")])
@@ -135,41 +132,6 @@ async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
             except BadRequest: pass
         else:
             await context.bot.send_message(chat_id=chat_id, text=text)
-
-# ===== لینک‌های بیشتر =====
-async def more_links_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    uuid = q.data.split('_')[-1]
-    service = db.get_service_by_uuid(uuid)
-    if not service:
-        await q.edit_message_text("سرویس یافت نشد.")
-        return
-    await show_link_options_menu(q.message, uuid, service['service_id'], is_edit=True, context=context)
-
-async def show_link_options_menu(message: Message, user_uuid: str, service_id: int, is_edit: bool = True, context: ContextTypes.DEFAULT_TYPE = None):
-    keyboard = [
-        [InlineKeyboardButton("لینک V2ray (sub)", callback_data=f"getlink_sub_{user_uuid}"), InlineKeyboardButton("لینک هوشمند (Auto)", callback_data=f"getlink_auto_{user_uuid}")],
-        [InlineKeyboardButton("لینک Base64 (sub64)", callback_data=f"getlink_sub64_{user_uuid}"), InlineKeyboardButton("لینک SingBox", callback_data=f"getlink_singbox_{user_uuid}")],
-        [InlineKeyboardButton("لینک Xray", callback_data=f"getlink_xray_{user_uuid}"), InlineKeyboardButton("لینک Clash", callback_data=f"getlink_clash_{user_uuid}")],
-        [InlineKeyboardButton("لینک Clash Meta", callback_data=f"getlink_clashmeta_{user_uuid}")],
-        [InlineKeyboardButton("📄 نمایش کانفیگ‌های تکی", callback_data=f"getlink_full_{user_uuid}")],
-        [InlineKeyboardButton("⬅️ بازگشت به جزئیات سرویس", callback_data=f"refresh_{service_id}")]
-    ]
-    text = "لطفاً نوع لینک اشتراک مورد نظر را انتخاب کنید:"
-    try:
-        if is_edit:
-            if message.photo:
-                await message.delete()
-                if context:
-                    await context.bot.send_message(chat_id=message.chat_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard))
-            else:
-                await message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
-        else:
-            await message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
-    except BadRequest as e:
-        if "message is not modified" not in str(e):
-            logger.error("show_link_options_menu error: %s", e)
 
 # ===== تولید لینک‌ها و QR =====
 async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -250,6 +212,7 @@ async def refresh_service_details(update: Update, context: ContextTypes.DEFAULT_
         
     msg = await context.bot.send_message(chat_id=q.from_user.id, text="در حال به‌روزرسانی اطلاعات...")
     
+    # اگر کاربر ادمین است، خروجی کامل API را برای دیباگ بفرست
     if q.from_user.id == ADMIN_ID:
         try:
             info = await hiddify_api.get_user_info(service['sub_uuid'])
