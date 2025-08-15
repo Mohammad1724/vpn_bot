@@ -17,6 +17,7 @@ from bot.handlers import charge as charge_h
 from bot.handlers import buy as buy_h
 from bot.handlers import user_services as us_h
 from bot.handlers import account_actions as acc_act
+from bot.handlers import support as support_h  # ← این خط اضافه شده
 from bot.handlers.common_handlers import check_channel_membership
 from bot.handlers.admin import common as admin_c
 from bot.handlers.admin import plans as admin_plans
