@@ -94,13 +94,18 @@ def init_db():
     except sqlite3.OperationalError:
         cursor.execute("ALTER TABLE users ADD COLUMN has_received_referral_bonus INTEGER DEFAULT 0")
 
-    # plans
+    # plans (با ستون category)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS plans (
             plan_id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, price REAL NOT NULL,
-            days INTEGER NOT NULL, gb INTEGER NOT NULL, is_visible INTEGER DEFAULT 1
+            days INTEGER NOT NULL, gb INTEGER NOT NULL, is_visible INTEGER DEFAULT 1,
+            category TEXT
         )
     ''')
+    try:
+        cursor.execute("SELECT category FROM plans LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute("ALTER TABLE plans ADD COLUMN category TEXT")
 
     # settings
     cursor.execute('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)''')
@@ -274,9 +279,12 @@ def apply_referral_bonus(user_id: int):
             return referrer_id, bonus_amount
     return None, 0
 
-def add_plan(name: str, price: float, days: int, gb: int):
+def add_plan(name: str, price: float, days: int, gb: int, category: str):
     conn = _connect_db()
-    conn.execute("INSERT INTO plans (name, price, days, gb) VALUES (?, ?, ?, ?)", (name, price, days, gb))
+    conn.execute(
+        "INSERT INTO plans (name, price, days, gb, category) VALUES (?, ?, ?, ?, ?)",
+        (name, price, days, gb, category)
+    )
     conn.commit()
 
 def get_plan(plan_id: int) -> dict:
@@ -286,19 +294,36 @@ def get_plan(plan_id: int) -> dict:
     row = cur.fetchone()
     return dict(row) if row else None
 
-def list_plans(only_visible: bool = False) -> list:
+def get_plan_categories() -> list[str]:
     conn = _connect_db()
     cur = conn.cursor()
-    sort_order = "ORDER BY days ASC, gb ASC"
+    cur.execute("SELECT DISTINCT category FROM plans WHERE is_visible = 1 AND category IS NOT NULL ORDER BY category ASC")
+    return [row['category'] for row in cur.fetchall()]
+
+def list_plans(only_visible: bool = False, category: str = None) -> list:
+    conn = _connect_db()
+    cur = conn.cursor()
+    query = "SELECT * FROM plans"
+    conditions = []
+    params = []
+    
     if only_visible:
-        cur.execute(f"SELECT * FROM plans WHERE is_visible = 1 {sort_order}")
-    else:
-        cur.execute(f"SELECT * FROM plans {sort_order}")
+        conditions.append("is_visible = 1")
+    if category:
+        conditions.append("category = ?")
+        params.append(category)
+        
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+        
+    query += " ORDER BY days ASC, gb ASC"
+    
+    cur.execute(query, tuple(params))
     return [dict(r) for r in cur.fetchall()]
 
 def update_plan(plan_id: int, data: dict):
     fields, params = [], []
-    for k in ('name', 'price', 'days', 'gb'):
+    for k in ('name', 'price', 'days', 'gb', 'category'):
         if k in data:
             fields.append(f"{k} = ?")
             params.append(data[k])
