@@ -25,13 +25,21 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         send_func = update.message.reply_text
 
+    daily_on = "✅" if _check_enabled("daily_report_enabled", "1") else "❌"
+    weekly_on = "✅" if _check_enabled("weekly_report_enabled", "1") else "❌"
+
     keyboard = [
         [InlineKeyboardButton("🛠️ حالت نگه‌داری", callback_data="settings_maintenance")],
         [InlineKeyboardButton("📢 اجبار عضویت", callback_data="settings_force_join")],
         [InlineKeyboardButton("⏰ یادآوری انقضا", callback_data="settings_expiry")],
         [InlineKeyboardButton("💳 تنظیمات پرداخت", callback_data="settings_payment")],
         [InlineKeyboardButton("🌐 تنظیمات ساب‌دامین‌ها", callback_data="settings_subdomains")],
-        [InlineKeyboardButton("⚙️ سایر تنظیمات", callback_data="settings_other")],
+        [InlineKeyboardButton("📝 ویرایش متن‌های راهنما", callback_data="settings_guides")],
+        [
+            InlineKeyboardButton(f"{daily_on} گزارش روزانه", callback_data="toggle_report_daily"),
+            InlineKeyboardButton(f"{weekly_on} گزارش هفتگی", callback_data="toggle_report_weekly"),
+        ],
+        [InlineKeyboardButton("🔗 ویرایش نوع لینک پیش‌فرض", callback_data="edit_default_link_type")],
         [InlineKeyboardButton("↩️ بازگشت به منوی ادمین", callback_data="admin_back_to_menu")],
     ]
     await send_func("بخش تنظیمات اصلی:", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -98,21 +106,16 @@ async def subdomains_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     ]
     await q.edit_message_text("تنظیمات ساب‌دامین‌ها:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-async def other_settings_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def guides_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    daily_on = "✅" if _check_enabled("daily_report_enabled", "1") else "❌"
-    weekly_on = "✅" if _check_enabled("weekly_report_enabled", "1") else "❌"
     keyboard = [
-        [InlineKeyboardButton("🔗 ویرایش نوع لینک پیش‌فرض", callback_data="edit_default_link_type")],
-        [InlineKeyboardButton("📝 ویرایش راهنمای اتصال", callback_data="admin_edit_setting_connection_guide")],
-        [
-            InlineKeyboardButton(f"{daily_on} گزارش روزانه", callback_data="toggle_report_daily"),
-            InlineKeyboardButton(f"{weekly_on} گزارش هفتگی", callback_data="toggle_report_weekly"),
-        ],
+        [InlineKeyboardButton("راهنمای اتصال", callback_data="admin_edit_setting_guide_connection")],
+        [InlineKeyboardButton("راهنمای شارژ", callback_data="admin_edit_setting_guide_charging")],
+        [InlineKeyboardButton("راهنمای خرید", callback_data="admin_edit_setting_guide_buying")],
         [InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_settings")],
     ]
-    await q.edit_message_text("سایر تنظیمات:", reply_markup=InlineKeyboardMarkup(keyboard))
+    await q.edit_message_text("کدام متن راهنما را می‌خواهید ویرایش کنید؟", reply_markup=InlineKeyboardMarkup(keyboard))
 
 # ===== Toggles =====
 async def toggle_maintenance(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -143,7 +146,7 @@ async def toggle_report_setting(update: Update, context: ContextTypes.DEFAULT_TY
     key = "daily_report_enabled" if typ == "daily" else "weekly_report_enabled"
     curr = _check_enabled(key, "1")
     db.set_setting(key, "0" if curr else "1")
-    await other_settings_submenu(update, context)
+    await settings_menu(update, context)
 
 # ===== Default link type =====
 async def edit_default_link_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -164,7 +167,7 @@ async def edit_default_link_start(update: Update, context: ContextTypes.DEFAULT_
     for key, title in mapping:
         mark = "✅ " if key == current else ""
         rows.append([InlineKeyboardButton(f"{mark}{title}", callback_data=f"set_default_link_{key}")])
-    rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="settings_other")])
+    rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_settings")])
 
     await q.edit_message_text("نوع لینک پیش‌فرض را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(rows))
 
@@ -201,8 +204,9 @@ async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "لطفاً لیست جدید ساب‌دامین‌ها را با کاما (,) جدا کرده و ارسال کنید (مثلاً: sub1.domain.com,sub2.domain.com).\n"
             "برای خالی کردن، یک خط تیره (-) بفرستید."
         )
-    elif setting_key in ("guide_connection", "guide_charging", "guide_buying"):
-        title = "اتصال" if key == "guide_connection" else "شارژ" if key == "guide_charging" else "خرید"
+    elif setting_key.startswith("guide_"):
+        title_map = {"guide_connection": "اتصال", "guide_charging": "شارژ", "guide_buying": "خرید"}
+        title = title_map.get(setting_key, "راهنما")
         msg = f"📝 متن فعلی راهنمای {title}:\n\n{current}\n\nلطفاً متن جدید را ارسال کنید:"
     elif setting_key == "card_number":
         msg = f"💳 شماره کارت فعلی:\n{current}\n\nشماره کارت جدید را ارسال کنید:"
