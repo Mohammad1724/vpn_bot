@@ -7,7 +7,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 import database as db
 from bot.keyboards import get_main_menu_keyboard, get_admin_menu_keyboard
 from bot.constants import ADMIN_MENU
-from config import REFERRAL_BONUS_AMOUNT
+from config import SUPPORT_USERNAME, REFERRAL_BONUS_AMOUNT
 
 try:
     import jdatetime
@@ -151,18 +151,35 @@ async def show_charging_guide_callback(update: Update, context: ContextTypes.DEF
     kb = [[InlineKeyboardButton("🔙 بازگشت", callback_data="acc_back_to_main")]]
     await q.edit_message_text(guide, reply_markup=InlineKeyboardMarkup(kb))
 
-
 async def show_guide(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    guide = db.get_setting("connection_guide")
-    if not guide:
-        guide = (
-            "📚 راهنمای اتصال\n\n"
-            "1) اپ مناسب (V2Ray/Clash/SingBox) را نصب کنید.\n"
-            "2) از ربات «⚡ دریافت لینک پیش‌فرض» را بگیرید.\n"
-            "3) لینک را در اپ وارد کنید و متصل شوید.\n"
-            "سؤال داشتید؟ از «📞 پشتیبانی» بپرسید."
-        )
-    await update.message.reply_text(guide, disable_web_page_preview=True)
+    keyboard = [
+        [InlineKeyboardButton("📱 راهنمای اتصال", callback_data="guide_connection")],
+        [InlineKeyboardButton("💳 راهنمای شارژ حساب", callback_data="guide_charging")],
+        [InlineKeyboardButton("🛍️ راهنمای خرید از ربات", callback_data="guide_buying")],
+    ]
+    await update.message.reply_text("📚 لطفاً موضوع راهنمای مورد نظر خود را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def show_guide_content(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    guide_key = q.data
+    
+    guide_text = db.get_setting(guide_key)
+    if not guide_text:
+        guide_text = "متاسفانه هنوز راهنمایی برای این بخش ثبت نشده است."
+        
+    kb = [[InlineKeyboardButton("🔙 بازگشت", callback_data="guide_back_to_menu")]]
+    await q.edit_message_text(guide_text, reply_markup=InlineKeyboardMarkup(kb), disable_web_page_preview=True)
+
+async def back_to_guide_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    keyboard = [
+        [InlineKeyboardButton("📱 راهنمای اتصال", callback_data="guide_connection")],
+        [InlineKeyboardButton("💳 راهنمای شارژ حساب", callback_data="guide_charging")],
+        [InlineKeyboardButton("🛍️ راهنمای خرید از ربات", callback_data="guide_buying")],
+    ]
+    await q.edit_message_text("📚 لطفاً موضوع راهنمای مورد نظر خود را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def show_referral_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
