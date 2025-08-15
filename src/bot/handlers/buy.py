@@ -64,7 +64,9 @@ async def show_plans_in_category(update: Update, context: ContextTypes.DEFAULT_T
     text = f"پلن‌های دسته‌بندی «{category}»:"
     kb = []
     for p in plans:
-        title = f"{p['name']} | {p['price']:.0f} تومان"
+        # FIX: Display full plan details on the button
+        volume_text = f"{p['gb']} گیگ" if p['gb'] > 0 else "نامحدود"
+        title = f"{p['name']} | {p['days']} روزه {volume_text} - {p['price']:.0f} تومان"
         kb.append([InlineKeyboardButton(title, callback_data=f"user_buy_{p['plan_id']}")])
     
     kb.append([InlineKeyboardButton("🔙 بازگشت به دسته‌بندی‌ها", callback_data="back_to_cats")])
