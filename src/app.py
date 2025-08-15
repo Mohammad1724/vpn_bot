@@ -17,6 +17,7 @@ from bot.handlers import charge as charge_h
 from bot.handlers import buy as buy_h
 from bot.handlers import user_services as us_h
 from bot.handlers import account_actions as acc_act
+from bot.handlers import support as support_h  # ← این خط اضافه شده
 from bot.handlers.common_handlers import check_channel_membership
 from bot.handlers.admin import common as admin_c
 from bot.handlers.admin import plans as admin_plans
@@ -260,11 +261,10 @@ def build_application():
     application.add_handler(MessageHandler(filters.REPLY & admin_filter, support_h.admin_reply_handler))
     application.add_handler(CallbackQueryHandler(support_h.close_ticket, pattern="^close_ticket_"))
 
-    # Global callbacks (with higher priority)
+    # Global callbacks
     application.add_handler(CallbackQueryHandler(admin_users.admin_confirm_charge_callback, pattern="^admin_confirm_charge_"), group=1)
     application.add_handler(CallbackQueryHandler(admin_users.admin_reject_charge_callback, pattern="^admin_reject_charge_"), group=1)
     
-    # Settings Submenus
     application.add_handler(CallbackQueryHandler(admin_settings.maintenance_submenu, pattern="^settings_maintenance$"), group=1)
     application.add_handler(CallbackQueryHandler(admin_settings.force_join_submenu, pattern="^settings_force_join$"), group=1)
     application.add_handler(CallbackQueryHandler(admin_settings.expiry_submenu, pattern="^settings_expiry$"), group=1)
@@ -272,7 +272,6 @@ def build_application():
     application.add_handler(CallbackQueryHandler(admin_settings.subdomains_submenu, pattern="^settings_subdomains$"), group=1)
     application.add_handler(CallbackQueryHandler(admin_settings.other_settings_submenu, pattern="^settings_other$"), group=1)
     
-    # Other settings callbacks
     application.add_handler(CallbackQueryHandler(admin_settings.edit_default_link_start, pattern="^edit_default_link_type$"), group=1)
     application.add_handler(CallbackQueryHandler(admin_settings.set_default_link_type, pattern="^set_default_link_"), group=1)
     application.add_handler(CallbackQueryHandler(admin_settings.settings_menu, pattern="^back_to_settings$"), group=1)
@@ -301,7 +300,7 @@ def build_application():
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.show_charge_history_callback), pattern="^acc_charge_history$"))
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.show_charging_guide_callback), pattern="^acc_charging_guide$"))
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.show_account_info), pattern="^acc_back_to_main$"))
-
+    
     # Plan category selection
     application.add_handler(CallbackQueryHandler(check_channel_membership(buy_h.show_plans_in_category), pattern="^user_cat_"))
     application.add_handler(CallbackQueryHandler(check_channel_membership(buy_h.buy_service_list), pattern="^back_to_cats$"))
