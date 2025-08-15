@@ -7,11 +7,13 @@ from telegram.constants import ParseMode
 from bot.constants import (
     CMD_CANCEL, CMD_SKIP,
     PLAN_MENU, PLAN_NAME, PLAN_PRICE, PLAN_DAYS, PLAN_GB, PLAN_CATEGORY,
-    EDIT_PLAN_NAME, EDIT_PLAN_PRICE, EDIT_PLAN_DAYS, EDIT_PLAN_GB, EDIT_PLAN_CATEGORY
+    EDIT_PLAN_NAME, EDIT_PLAN_PRICE, EDIT_PLAN_DAYS, EDIT_PLAN_GB, EDIT_PLAN_CATEGORY,
+    BTN_BACK_TO_ADMIN_MENU  # ← این import اضافه شده
 )
 import database as db
 
 def _plan_menu_keyboard() -> ReplyKeyboardMarkup:
+    # کیبورد مخصوص منوی مدیریت پلن‌ها
     keyboard = [["➕ افزودن پلن جدید", "📋 لیست پلن‌ها"], [BTN_BACK_TO_ADMIN_MENU]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -46,7 +48,6 @@ async def list_plans_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return PLAN_MENU
 
 # ===== Add Plan Conversation =====
-
 async def add_plan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "لطفاً نام پلن جدید را وارد کنید:",
@@ -108,7 +109,6 @@ async def cancel_add_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 # ===== Edit Plan Conversation =====
-
 async def edit_plan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
