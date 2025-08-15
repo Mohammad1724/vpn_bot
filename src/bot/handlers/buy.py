@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import logging
+import uuid
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 
@@ -19,27 +20,55 @@ def _maint_on() -> bool:
 def _maint_msg() -> str:
     return db.get_setting("maintenance_message") or "⛔️ ربات در حال بروزرسانی است. لطفاً کمی بعد مراجعه کنید."
 
-def _build_note_for_user(user_id: int, username: str | None) -> str:
-    if username:
-        u = username.lstrip('@')
-        return f"tg:@{u}|id:{user_id}"
-    return f"tg:id:{user_id}"
-
 # ===== Public handlers =====
 async def buy_service_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if q:
+        await q.answer()
+        send_func = q.edit_message_text
+    else:
+        send_func = update.message.reply_text
+
     if _maint_on():
-        await update.message.reply_text(_maint_msg())
+        await send_func(_maint_msg())
         return
-    plans = db.list_plans(only_visible=True)
+
+    categories = db.get_plan_categories()
+    if not categories:
+        await send_func("در حال حاضر پلنی برای خرید موجود نیست.")
+        return
+
+    text = "🛍️ لطفاً دسته‌بندی مورد نظر خود را انتخاب کنید:"
+    keyboard = []
+    row = []
+    for cat in categories:
+        row.append(InlineKeyboardButton(cat, callback_data=f"user_cat_{cat}"))
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+    
+    await send_func(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def show_plans_in_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    category = q.data.replace("user_cat_", "")
+    
+    plans = db.list_plans(only_visible=True, category=category)
     if not plans:
-        await update.message.reply_text("در حال حاضر پلنی برای خرید موجود نیست.")
+        await q.edit_message_text("در این دسته‌بندی پلنی یافت نشد.")
         return
-    text = "🛍️ لطفاً یکی از پلن‌های زیر را برای خرید انتخاب کنید:"
+        
+    text = f"پلن‌های دسته‌بندی «{category}»:"
     kb = []
     for p in plans:
-        title = f"{p['name']} | {p['price']:.0f} تومان | {p['days']} روز | {p['gb']} گیگ"
+        title = f"{p['name']} | {p['price']:.0f} تومان"
         kb.append([InlineKeyboardButton(title, callback_data=f"user_buy_{p['plan_id']}")])
-    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
+    
+    kb.append([InlineKeyboardButton("🔙 بازگشت به دسته‌بندی‌ها", callback_data="back_to_cats")])
+    await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
 async def buy_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -87,7 +116,6 @@ async def skip_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def _process_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE, custom_name: str):
     user_id = update.effective_user.id
-    username = update.effective_user.username
     plan_id = context.user_data.get('buy_plan_id')
     plan = db.get_plan(plan_id) if plan_id else None
 
@@ -109,19 +137,19 @@ async def _process_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         await update.message.reply_text("⏳ در حال ایجاد سرویس شما...")
 
         final_name = custom_name or f"سرویس {plan['gb']} گیگ"
-        note = _build_note_for_user(user_id, username)
+        note = f"tg:id:{user_id}"
 
         provision = await hiddify_api.create_hiddify_user(
             plan_days=plan['days'],
             plan_gb=plan['gb'],
-            user_telegram_id=note,  # ← Note را به comment مپ می‌کند
+            user_telegram_id=note,
             custom_name=final_name
         )
         if not provision or not provision.get("uuid"):
             raise RuntimeError("Provisioning failed or no uuid returned.")
 
         sub_uuid = provision["uuid"]
-        sub_link = provision.get('full_link', '')
+        sub_link = ""
         db.finalize_purchase_transaction(txn_id, sub_uuid, sub_link, final_name)
 
         svc = db.get_service_by_uuid(sub_uuid)
