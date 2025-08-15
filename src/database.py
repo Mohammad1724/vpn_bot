@@ -94,7 +94,7 @@ def init_db():
     except sqlite3.OperationalError:
         cursor.execute("ALTER TABLE users ADD COLUMN has_received_referral_bonus INTEGER DEFAULT 0")
 
-    # plans (با ستون category)
+    # plans
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS plans (
             plan_id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, price REAL NOT NULL,
@@ -242,6 +242,11 @@ def set_user_ban_status(user_id: int, is_banned: bool):
 def set_user_trial_used(user_id: int):
     conn = _connect_db()
     conn.execute("UPDATE users SET has_used_trial = 1 WHERE user_id = ?", (user_id,))
+    conn.commit()
+
+def reset_user_trial(user_id: int):
+    conn = _connect_db()
+    conn.execute("UPDATE users SET has_used_trial = 0 WHERE user_id = ?", (user_id,))
     conn.commit()
 
 def get_all_user_ids() -> list:
