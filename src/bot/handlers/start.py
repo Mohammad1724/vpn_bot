@@ -180,6 +180,7 @@ async def back_to_guide_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     q = update.callback_query
     await q.answer()
     
+    # FIX: Delete the old message and send a new one
     try:
         await q.message.delete()
     except Exception:
