@@ -114,7 +114,6 @@ async def other_settings_submenu(update: Update, context: ContextTypes.DEFAULT_T
     ]
     await q.edit_message_text("سایر تنظیمات:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-
 # ===== Toggles =====
 async def toggle_maintenance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -202,8 +201,9 @@ async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "لطفاً لیست جدید ساب‌دامین‌ها را با کاما (,) جدا کرده و ارسال کنید (مثلاً: sub1.domain.com,sub2.domain.com).\n"
             "برای خالی کردن، یک خط تیره (-) بفرستید."
         )
-    elif setting_key == "connection_guide":
-        msg = "📝 متن فعلی راهنمای اتصال:\n\n" + current + "\n\nلطفاً متن جدید را ارسال کنید:"
+    elif setting_key in ("guide_connection", "guide_charging", "guide_buying"):
+        title = "اتصال" if key == "guide_connection" else "شارژ" if key == "guide_charging" else "خرید"
+        msg = f"📝 متن فعلی راهنمای {title}:\n\n{current}\n\nلطفاً متن جدید را ارسال کنید:"
     elif setting_key == "card_number":
         msg = f"💳 شماره کارت فعلی:\n{current}\n\nشماره کارت جدید را ارسال کنید:"
     elif setting_key == "card_holder":
@@ -279,45 +279,6 @@ async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_T
     await update.message.reply_text("✅ مقدار با موفقیت ذخیره شد.", reply_markup=get_admin_menu_keyboard())
     context.user_data.clear()
     return ConversationHandler.END
-
-
-# ===== Auto-backup interval (moved from other_settings) =====
-async def edit_auto_backup_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # این تابع دیگر از سایر تنظیمات صدا زده نمی‌شود
-    # ولی برای سازگاری با CallbackQueryHandler گلوبال نگه داشته شده است
-    q = update.callback_query
-    await q.answer()
-    current = db.get_setting("auto_backup_interval_hours") or "24"
-    rows = [
-        [InlineKeyboardButton("⛔ خاموش", callback_data="set_backup_interval_0")],
-        [InlineKeyboardButton("⏱ هر 6 ساعت", callback_data="set_backup_interval_6")],
-        [InlineKeyboardButton("🕒 هر 12 ساعت", callback_data="set_backup_interval_12")],
-        [InlineKeyboardButton("📅 روزانه", callback_data="set_backup_interval_24")],
-        [InlineKeyboardButton("🗓 هفتگی", callback_data="set_backup_interval_168")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_settings")],
-    ]
-    await q.edit_message_text(f"بازه پشتیبان‌گیری خودکار (فعلی: {current}h):", reply_markup=InlineKeyboardMarkup(rows))
-
-
-async def set_backup_interval(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    try:
-        hours = int(q.data.replace("set_backup_interval_", ""))
-        db.set_setting("auto_backup_interval_hours", str(hours))
-        
-        from bot import jobs
-        if context.application.job_queue:
-            for job in context.application.job_queue.jobs():
-                if job.name == 'auto_backup_job':
-                    job.schedule_removal()
-            if hours > 0:
-                context.application.job_queue.run_repeating(jobs.auto_backup_job, interval=timedelta(hours=hours), first=timedelta(hours=1))
-        
-        await q.edit_message_text("✅ بازه پشتیبان‌گیری ذخیره شد.")
-        await settings_menu(update, context) # بازگشت به منوی اصلی تنظیمات
-    except Exception as e:
-        await q.edit_message_text(f"❌ خطا در ذخیره تنظیم: {e}")
 
 
 # ===== Back to admin menu =====
