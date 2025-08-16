@@ -30,14 +30,14 @@ async def _send_user_panel(update: Update, target_id: int):
 
     ban_text = "آزاد کردن کاربر" if info['is_banned'] else "مسدود کردن کاربر"
     trial_text = "🔄 ریست سرویس تست"
-    
+
     keyboard = [
         ["افزایش موجودی", "کاهش موجودی"],
         ["🔧 مدیریت سرویس‌ها", trial_text],
         ["📜 سوابق خرید", ban_text],
         [BTN_BACK_TO_ADMIN_MENU]
     ]
-    
+
     trial_status = "استفاده کرده" if info.get('has_used_trial') else "استفاده نکرده"
     text = (
         f"👤 کاربر: `{info['user_id']}`\n"
@@ -87,7 +87,7 @@ async def manage_user_id_received(update: Update, context: ContextTypes.DEFAULT_
         return MANAGE_USER_ID
 
     context.user_data['target_user_id'] = info['user_id']
-    
+
     ban_text = "آزاد کردن کاربر" if info['is_banned'] else "مسدود کردن کاربر"
     trial_text = "🔄 ریست سرویس تست"
     keyboard = [
@@ -128,13 +128,13 @@ async def manage_user_action_handler(update: Update, context: ContextTypes.DEFAU
         await update.message.reply_text(f"✅ وضعیت کاربر به {'مسدود' if new_status else 'فعال'} تغییر کرد.")
         await _send_user_panel(update, target_id)
         return MANAGE_USER_ACTION
-        
+
     elif action == "🔄 ریست سرویس تست":
         db.reset_user_trial(target_id)
         await update.message.reply_text("✅ وضعیت سرویس تست کاربر ریست شد. اکنون می‌تواند دوباره سرویس تست دریافت کند.")
         await _send_user_panel(update, target_id)
         return MANAGE_USER_ACTION
-        
+
     elif action == "🔧 مدیریت سرویس‌ها":
         await manage_user_services_menu(update, context)
         return MANAGE_SERVICE_ACTION
@@ -169,7 +169,7 @@ async def manage_user_amount_received(update: Update, context: ContextTypes.DEFA
             db.add_charge_transaction(target, amount, type_="manual_charge_add")
         else:
             db.add_charge_transaction(target, -amount, type_="manual_charge_sub")
-        
+
         db.update_balance(target, amount if is_add else -amount)
         await update.message.reply_text(f"✅ مبلغ {amount:.0f} تومان از حساب کاربر {'کسر' if not is_add else 'افزوده'} شد.")
 
@@ -282,10 +282,10 @@ async def manage_user_services_menu(update: Update, context: ContextTypes.DEFAUL
     keyboard = []
     for svc in services:
         keyboard.append([InlineKeyboardButton(f"{svc['name']} (ID: {svc['service_id']})", callback_data=f"admin_view_service_{svc['service_id']}")])
-    
+
     back_button = InlineKeyboardButton("🔙 بازگشت به پنل کاربر", callback_data=f"admin_back_to_user_{target_id}")
     keyboard.append([back_button])
-    
+
     await send_func(text, reply_markup=InlineKeyboardMarkup(keyboard))
     return MANAGE_SERVICE_ACTION
 
@@ -293,12 +293,12 @@ async def admin_view_service(update: Update, context: ContextTypes.DEFAULT_TYPE)
     q = update.callback_query
     await q.answer()
     service_id = int(q.data.split('_')[-1])
-    
+
     svc = db.get_service(service_id)
     if not svc:
         await q.edit_message_text("❌ سرویس یافت نشد.")
         return
-        
+
     text = f"سرویس: {svc['name']} (ID: {service_id})"
     keyboard = [
         [InlineKeyboardButton("🔄 تمدید", callback_data=f"admin_renew_service_{service_id}"),
@@ -311,17 +311,17 @@ async def admin_renew_service(update: Update, context: ContextTypes.DEFAULT_TYPE
     q = update.callback_query
     await q.answer()
     service_id = int(q.data.split('_')[-1])
-    
+
     svc = db.get_service(service_id)
     plan = db.get_plan(svc['plan_id']) if svc and svc['plan_id'] else None
-    
+
     if not plan:
         await q.answer("❌ پلن این سرویس برای تمدید یافت نشد.", show_alert=True)
         return
-    
+
     await q.edit_message_text("در حال تمدید سرویس در پنل...")
     res = await hiddify_api.renew_user_subscription(svc['sub_uuid'], plan['days'], plan['gb'])
-    
+
     if res:
         await q.edit_message_text(f"✅ سرویس {svc['name']} با موفقیت تمدید شد.")
     else:
@@ -331,15 +331,15 @@ async def admin_delete_service(update: Update, context: ContextTypes.DEFAULT_TYP
     q = update.callback_query
     await q.answer()
     service_id = int(q.data.split('_')[-1])
-    
+
     svc = db.get_service(service_id)
     if not svc:
         await q.edit_message_text("❌ سرویس یافت نشد.")
         return
-        
+
     await q.edit_message_text("در حال حذف سرویس از پنل...")
     success = await hiddify_api.delete_user_from_panel(svc['sub_uuid'])
-    
+
     if success:
         db.delete_service(service_id)
         await q.edit_message_text(f"✅ سرویس {svc['name']} با موفقیت از پنل و ربات حذف شد.")
