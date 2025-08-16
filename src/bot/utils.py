@@ -17,13 +17,13 @@ def parse_date_flexible(date_str: str) -> Union[datetime, None]:
     try:
         dt = datetime.fromisoformat(s)
         if dt.tzinfo is None: dt = dt.replace(tzinfo=timezone.utc)
-        return dt
+        return dt.astimezone() # Convert to local timezone
     except Exception: pass
     fmts = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d")
     for fmt in fmts:
         try:
             dt = datetime.strptime(s.split('.')[0], fmt)
-            return dt.replace(tzinfo=timezone.utc)
+            return dt # Assume local time if no timezone info
         except Exception: continue
     logger.error(f"Date parse failed for '{date_str}'.")
     return None
@@ -36,46 +36,47 @@ def create_service_info_message(user_data: dict, title: str = "🎉 سرویس �
     sub_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
     subscription_link = f"https://{sub_domain}/{sub_path}/"
 
-    used_gb = round(float(user_data.get('current_usage_GB', user_data.get('used_traffic', 0) / (1024**3))), 2)
-    total_gb = round(float(user_data.get('usage_limit_GB', user_data.get('total_traffic', 0) / (1024**3))), 2)
+    used_gb = round(float(user_data.get('current_usage_GB', 0)), 2)
+    total_gb = round(float(user_data.get('usage_limit_GB', 0)), 2)
     remaining_gb = round(total_gb - used_gb, 2)
     if remaining_gb < 0: remaining_gb = 0
 
+    # --- شروع منطق جدید و صحیح محاسبه تاریخ ---
     expire_dt = None
-    if 'expire' in user_data and user_data['expire'] and str(user_data['expire']).isdigit():
-        try: expire_dt = datetime.fromtimestamp(int(user_data['expire']))
-        except (ValueError, TypeError): pass
-    if not expire_dt and 'last_reset_time' in user_data and 'package_days' in user_data:
-        start_dt = parse_date_flexible(user_data.get('last_reset_time'))
+    start_date_str = user_data.get('created_at') or user_data.get('last_reset_time')
+    
+    if start_date_str:
+        start_dt = parse_date_flexible(start_date_str)
         if start_dt:
             package_days = int(user_data.get('package_days', 0))
-            expire_dt = start_dt + timedelta(days=package_days)
-    
+            # برای جلوگیری از محاسبه اشتباه، روز را به انتهای روز منتقل می کنیم
+            start_dt_end_of_day = start_dt.replace(hour=23, minute=59, second=59)
+            expire_dt = start_dt_end_of_day + timedelta(days=package_days)
+
     expire_date_shamsi = "نامشخص"
     remaining_days = 0
     if expire_dt:
         try:
             shamsi_date = jdatetime.date.fromgregorian(date=expire_dt.date())
             expire_date_shamsi = shamsi_date.strftime('%Y-%m-%d')
-            remaining_days = (expire_dt - datetime.now()).days
-        except Exception: pass
-    elif 'days_left' in user_data:
-        remaining_days = int(user_data.get('days_left', 0))
+            # محاسبه دقیق روزهای باقی مانده
+            now = datetime.now()
+            # اگر تاریخ انقضا در آینده باشد
+            if expire_dt > now:
+                remaining_days = (expire_dt.date() - now.date()).days
+            else:
+                remaining_days = 0 # اگر گذشته باشد، صفر است
+        except Exception as e:
+            logger.error(f"Jdatetime conversion error: {e}")
+            pass
     
-    # --- اصلاح نهایی برای مشکل روز صفر ---
-    # اگر روزهای باقی مانده منفی شود، آن را صفر نمایش می دهیم
-    if remaining_days < 0:
-        display_remaining_days = 0
-    else:
-        display_remaining_days = remaining_days
-
     is_active = True
     if user_data.get('status') in ('disabled', 'limited'):
         is_active = False
     elif total_gb > 0 and remaining_gb <= 0:
         is_active = False
-    elif remaining_days < 0: # شرط اصلی: فقط اگر روزها منفی شد، غیرفعال شود
-        is_active = False
+    elif remaining_days == 0 and expire_dt and expire_dt < datetime.now():
+        is_active = False # اگر روزها صفر است و تاریخ هم گذشته
     
     status_text = "✅ فعال" if is_active else "❌ غیرفعال"
 
@@ -92,7 +93,7 @@ def create_service_info_message(user_data: dict, title: str = "🎉 سرویس �
 ▫️ حجم باقی‌مانده: {remaining_gb} گیگابایت
 
 ▫️ تاریخ انقضا: {expire_date_shamsi}
-▫️ روزهای باقی‌مانده: {display_remaining_days} روز
+▫️ روزهای باقی‌مانده: {remaining_days} روز
 
 🔗 لینک اتصال شما (برای کپی روی آن کلیک کنید):
 `{subscription_link}{user_data['uuid']}`
