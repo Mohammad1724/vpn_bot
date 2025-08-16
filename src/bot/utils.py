@@ -41,12 +41,10 @@ def create_service_info_message(user_data: dict, title: str = "🎉 سرویس �
     remaining_gb = round(total_gb - used_gb, 2)
     if remaining_gb < 0: remaining_gb = 0
 
-    # --- شروع منطق جدید و صحیح محاسبه تاریخ ---
     expire_dt = None
     if 'expire' in user_data and user_data['expire'] and str(user_data['expire']).isdigit():
         try: expire_dt = datetime.fromtimestamp(int(user_data['expire']))
         except (ValueError, TypeError): pass
-
     if not expire_dt and 'last_reset_time' in user_data and 'package_days' in user_data:
         start_dt = parse_date_flexible(user_data.get('last_reset_time'))
         if start_dt:
@@ -60,12 +58,26 @@ def create_service_info_message(user_data: dict, title: str = "🎉 سرویس �
             shamsi_date = jdatetime.date.fromgregorian(date=expire_dt.date())
             expire_date_shamsi = shamsi_date.strftime('%Y-%m-%d')
             remaining_days = (expire_dt - datetime.now()).days
-            if remaining_days < 0: remaining_days = 0
         except Exception: pass
     elif 'days_left' in user_data:
         remaining_days = int(user_data.get('days_left', 0))
-        if remaining_days < 0: remaining_days = 0
-    # --- پایان منطق جدید ---
+    
+    # --- اصلاح نهایی برای مشکل روز صفر ---
+    # اگر روزهای باقی مانده منفی شود، آن را صفر نمایش می دهیم
+    if remaining_days < 0:
+        display_remaining_days = 0
+    else:
+        display_remaining_days = remaining_days
+
+    is_active = True
+    if user_data.get('status') in ('disabled', 'limited'):
+        is_active = False
+    elif total_gb > 0 and remaining_gb <= 0:
+        is_active = False
+    elif remaining_days < 0: # شرط اصلی: فقط اگر روزها منفی شد، غیرفعال شود
+        is_active = False
+    
+    status_text = "✅ فعال" if is_active else "❌ غیرفعال"
 
     service_name = user_data.get('name') or user_data.get('uuid', 'N/A')
     
@@ -73,14 +85,14 @@ def create_service_info_message(user_data: dict, title: str = "🎉 سرویس �
 {title}
 `{service_name}`
 
-▫️ وضعیت: {"✅ فعال" if user_data.get('status') == 'active' else "❌ غیرفعال"}
+▫️ وضعیت: {status_text}
 
 ▫️ حجم کل: {total_gb} گیگابایت
 ▫️ حجم مصرفی: {used_gb} گیگابایت
 ▫️ حجم باقی‌مانده: {remaining_gb} گیگابایت
 
 ▫️ تاریخ انقضا: {expire_date_shamsi}
-▫️ روزهای باقی‌مانده: {remaining_days} روز
+▫️ روزهای باقی‌مانده: {display_remaining_days} روز
 
 🔗 لینک اتصال شما (برای کپی روی آن کلیک کنید):
 `{subscription_link}{user_data['uuid']}`
