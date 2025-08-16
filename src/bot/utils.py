@@ -7,25 +7,27 @@ import logging
 import random
 import jdatetime
 import database as db
-from config import PANEL_DOMAIN
+from config import PANEL_DOMAIN, ADMIN_PATH, SUB_PATH, SUB_DOMAINS
 
 logger = logging.getLogger(__name__)
 
-def create_service_info_message(user_data: dict, subscription_link: str, title: str = "🎉 سرویس شما!") -> str:
+def create_service_info_message(user_data: dict, title: str = "🎉 سرویس شما!") -> str:
     """
-    اطلاعات سرویس کاربر را دریافت کرده و یک پیام متنی فرمت‌شده با تاریخ شمسی برمی‌گرداند.
+    اطلاعات سرویس کاربر را دریافت کرده و یک پیام متنی فرمت‌شده با تاریخ شمسی و لینک صحیح برمی‌گرداند.
     """
-    # سازگاری با هر دو نسخه API (جدید و قدیم)
+    # ساخت لینک اتصال به صورت داینامیک
+    sub_path = SUB_PATH or ADMIN_PATH
+    sub_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
+    subscription_link = f"https://{sub_domain}/{sub_path}/"
+
+    # سازگاری با هر دو نسخه API
     used_gb = round(user_data.get('current_usage_GB', user_data.get('used_traffic', 0) / (1024**3)), 2)
     total_gb = round(user_data.get('usage_limit_GB', user_data.get('total_traffic', 0) / (1024**3)), 2)
     remaining_gb = round(total_gb - used_gb, 2)
-    if remaining_gb < 0:
-        remaining_gb = 0
+    if remaining_gb < 0: remaining_gb = 0
 
-    # محاسبه تاریخ انقضا با هر دو روش ممکن
     expire_timestamp = 0
-    if 'expire' in user_data and user_data['expire']:
-        expire_timestamp = user_data['expire']
+    if 'expire' in user_data and user_data['expire']: expire_timestamp = user_data['expire']
     elif 'last_reset_time' in user_data and 'package_days' in user_data:
          expire_timestamp = user_data.get("last_reset_time", 0) + (user_data.get('package_days', 0) * 24 * 60 * 60)
 
@@ -35,12 +37,10 @@ def create_service_info_message(user_data: dict, subscription_link: str, title: 
             gregorian_date = datetime.fromtimestamp(expire_timestamp)
             shamsi_date = jdatetime.date.fromgregorian(date=gregorian_date)
             expire_date_shamsi = shamsi_date.strftime('%Y-%m-%d')
-        except (TypeError, ValueError):
-            pass
+        except (TypeError, ValueError): pass
 
     remaining_days = (datetime.fromtimestamp(expire_timestamp) - datetime.now()).days if expire_timestamp > 0 else user_data.get('days_left', 0)
-    if remaining_days < 0:
-        remaining_days = 0
+    if remaining_days < 0: remaining_days = 0
 
     service_name = user_data.get('name') or user_data.get('uuid', 'N/A')
     
@@ -94,15 +94,12 @@ def parse_date_flexible(date_str: str) -> Union[datetime, None]:
     return None
 
 def get_service_status(hiddify_info: dict) -> tuple[str, str, bool]:
-    now = datetime.now(timezone.utc)
-    is_expired = False
+    now = datetime.now(timezone.utc); is_expired = False
     if hiddify_info.get('status') in ('disabled', 'limited'): is_expired = True
     elif hiddify_info.get('days_left', 999) < 0: is_expired = True
-    usage_limit = hiddify_info.get('usage_limit_GB', 0)
-    current_usage = hiddify_info.get('current_usage_GB', 0)
+    usage_limit = hiddify_info.get('usage_limit_GB', 0); current_usage = hiddify_info.get('current_usage_GB', 0)
     if usage_limit > 0 and current_usage >= usage_limit: is_expired = True
-    jalali_display_str = "N/A"
-    expire_ts = hiddify_info.get('expire')
+    jalali_display_str = "N/A"; expire_ts = hiddify_info.get('expire')
     if isinstance(expire_ts, (int, float)) and expire_ts > 0:
         expiry_dt_utc = datetime.fromtimestamp(expire_ts, tz=timezone.utc)
     else:
@@ -125,9 +122,6 @@ def get_service_status(hiddify_info: dict) -> tuple[str, str, bool]:
 def is_valid_sqlite(filepath: str) -> bool:
     try:
         with sqlite3.connect(filepath) as conn:
-            cur = conn.cursor()
-            cur.execute("PRAGMA integrity_check;")
-            result = cur.fetchone()
+            cur = conn.cursor(); cur.execute("PRAGMA integrity_check;"); result = cur.fetchone()
         return result and result[0] == 'ok'
-    except sqlite3.DatabaseError:
-        return False
+    except sqlite3.DatabaseError: return False
