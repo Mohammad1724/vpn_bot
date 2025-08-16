@@ -65,7 +65,7 @@ async def send_daily_summary(context: ContextTypes.DEFAULT_TYPE):
     sales_today = db.get_sales_report(days=1)
     revenue_today = sum(s['price'] for s in sales_today if s['price'])
     new_users_today = db.get_new_users_count(days=1)
-    
+
     text = (
         f"📊 **خلاصه گزارش روزانه**\n\n"
         f"👥 کاربران جدید امروز: **{new_users_today}** نفر\n"
