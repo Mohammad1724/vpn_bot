@@ -18,7 +18,7 @@ def check_channel_membership(func):
     @wraps(func)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
         user_id = update.effective_user.id
-        
+
         # اگر کاربر ادمین است، از چک عبور کن
         if user_id == ADMIN_ID:
             return await func(update, context, *args, **kwargs)
@@ -32,7 +32,7 @@ def check_channel_membership(func):
             return await func(update, context, *args, **kwargs)
 
         channel_ids = [int(cid.strip()) for cid in channel_ids_str.split(',') if cid.strip()]
-        
+
         not_joined_channels = []
         for channel_id in channel_ids:
             try:
@@ -56,11 +56,11 @@ def check_channel_membership(func):
                         keyboard.append([InlineKeyboardButton(f"📢 عضویت در کانال {chat.title}", url=chat.invite_link)])
                 except Exception:
                     keyboard.append([InlineKeyboardButton(f"📢 عضویت در کانال ({channel_id})", url=f"https://t.me/c/{str(channel_id).replace('-100', '')}")])
-            
+
             keyboard.append([InlineKeyboardButton("✅ بررسی عضویت", callback_data="check_membership")])
-            
+
             text = "لطفاً برای استفاده از ربات، ابتدا در کانال(های) زیر عضو شوید و سپس دکمه «بررسی عضویت» را بزنید:"
-            
+
             if update.callback_query:
                 await update.callback_query.answer("شما هنوز عضو کانال نشده‌اید.", show_alert=True)
                 try:
