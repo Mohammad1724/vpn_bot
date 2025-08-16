@@ -1,101 +1,82 @@
 # -*- coding: utf-8 -*-
-"""
-Admin handlers for creating, listing, and deleting gift codes.
-"""
 
 import uuid
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
-
-from bot import constants
+from bot.constants import (
+    ADMIN_MENU, BTN_BACK_TO_ADMIN_MENU, CMD_CANCEL
+)
 import database as db
 
-def _get_gift_menu_keyboard() -> ReplyKeyboardMarkup:
-    """Returns the keyboard for the gift code management menu."""
-    return ReplyKeyboardMarkup([
-        ["➕ ساخت کد هدیه جدید", "📋 لیست کدهای هدیه"],
-        [constants.BTN_BACK_TO_ADMIN_MENU]
-    ], resize_keyboard=True)
+# States for gift code creation conversation
+CREATE_GIFT_AMOUNT = range(100, 101)
 
-async def gift_code_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Displays the gift code management menu."""
+async def gift_code_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        ["➕ ساخت کد هدیه جدید", "📋 لیست کدهای هدیه"],
+        [BTN_BACK_TO_ADMIN_MENU]
+    ]
     await update.message.reply_text(
         "🎁 بخش مدیریت کدهای هدیه",
-        reply_markup=_get_gift_menu_keyboard()
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     )
-    return constants.ADMIN_MENU
+    return ADMIN_MENU
 
-async def list_gift_codes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Lists all existing gift codes with their status."""
-    codes = await db.get_all_gift_codes()
+async def list_gift_codes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    codes = db.get_all_gift_codes()
     if not codes:
         await update.message.reply_text("هیچ کد هدیه‌ای تا به حال ساخته نشده است.")
         return
 
     await update.message.reply_text("📋 **لیست کدهای هدیه:**", parse_mode="Markdown")
-    
-    # Send codes in batches to avoid hitting message limits
-    batch = []
     for code in codes:
         status = "✅ استفاده شده" if code['is_used'] else "🟢 فعال"
-        used_by_info = f" (توسط: `{code['used_by']}`)" if code.get('used_by') else ""
-        text = f"`{code['code']}` - **{code['amount']:,.0f} تومان** - {status}{used_by_info}"
-        
+        used_by = f" (توسط: `{code['used_by']}`)" if code['used_by'] else ""
+        text = f"`{code['code']}` - **{code['amount']:,.0f} تومان** - {status}{used_by}"
+
         keyboard = None
         if not code['is_used']:
             keyboard = InlineKeyboardMarkup([[
-                InlineKeyboardButton("🗑️ حذف کد", callback_data=f"delete_gift_code_{code['code']}")
+                InlineKeyboardButton("🗑️ حذف", callback_data=f"delete_gift_code_{code['code']}")
             ]])
-        
-        # Send message with its keyboard immediately
+
         await update.message.reply_text(text, parse_mode="Markdown", reply_markup=keyboard)
 
-async def delete_gift_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles the deletion of an unused gift code."""
-    query = update.callback_query
-    await query.answer()
-    code_to_delete = query.data.split('delete_gift_code_')[-1]
+async def delete_gift_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    code_to_delete = q.data.split('delete_gift_code_')[-1]
 
-    if await db.delete_gift_code(code_to_delete):
-        await query.edit_message_text(f"✅ کد `{code_to_delete}` با موفقیت حذف شد.", parse_mode="Markdown")
+    if db.delete_gift_code(code_to_delete):
+        await q.edit_message_text(f"✅ کد `{code_to_delete}` با موفقیت حذف شد.", parse_mode="Markdown")
     else:
-        # Give a more helpful error message
-        await query.answer("❌ این کد یافت نشد. ممکن است قبلاً حذف شده باشد.", show_alert=True)
-        await query.edit_message_text(query.message.text + "\n\n-- 삭 (حذف شد) --")
+        await q.edit_message_text(f"❌ خطا: کد `{code_to_delete}` یافت نشد یا قبلاً حذف شده بود.", parse_mode="Markdown")
 
-
-async def create_gift_code_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Starts the conversation for creating a new gift code."""
+async def create_gift_code_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "لطفاً مبلغ کد هدیه جدید را به تومان وارد کنید (فقط عدد):",
-        reply_markup=ReplyKeyboardMarkup([[constants.CMD_CANCEL]], resize_keyboard=True)
+        "لطفاً مبلغ کد هدیه را به تومان وارد کنید:",
+        reply_markup=ReplyKeyboardMarkup([[CMD_CANCEL]], resize_keyboard=True)
     )
-    return constants.CREATE_GIFT_AMOUNT
+    return CREATE_GIFT_AMOUNT
 
-async def create_gift_amount_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Receives the amount, creates the gift code, and ends the conversation."""
+async def create_gift_amount_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        amount = float(update.message.text.strip())
+        amount = float(update.message.text)
         if amount <= 0:
-            raise ValueError("Amount must be positive.")
+            raise ValueError
     except (ValueError, TypeError):
-        await update.message.reply_text("❌ مبلغ نامعتبر است. لطفاً یک عدد مثبت وارد کنید (مثلاً: 50000).")
-        return constants.CREATE_GIFT_AMOUNT
+        await update.message.reply_text("لطفاً یک مبلغ عددی و مثبت وارد کنید.")
+        return CREATE_GIFT_AMOUNT
 
-    # Generate a unique, easy-to-read code
-    code = f"GIFT-{str(uuid.uuid4()).split('-')[0].upper()}"
+    code = str(uuid.uuid4()).split('-')[0].upper()
 
-    if await db.create_gift_code(code, amount):
+    if db.create_gift_code(code, amount):
         await update.message.reply_text(
-            f"✅ کد هدیه با موفقیت ساخته شد:\n\n`{code}`\n\n**مبلغ:** {amount:,.0f} تومان",
+            f"✅ کد هدیه با موفقیت ساخته شد:\n\n`{code}`\n\nمبلغ: **{amount:,.0f} تومان**",
             parse_mode="Markdown",
-            reply_markup=_get_gift_menu_keyboard()
+            reply_markup=ReplyKeyboardMarkup([["➕ ساخت کد هدیه جدید", "📋 لیست کدهای هدیه"], [BTN_BACK_TO_ADMIN_MENU]], resize_keyboard=True)
         )
     else:
-        # This is very unlikely with UUID, but handled for robustness
-        await update.message.reply_text(
-            "❌ در ساخت کد هدیه خطایی رخ داد. لطفاً دوباره تلاش کنید.",
-            reply_markup=_get_gift_menu_keyboard()
-        )
+        await update.message.reply_text("❌ در ساخت کد هدیه خطایی رخ داد (احتمالاً کد تکراری است). لطفاً دوباره تلاش کنید.")
 
-    return constants.ADMIN_MENU # Return to the main admin menu state within the conversation
+    return ConversationHandler.END
