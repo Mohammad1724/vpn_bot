@@ -82,8 +82,13 @@ async def _process_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         note = f"tg:@{username}|id:{user_id}" if username else f"tg:id:{user_id}"
         provision = await hiddify_api.create_hiddify_user(plan_days=plan['days'], plan_gb=plan['gb'], user_telegram_id=note, custom_name=final_name)
         if not provision or not provision.get("uuid"): raise RuntimeError("Provisioning failed or no uuid returned.")
+        
         new_uuid = provision["uuid"]
-        db.finalize_purchase_transaction(txn_id, new_uuid, final_name)
+        sub_link = provision.get('full_link', '')
+        
+        # --- خطای اصلی اینجا بود و آرگومان sub_link اضافه شد ---
+        db.finalize_purchase_transaction(txn_id, new_uuid, sub_link, final_name)
+        
         user_data = await hiddify_api.get_user_info(new_uuid)
         if user_data:
             message_title = "🎉 سرویس شما با موفقیت ساخته شد!"
