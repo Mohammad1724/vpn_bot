@@ -23,7 +23,7 @@ async def charge_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(
         chat_id=q.from_user.id,
         text="مبلغ شارژ مورد نظر (تومان) را وارد کنید:",
-        reply_markup=ReplyKeyboardMarkup([[ "انصراف /cancel" ]], resize_keyboard=True)
+        reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
     )
     return constants.CHARGE_AMOUNT
 
@@ -44,8 +44,8 @@ async def charge_amount_received(update: Update, context: ContextTypes.DEFAULT_T
 
 - مبلغ: {amount:,} تومان
 
-با تایید، باید رسید پرداخت را ارسال کنید.
-آیا ادامه می‌دهید؟
+با تایید، باید تصویر رسید پرداخت را ارسال کنید.
+ادامه می‌دهید؟
     """.strip()
 
     kb = InlineKeyboardMarkup([
@@ -54,7 +54,7 @@ async def charge_amount_received(update: Update, context: ContextTypes.DEFAULT_T
     ])
     await update.message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
 
-    # در همین استیت منتظر تایید می‌مانیم
+    # در همین state منتظر تایید می‌مانیم
     return constants.CHARGE_AMOUNT
 
 async def charge_amount_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -107,10 +107,10 @@ async def charge_receipt_received(update: Update, context: ContextTypes.DEFAULT_
     except Exception as e:
         logger.error("Failed to send charge request to admin: %s", e, exc_info=True)
 
-    # پیام به کاربر
+    # پیام به کاربر + دکمه بازگشتِ صحیح به منوی اصلی
     await update.message.reply_text(
         "✅ رسید شما دریافت شد. پس از بررسی ادمین نتیجه اعلام می‌شود.",
-        reply_markup=ReplyKeyboardMarkup([[ "بازگشت به منو /start" ]], resize_keyboard=True)
+        reply_markup=ReplyKeyboardMarkup([["/start"]], resize_keyboard=True)
     )
 
     # پاکسازی
