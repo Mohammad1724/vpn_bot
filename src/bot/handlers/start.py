@@ -98,7 +98,8 @@ async def show_account_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
          InlineKeyboardButton("💸 سوابق شارژ", callback_data="acc_charge_history")],
         [InlineKeyboardButton("🤝 انتقال موجودی", callback_data="acc_transfer_start"),
          InlineKeyboardButton("🎁 ساخت کد هدیه", callback_data="acc_gift_from_balance_start")],
-        [InlineKeyboardButton("💡 راهنمای شارژ", callback_data="acc_charging_guide")],
+        # حذف «💡 راهنمای شارژ» و جایگزینی با منوی راهنما
+        [InlineKeyboardButton("📚 منوی راهنما", callback_data="guide_back_to_menu")],
     ]
 
     if update.callback_query:
