@@ -9,7 +9,7 @@ import database as db
 import hiddify_api
 from bot import utils
 from bot.constants import GET_CUSTOM_NAME, CMD_CANCEL, CMD_SKIP
-from bot.handlers.start import get_main_keyboard
+from bot.handlers.start import get_main_menu_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -70,14 +70,14 @@ async def _process_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     user_id = update.effective_user.id; username = update.effective_user.username
     plan_id = context.user_data.get('buy_plan_id'); plan = db.get_plan(plan_id) if plan_id else None
     if not plan:
-        await update.message.reply_text("❌ پلن انتخاب‌شده نامعتبر است. لطفاً دوباره تلاش کنید.", reply_markup=get_main_keyboard(user_id))
+        await update.message.reply_text("❌ پلن انتخاب‌شده نامعتبر است. لطفاً دوباره تلاش کنید.", reply_markup=get_main_menu_keyboard(user_id))
         context.user_data.clear(); return ConversationHandler.END
     txn_id = db.initiate_purchase_transaction(user_id, plan_id)
     if not txn_id:
         await update.message.reply_text("❌ موجودی کافی نیست. لطفاً ابتدا حسابتان را شارژ کنید.", reply_markup=ReplyKeyboardMarkup([["💰 موجودی و شارژ حساب"]], resize_keyboard=True))
         context.user_data.clear(); return ConversationHandler.END
     try:
-        await update.message.reply_text("⏳ در حال ایجاد سرویس شما...", reply_markup=get_main_keyboard(user_id))
+        await update.message.reply_text("⏳ در حال ایجاد سرویس شما...", reply_markup=get_main_menu_keyboard(user_id))
         final_name = custom_name or f"سرویس {plan['gb']} گیگ"
         note = f"tg:@{username}|id:{user_id}" if username else f"tg:id:{user_id}"
         provision = await hiddify_api.create_hiddify_user(plan_days=plan['days'], plan_gb=plan['gb'], user_telegram_id=note, custom_name=final_name)
