@@ -10,7 +10,6 @@ from telegram.constants import ParseMode
 
 from bot.constants import (MANAGE_USER_ID, MANAGE_USER_ACTION, MANAGE_USER_AMOUNT, CMD_CANCEL, BTN_BACK_TO_ADMIN_MENU, MANAGE_SERVICE_ACTION, BROADCAST_MENU, BROADCAST_MESSAGE, BROADCAST_CONFIRM, BROADCAST_TO_USER_ID, BROADCAST_TO_USER_MESSAGE)
 from bot import utils
-from config import SUBSCRIPTION_LINK
 import database as db
 import hiddify_api
 
@@ -19,16 +18,14 @@ logger = logging.getLogger(__name__)
 async def _send_user_panel(update: Update, target_id: int):
     info = db.get_user(target_id)
     if not info: await update.message.reply_text("کاربر یافت نشد."); return
-    ban_text = "آزاد کردن کاربر" if info['is_banned'] else "مسدود کردن کاربر"
-    trial_text = "🔄 ریست سرویس تست"
+    ban_text = "آزاد کردن کاربر" if info['is_banned'] else "مسدود کردن کاربر"; trial_text = "🔄 ریست سرویس تست"
     keyboard = [["افزایش موجودی", "کاهش موجودی"], ["🔧 مدیریت سرویس‌ها", trial_text], ["📜 سوابق خرید", ban_text], [BTN_BACK_TO_ADMIN_MENU]]
     trial_status = "استفاده کرده" if info.get('has_used_trial') else "استفاده نکرده"
     text = f"👤 کاربر: `{info['user_id']}`\nیوزرنیم: @{info.get('username', 'N/A')}\n💰 موجودی: {info['balance']:.0f} تومان\nوضعیت: {'مسدود' if info['is_banned'] else 'فعال'}\nسرویس تست: {trial_status}"
     await update.message.reply_text(text, reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True), parse_mode="Markdown")
 
 async def user_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("آیدی عددی یا یوزرنیم تلگرام (با یا بدون @) کاربر مورد نظر را وارد کنید:", reply_markup=ReplyKeyboardMarkup([[BTN_BACK_TO_ADMIN_MENU]], resize_keyboard=True))
-    return MANAGE_USER_ID
+    await update.message.reply_text("آیدی عددی یا یوزرنیم تلگرام (با یا بدون @) کاربر مورد نظر را وارد کنید:", reply_markup=ReplyKeyboardMarkup([[BTN_BACK_TO_ADMIN_MENU]], resize_keyboard=True)); return MANAGE_USER_ID
 
 async def manage_user_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.callback_query:
@@ -46,22 +43,14 @@ async def manage_user_id_received(update: Update, context: ContextTypes.DEFAULT_
     await _send_user_panel(update, info['user_id']); return MANAGE_USER_ACTION
 
 async def manage_user_action_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    action = update.message.text
-    target_id = context.user_data.get('target_user_id')
+    action = update.message.text; target_id = context.user_data.get('target_user_id')
     if not target_id: await update.message.reply_text("خطا: کاربر هدف مشخص نیست."); return await user_management_menu(update, context)
-    if action in ["افزایش موجودی", "کاهش موجودی"]:
-        context.user_data['manage_action'] = action
-        await update.message.reply_text("مبلغ (تومان) را وارد کنید:", reply_markup=ReplyKeyboardMarkup([[CMD_CANCEL]], resize_keyboard=True)); return MANAGE_USER_AMOUNT
+    if action in ["افزایش موجودی", "کاهش موجودی"]: context.user_data['manage_action'] = action; await update.message.reply_text("مبلغ (تومان) را وارد کنید:", reply_markup=ReplyKeyboardMarkup([[CMD_CANCEL]], resize_keyboard=True)); return MANAGE_USER_AMOUNT
     elif "مسدود" in action or "آزاد" in action:
         info = db.get_user(target_id); new_status = not info['is_banned']; db.set_user_ban_status(target_id, new_status)
-        await update.message.reply_text(f"✅ وضعیت کاربر به {'مسدود' if new_status else 'فعال'} تغییر کرد.")
-        await _send_user_panel(update, target_id); return MANAGE_USER_ACTION
-    elif action == "🔄 ریست سرویس تست":
-        db.reset_user_trial(target_id)
-        await update.message.reply_text("✅ وضعیت سرویس تست کاربر ریست شد. اکنون می‌تواند دوباره سرویس تست دریافت کند.")
-        await _send_user_panel(update, target_id); return MANAGE_USER_ACTION
-    elif action == "🔧 مدیریت سرویس‌ها":
-        await manage_user_services_menu(update, context); return MANAGE_SERVICE_ACTION
+        await update.message.reply_text(f"✅ وضعیت کاربر به {'مسدود' if new_status else 'فعال'} تغییر کرد."); await _send_user_panel(update, target_id); return MANAGE_USER_ACTION
+    elif action == "🔄 ریست سرویس تست": db.reset_user_trial(target_id); await update.message.reply_text("✅ وضعیت سرویس تست کاربر ریست شد. اکنون می‌تواند دوباره سرویس تست دریافت کند."); await _send_user_panel(update, target_id); return MANAGE_USER_ACTION
+    elif action == "🔧 مدیریت سرویس‌ها": await manage_user_services_menu(update, context); return MANAGE_SERVICE_ACTION
     elif action == "📜 سوابق خرید":
         history = db.get_user_sales_history(target_id)
         if not history: await update.message.reply_text("این کاربر تاکنون خریدی نداشته است."); return MANAGE_USER_ACTION
@@ -143,7 +132,7 @@ async def admin_view_service(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user_data = await hiddify_api.get_user_info(svc['sub_uuid'])
     if user_data:
         title = f"اطلاعات سرویس کاربر (ID: {svc['user_id']})"
-        message_text = utils.create_service_info_message(user_data, SUBSCRIPTION_LINK, title=title)
+        message_text = utils.create_service_info_message(user_data, title=title)
     else: message_text = "❌ اطلاعات این سرویس در پنل یافت نشد."
     keyboard = [[InlineKeyboardButton("🔄 تمدید", callback_data=f"admin_renew_service_{service_id}"), InlineKeyboardButton("🗑️ حذف", callback_data=f"admin_delete_service_{service_id}")], [InlineKeyboardButton("🔙 بازگشت به لیست سرویس‌ها", callback_data="admin_manage_services")]]
     await q.edit_message_text(message_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
