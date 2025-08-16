@@ -45,6 +45,7 @@ def create_service_info_message(user_data: dict, title: str = "🎉 سرویس �
 
     # --- شروع منطق جدید و صحیح محاسبه تاریخ ---
     expire_dt = None
+    # Always prefer 'created_at' for new services, fallback to 'last_reset_time'
     start_date_str = user_data.get('created_at') or user_data.get('last_reset_time')
     
     if start_date_str:
@@ -61,7 +62,8 @@ def create_service_info_message(user_data: dict, title: str = "🎉 سرویس �
         try:
             shamsi_date = jdatetime.date.fromgregorian(date=expire_dt.date())
             expire_date_shamsi = shamsi_date.strftime('%Y-%m-%d')
-            if expire_dt > now_aware:
+            # Calculate remaining days based on date part only to avoid time issues
+            if expire_dt.date() > now_aware.date():
                 remaining_days = (expire_dt.date() - now_aware.date()).days
             else:
                 remaining_days = 0
