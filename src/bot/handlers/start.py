@@ -38,7 +38,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     text = "👋 به ربات خوش آمدید!"
-    
+
     if update.callback_query:
         q = update.callback_query
         await q.answer("عضویت شما تایید شد. خوش آمدید!")
@@ -49,7 +49,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.from_user.send_message(text, reply_markup=get_main_menu_keyboard(user.id))
     else:
         await update.message.reply_text(text, reply_markup=get_main_menu_keyboard(user.id))
-    
+
     return ConversationHandler.END
 
 
@@ -164,11 +164,11 @@ async def show_guide_content(update: Update, context: ContextTypes.DEFAULT_TYPE)
     q = update.callback_query
     await q.answer()
     guide_key = q.data
-    
+
     guide_text = db.get_setting(guide_key)
     if not guide_text:
         guide_text = "متاسفانه هنوز راهنمایی برای این بخش ثبت نشده است."
-        
+
     kb = [[InlineKeyboardButton("🔙 بازگشت به منوی راهنما", callback_data="guide_back_to_menu")]]
     try:
         await q.edit_message_text(guide_text, reply_markup=InlineKeyboardMarkup(kb), disable_web_page_preview=True)
@@ -179,12 +179,12 @@ async def show_guide_content(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def back_to_guide_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    
+
     try:
         await q.message.delete()
     except Exception:
         pass
-        
+
     keyboard = [
         [InlineKeyboardButton("📱 راهنمای اتصال", callback_data="guide_connection")],
         [InlineKeyboardButton("💳 راهنمای شارژ حساب", callback_data="guide_charging")],
