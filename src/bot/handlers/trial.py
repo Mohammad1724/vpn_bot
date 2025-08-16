@@ -8,7 +8,7 @@ from telegram.constants import ParseMode
 
 import database as db
 import hiddify_api
-from config import TRIAL_ENABLED, TRIAL_DAYS, TRIAL_GB, SUBSCRIPTION_LINK
+from config import TRIAL_ENABLED, TRIAL_DAYS, TRIAL_GB
 from bot import utils
 from bot.handlers.start import get_main_keyboard
 
@@ -36,7 +36,7 @@ async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_data = await hiddify_api.get_user_info(new_uuid)
         if user_data:
             message_title = "🎉 سرویس تست شما با موفقیت ساخته شد!"
-            message_text = utils.create_service_info_message(user_data, SUBSCRIPTION_LINK, title=message_title)
+            message_text = utils.create_service_info_message(user_data, title=message_title)
             await context.bot.send_message(chat_id=user_id, text=message_text, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(user_id))
         else:
             await update.message.reply_text("✅ سرویس تست شما با موفقیت ساخته شد، اما در دریافت اطلاعات سرویس مشکلی پیش آمد. لطفاً از منوی «سرویس‌های من» آن را مشاهده کنید.", reply_markup=get_main_keyboard(user_id))
