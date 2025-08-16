@@ -106,7 +106,7 @@ async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
         keyboard_rows.append([
             InlineKeyboardButton("🧩 سایر لینک‌ها", callback_data=f"more_links_{service['sub_uuid']}")
         ])
-        
+
         if not minimal:
             keyboard_rows.append([InlineKeyboardButton("🔄 به‌روزرسانی اطلاعات", callback_data=f"refresh_{service['service_id']}")])
             plan_id = service.get('plan_id')
@@ -178,11 +178,11 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     parts = q.data.split('_')
     link_type, user_uuid = parts[1], parts[2]
-    
+
     service = db.get_service_by_uuid(user_uuid)
     plan = db.get_plan(service.get('plan_id')) if service else None
     sub_domain = get_domain_for_plan(plan)
-    
+
     from config import SUB_PATH, ADMIN_PATH
     sub_path = SUB_PATH or ADMIN_PATH
     base_link = f"https://{sub_domain}/{sub_path}/{user_uuid}"
@@ -238,18 +238,18 @@ async def refresh_service_details(update: Update, context: ContextTypes.DEFAULT_
     await q.answer()
     service_id = int(q.data.split('_')[1])
     service = db.get_service(service_id)
-    
+
     if not service or service['user_id'] != q.from_user.id:
         await q.answer("خطا: این سرویس متعلق به شما نیست.", show_alert=True)
         return
-        
+
     try:
         await q.message.delete()
     except BadRequest:
         pass
-        
+
     msg = await context.bot.send_message(chat_id=q.from_user.id, text="در حال به‌روزرسانی اطلاعات...")
-    
+
     if q.from_user.id == ADMIN_ID:
         try:
             info = await hiddify_api.get_user_info(service['sub_uuid'])
@@ -297,7 +297,7 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
     if data.startswith("delete_service_confirm_"):
         try:
             await q.edit_message_text("در حال حذف سرویس از پنل... ⏳")
-            
+
             success_on_panel = await hiddify_api.delete_user_from_panel(service['sub_uuid'])
             if not success_on_panel:
                 await q.edit_message_text("❌ حذف سرویس از پنل با خطا مواجه شد. لطفاً به پشتیبانی اطلاع دهید.")
