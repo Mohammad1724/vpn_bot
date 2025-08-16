@@ -29,8 +29,14 @@ async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
         note = _build_note_for_user(user_id, username)
         provision = await hiddify_api.create_hiddify_user(plan_days=TRIAL_DAYS, plan_gb=TRIAL_GB, user_telegram_id=note, custom_name=name)
         if not provision or not provision.get("uuid"): raise RuntimeError("Provisioning for trial failed or no uuid returned.")
+        
         new_uuid = provision["uuid"]
-        db.add_active_service(user_id, name, new_uuid, plan_id=None); db.set_user_trial_used(user_id)
+        sub_link = provision.get('full_link', '')
+        
+        # --- خطای احتمالی اینجا هم بود و آرگومان sub_link اضافه شد ---
+        db.add_active_service(user_id, name, new_uuid, sub_link, plan_id=None)
+        db.set_user_trial_used(user_id)
+        
         try: await loading_message.delete()
         except BadRequest: pass
         user_data = await hiddify_api.get_user_info(new_uuid)
