@@ -40,7 +40,7 @@ async def send_backup_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     base_dir = os.path.dirname(os.path.abspath(db.DB_NAME))
     backup_dir = os.path.join(base_dir, "backups")
     os.makedirs(backup_dir, exist_ok=True)
-    
+
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_path = os.path.join(backup_dir, f"backup_{ts}.sqlite3")
 
@@ -82,10 +82,10 @@ async def restore_receive_file(update: Update, context: ContextTypes.DEFAULT_TYP
     if not doc or not (doc.file_name.endswith('.db') or doc.file_name.endswith('.sqlite3')):
         await update.message.reply_text("فرمت فایل نامعتبر است. لطفاً یک فایل .db یا .sqlite3 ارسال کنید.")
         return RESTORE_UPLOAD
-    
+
     tmp_dir = tempfile.gettempdir()
     dl_path = os.path.join(tmp_dir, f"restore_{doc.file_unique_id}.sqlite3")
-    
+
     f = await doc.get_file()
     await f.download_to_drive(dl_path)
 
@@ -94,7 +94,7 @@ async def restore_receive_file(update: Update, context: ContextTypes.DEFAULT_TYP
         if os.path.exists(dl_path):
             os.remove(dl_path)
         return ADMIN_MENU
-        
+
     context.user_data['restore_path'] = dl_path
     kb = [[InlineKeyboardButton("✅ بله، مطمئنم", callback_data="admin_confirm_restore"),
            InlineKeyboardButton("❌ خیر، لغو کن", callback_data="admin_cancel_restore")]]
@@ -139,7 +139,7 @@ async def edit_auto_backup_start(update: Update, context: ContextTypes.DEFAULT_T
         send_func = q.edit_message_text
     else:
         send_func = update.message.reply_text
-        
+
     current_interval = db.get_setting("auto_backup_interval_hours") or "24"
     current_target = db.get_setting("backup_target_chat_id") or "ادمین اصلی"
 
@@ -172,7 +172,7 @@ async def set_backup_interval(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         hours = int(q.data.replace("set_backup_interval_", ""))
         db.set_setting("auto_backup_interval_hours", str(hours))
-        
+
         from bot import jobs
         if context.application.job_queue:
             for job in context.application.job_queue.jobs():
@@ -180,7 +180,7 @@ async def set_backup_interval(update: Update, context: ContextTypes.DEFAULT_TYPE
                     job.schedule_removal()
             if hours > 0:
                 context.application.job_queue.run_repeating(jobs.auto_backup_job, interval=timedelta(hours=hours), first=timedelta(hours=1))
-        
+
         await q.edit_message_text("✅ بازه پشتیبان‌گیری ذخیره شد.")
         await edit_auto_backup_start(update, context)
     except Exception as e:
@@ -210,7 +210,7 @@ async def backup_target_received(update: Update, context: ContextTypes.DEFAULT_T
         except ValueError:
             await update.message.reply_text("❌ شناسه نامعتبر است. لطفاً فقط عدد ارسال کنید.")
             return AWAIT_SETTING_VALUE
-            
+
     await update.message.reply_text("✅ مقصد بکاپ با موفقیت ذخیره شد.", reply_markup=_backup_menu_keyboard())
     return ConversationHandler.END
 
