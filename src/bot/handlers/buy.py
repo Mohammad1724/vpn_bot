@@ -7,7 +7,6 @@ from telegram.constants import ParseMode
 
 import database as db
 import hiddify_api
-from config import SUBSCRIPTION_LINK
 from bot import utils
 from bot.constants import GET_CUSTOM_NAME, CMD_CANCEL, CMD_SKIP
 from bot.handlers.start import get_main_keyboard
@@ -88,7 +87,7 @@ async def _process_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         user_data = await hiddify_api.get_user_info(new_uuid)
         if user_data:
             message_title = "🎉 سرویس شما با موفقیت ساخته شد!"
-            message_text = utils.create_service_info_message(user_data, SUBSCRIPTION_LINK, title=message_title)
+            message_text = utils.create_service_info_message(user_data, title=message_title)
             await context.bot.send_message(chat_id=user_id, text=message_text, parse_mode=ParseMode.MARKDOWN)
         else:
             await update.message.reply_text("✅ خرید شما با موفقیت انجام شد، اما در دریافت اطلاعات سرویس مشکلی پیش آمد. لطفاً از منوی «سرویس‌های من» آن را مشاهده کنید.")
