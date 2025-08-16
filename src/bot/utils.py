@@ -15,15 +15,20 @@ def create_service_info_message(user_data: dict, subscription_link: str, title: 
     """
     اطلاعات سرویس کاربر را دریافت کرده و یک پیام متنی فرمت‌شده با تاریخ شمسی برمی‌گرداند.
     """
-    used_gb = round(user_data.get('used_traffic', 0) / (1024 ** 3), 2)
-    total_gb = round(user_data.get('total_traffic', 0) / (1024 ** 3), 2)
+    # سازگاری با هر دو نسخه API (جدید و قدیم)
+    used_gb = round(user_data.get('current_usage_GB', user_data.get('used_traffic', 0) / (1024**3)), 2)
+    total_gb = round(user_data.get('usage_limit_GB', user_data.get('total_traffic', 0) / (1024**3)), 2)
     remaining_gb = round(total_gb - used_gb, 2)
     if remaining_gb < 0:
         remaining_gb = 0
 
-    expire_timestamp = user_data.get("last_reset_time", 0) + (user_data.get('package_days', 0) * 24 * 60 * 60)
-    
-    # --- تبدیل تاریخ به شمسی ---
+    # محاسبه تاریخ انقضا با هر دو روش ممکن
+    expire_timestamp = 0
+    if 'expire' in user_data and user_data['expire']:
+        expire_timestamp = user_data['expire']
+    elif 'last_reset_time' in user_data and 'package_days' in user_data:
+         expire_timestamp = user_data.get("last_reset_time", 0) + (user_data.get('package_days', 0) * 24 * 60 * 60)
+
     expire_date_shamsi = "نامشخص"
     if expire_timestamp > 0:
         try:
@@ -33,7 +38,7 @@ def create_service_info_message(user_data: dict, subscription_link: str, title: 
         except (TypeError, ValueError):
             pass
 
-    remaining_days = (datetime.fromtimestamp(expire_timestamp) - datetime.now()).days if expire_timestamp > 0 else 0
+    remaining_days = (datetime.fromtimestamp(expire_timestamp) - datetime.now()).days if expire_timestamp > 0 else user_data.get('days_left', 0)
     if remaining_days < 0:
         remaining_days = 0
 
@@ -63,15 +68,12 @@ def get_domain_for_plan(plan: dict | None) -> str:
     is_unlimited = plan and plan.get('gb', 1) == 0
     if is_unlimited:
         unlimited_domains_str = db.get_setting("unlimited_sub_domains")
-        if unlimited_domains_str:
-            return random.choice([d.strip() for d in unlimited_domains_str.split(',')])
+        if unlimited_domains_str: return random.choice([d.strip() for d in unlimited_domains_str.split(',')])
     else:
         volume_domains_str = db.get_setting("volume_based_sub_domains")
-        if volume_domains_str:
-            return random.choice([d.strip() for d in volume_domains_str.split(',')])
+        if volume_domains_str: return random.choice([d.strip() for d in volume_domains_str.split(',')])
     general_domains_str = db.get_setting("sub_domains")
-    if general_domains_str:
-        return random.choice([d.strip() for d in general_domains_str.split(',')])
+    if general_domains_str: return random.choice([d.strip() for d in general_domains_str.split(',')])
     return PANEL_DOMAIN
 
 def parse_date_flexible(date_str: str) -> Union[datetime, None]:
