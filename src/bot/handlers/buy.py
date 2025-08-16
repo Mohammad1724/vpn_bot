@@ -48,26 +48,26 @@ async def buy_service_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
             row = []
     if row:
         keyboard.append(row)
-    
+
     await send_func(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def show_plans_in_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     category = q.data.replace("user_cat_", "")
-    
+
     plans = db.list_plans(only_visible=True, category=category)
     if not plans:
         await q.edit_message_text("در این دسته‌بندی پلنی یافت نشد.")
         return
-        
+
     text = f"پلن‌های دسته‌بندی «{category}»:"
     kb = []
     for p in plans:
         volume_text = f"{p['gb']} گیگ" if p['gb'] > 0 else "نامحدود"
         title = f"{p['name']} | {p['days']} روزه {volume_text} - {p['price']:.0f} تومان"
         kb.append([InlineKeyboardButton(title, callback_data=f"user_buy_{p['plan_id']}")])
-    
+
     kb.append([InlineKeyboardButton("🔙 بازگشت به دسته‌بندی‌ها", callback_data="back_to_cats")])
     await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
