@@ -63,7 +63,7 @@ async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         sub_uuid = provision["uuid"]
         sub_link = provision.get('full_link', '')
-        
+
         db.add_active_service(user_id, name, sub_uuid, sub_link, plan_id=None)
         db.set_user_trial_used(user_id)
 
