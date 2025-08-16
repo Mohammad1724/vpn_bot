@@ -28,7 +28,7 @@ async def auto_backup_job(context: ContextTypes.DEFAULT_TYPE):
     base_dir = os.path.dirname(os.path.abspath(db.DB_NAME))
     backup_dir = os.path.join(base_dir, "backups")
     os.makedirs(backup_dir, exist_ok=True)
-    
+
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
     backup_filename = f"auto_backup_{timestamp}.sqlite3"
     backup_path = os.path.join(backup_dir, backup_filename)
@@ -36,7 +36,7 @@ async def auto_backup_job(context: ContextTypes.DEFAULT_TYPE):
     try:
         # اتصال فعلی را موقتاً می‌بندیم
         db.close_db()
-        
+
         # با backup API یک کپی امن تهیه می‌کنیم
         with sqlite3.connect(db.DB_NAME) as src, sqlite3.connect(backup_path) as dst:
             src.backup(dst)
