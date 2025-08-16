@@ -11,6 +11,23 @@ from config import PANEL_DOMAIN, ADMIN_PATH, SUB_PATH, SUB_DOMAINS
 
 logger = logging.getLogger(__name__)
 
+def parse_date_flexible(date_str: str) -> Union[datetime, None]:
+    if not date_str: return None
+    s = str(date_str).strip().replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None: dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception: pass
+    fmts = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d")
+    for fmt in fmts:
+        try:
+            dt = datetime.strptime(s.split('.')[0], fmt)
+            return dt.replace(tzinfo=timezone.utc)
+        except Exception: continue
+    logger.error(f"Date parse failed for '{date_str}'.")
+    return None
+
 def create_service_info_message(user_data: dict, title: str = "🎉 سرویس شما!") -> str:
     """
     اطلاعات سرویس کاربر را دریافت کرده و یک پیام متنی فرمت‌شده با تاریخ شمسی و لینک صحیح برمی‌گرداند.
@@ -24,25 +41,31 @@ def create_service_info_message(user_data: dict, title: str = "🎉 سرویس �
     remaining_gb = round(total_gb - used_gb, 2)
     if remaining_gb < 0: remaining_gb = 0
 
-    expire_timestamp = 0
-    if 'expire' in user_data and user_data['expire']:
-        expire_timestamp = int(user_data['expire'])
-    elif 'last_reset_time' in user_data and 'package_days' in user_data:
-         # --- خطای اصلی اینجا بود و با int() حل شد ---
-         last_reset = int(user_data.get("last_reset_time", 0))
-         package_days = int(user_data.get('package_days', 0))
-         expire_timestamp = last_reset + (package_days * 24 * 60 * 60)
+    # --- شروع منطق جدید و صحیح محاسبه تاریخ ---
+    expire_dt = None
+    if 'expire' in user_data and user_data['expire'] and str(user_data['expire']).isdigit():
+        try: expire_dt = datetime.fromtimestamp(int(user_data['expire']))
+        except (ValueError, TypeError): pass
 
+    if not expire_dt and 'last_reset_time' in user_data and 'package_days' in user_data:
+        start_dt = parse_date_flexible(user_data.get('last_reset_time'))
+        if start_dt:
+            package_days = int(user_data.get('package_days', 0))
+            expire_dt = start_dt + timedelta(days=package_days)
+    
     expire_date_shamsi = "نامشخص"
-    if expire_timestamp > 0:
+    remaining_days = 0
+    if expire_dt:
         try:
-            gregorian_date = datetime.fromtimestamp(expire_timestamp)
-            shamsi_date = jdatetime.date.fromgregorian(date=gregorian_date)
+            shamsi_date = jdatetime.date.fromgregorian(date=expire_dt.date())
             expire_date_shamsi = shamsi_date.strftime('%Y-%m-%d')
-        except (TypeError, ValueError): pass
-
-    remaining_days = (datetime.fromtimestamp(expire_timestamp) - datetime.now()).days if expire_timestamp > 0 else int(user_data.get('days_left', 0))
-    if remaining_days < 0: remaining_days = 0
+            remaining_days = (expire_dt - datetime.now()).days
+            if remaining_days < 0: remaining_days = 0
+        except Exception: pass
+    elif 'days_left' in user_data:
+        remaining_days = int(user_data.get('days_left', 0))
+        if remaining_days < 0: remaining_days = 0
+    # --- پایان منطق جدید ---
 
     service_name = user_data.get('name') or user_data.get('uuid', 'N/A')
     
@@ -77,23 +100,6 @@ def get_domain_for_plan(plan: dict | None) -> str:
     general_domains_str = db.get_setting("sub_domains")
     if general_domains_str: return random.choice([d.strip() for d in general_domains_str.split(',')])
     return PANEL_DOMAIN
-
-def parse_date_flexible(date_str: str) -> Union[datetime, None]:
-    if not date_str: return None
-    s = str(date_str).strip().replace("Z", "+00:00")
-    try:
-        dt = datetime.fromisoformat(s)
-        if dt.tzinfo is None: dt = dt.replace(tzinfo=timezone.utc)
-        return dt
-    except Exception: pass
-    fmts = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d")
-    for fmt in fmts:
-        try:
-            dt = datetime.strptime(s.split('.')[0], fmt)
-            return dt.replace(tzinfo=timezone.utc)
-        except Exception: continue
-    logger.error(f"Date parse failed for '{date_str}'.")
-    return None
 
 def get_service_status(hiddify_info: dict) -> tuple[str, str, bool]:
     now = datetime.now(timezone.utc); is_expired = False
