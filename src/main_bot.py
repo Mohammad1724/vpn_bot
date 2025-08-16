@@ -34,16 +34,16 @@ logging.getLogger("telegram").setLevel(logging.INFO)
 def main() -> None:
     """Start the bot."""
     db.init_db()
-    
+
     # همگام‌سازی اولیه مبلغ هدیه معرفی (در صورت نبود در DB)
     if db.get_setting('referral_bonus_amount') is None:
         db.set_setting('referral_bonus_amount', str(REFERRAL_BONUS_AMOUNT))
 
     application = build_application()
-    
+
     # پیام "Bot is running" حالا توسط لاگر چاپ می‌شود
     logging.getLogger(__name__).info("Bot is running.")
-    
+
     application.run_polling()
 
 if __name__ == "__main__":
