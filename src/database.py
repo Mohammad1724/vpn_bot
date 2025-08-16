@@ -98,9 +98,14 @@ def init_db():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS plans (
             plan_id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, price REAL NOT NULL,
-            days INTEGER NOT NULL, gb INTEGER NOT NULL, is_visible INTEGER DEFAULT 1
+            days INTEGER NOT NULL, gb INTEGER NOT NULL, is_visible INTEGER DEFAULT 1,
+            category TEXT
         )
     ''')
+    try:
+        cursor.execute("SELECT category FROM plans LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute("ALTER TABLE plans ADD COLUMN category TEXT")
 
     # settings
     cursor.execute('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)''')
@@ -171,9 +176,15 @@ def init_db():
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('expiry_reminder_days', '3'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('expiry_reminder_hour', '9'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('expiry_reminder_message', '⏰ سرویس «{service_name}» شما {days} روز دیگر منقضی می‌شود.\nبرای جلوگیری از قطعی، از «📋 سرویس‌های من» تمدید کنید.'))
-    # New: Force Join Channel settings
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('force_channel_enabled', '0'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('force_channel_id', ''))
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('sub_domains', ''))
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('volume_based_sub_domains', ''))
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('unlimited_sub_domains', ''))
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('backup_target_chat_id', ''))
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('guide_connection', 'متن پیش‌فرض راهنمای اتصال...'))
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('guide_charging', 'متن پیش‌فرض راهنمای شارژ...'))
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('guide_buying', 'متن پیش‌فرض راهنمای خرید...'))
 
     # Indexes
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_services_user ON active_services(user_id)")
@@ -233,6 +244,11 @@ def set_user_trial_used(user_id: int):
     conn.execute("UPDATE users SET has_used_trial = 1 WHERE user_id = ?", (user_id,))
     conn.commit()
 
+def reset_user_trial(user_id: int):
+    conn = _connect_db()
+    conn.execute("UPDATE users SET has_used_trial = 0 WHERE user_id = ?", (user_id,))
+    conn.commit()
+
 def get_all_user_ids() -> list:
     conn = _connect_db()
     cur = conn.execute("SELECT user_id FROM users WHERE is_banned = 0")
@@ -271,9 +287,12 @@ def apply_referral_bonus(user_id: int):
             return referrer_id, bonus_amount
     return None, 0
 
-def add_plan(name: str, price: float, days: int, gb: int):
+def add_plan(name: str, price: float, days: int, gb: int, category: str):
     conn = _connect_db()
-    conn.execute("INSERT INTO plans (name, price, days, gb) VALUES (?, ?, ?, ?)", (name, price, days, gb))
+    conn.execute(
+        "INSERT INTO plans (name, price, days, gb, category) VALUES (?, ?, ?, ?, ?)",
+        (name, price, days, gb, category)
+    )
     conn.commit()
 
 def get_plan(plan_id: int) -> dict:
@@ -283,19 +302,36 @@ def get_plan(plan_id: int) -> dict:
     row = cur.fetchone()
     return dict(row) if row else None
 
-def list_plans(only_visible: bool = False) -> list:
+def get_plan_categories() -> list[str]:
     conn = _connect_db()
     cur = conn.cursor()
-    sort_order = "ORDER BY days ASC, gb ASC"
+    cur.execute("SELECT DISTINCT category FROM plans WHERE is_visible = 1 AND category IS NOT NULL ORDER BY category ASC")
+    return [row['category'] for row in cur.fetchall()]
+
+def list_plans(only_visible: bool = False, category: str = None) -> list:
+    conn = _connect_db()
+    cur = conn.cursor()
+    query = "SELECT * FROM plans"
+    conditions = []
+    params = []
+
     if only_visible:
-        cur.execute(f"SELECT * FROM plans WHERE is_visible = 1 {sort_order}")
-    else:
-        cur.execute(f"SELECT * FROM plans {sort_order}")
+        conditions.append("is_visible = 1")
+    if category:
+        conditions.append("category = ?")
+        params.append(category)
+
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+
+    query += " ORDER BY days ASC, gb ASC"
+
+    cur.execute(query, tuple(params))
     return [dict(r) for r in cur.fetchall()]
 
 def update_plan(plan_id: int, data: dict):
     fields, params = [], []
-    for k in ('name', 'price', 'days', 'gb'):
+    for k in ('name', 'price', 'days', 'gb', 'category'):
         if k in data:
             fields.append(f"{k} = ?")
             params.append(data[k])
