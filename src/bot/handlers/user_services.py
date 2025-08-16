@@ -12,24 +12,18 @@ from telegram.constants import ParseMode
 
 import database as db
 import hiddify_api
-from config import ADMIN_ID, SUBSCRIPTION_LINK
+from config import ADMIN_ID
 from bot.utils import get_domain_for_plan, create_service_info_message
 
 logger = logging.getLogger(__name__)
 
-def _normalize_link_type(t: str) -> str:
-    return (t or "sub").strip().lower().replace("clash-meta", "clashmeta")
-
-def _link_label(link_type: str) -> str:
-    lt = _normalize_link_type(link_type)
-    return {"sub": "V2Ray (sub)", "auto": "هوشمند (Auto)", "sub64": "Base64 (sub64)", "singbox": "SingBox", "xray": "Xray", "clash": "Clash", "clashmeta": "Clash Meta"}.get(lt, "V2Ray (sub)")
+def _normalize_link_type(t: str) -> str: return (t or "sub").strip().lower().replace("clash-meta", "clashmeta")
+def _link_label(link_type: str) -> str: return {"sub": "V2Ray (sub)", "auto": "هوشمند (Auto)", "sub64": "Base64 (sub64)", "singbox": "SingBox", "xray": "Xray", "clash": "Clash", "clashmeta": "Clash Meta"}.get(_normalize_link_type(link_type), "V2Ray (sub)")
 
 async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     services = db.get_user_services(user_id)
-    if not services:
-        await context.bot.send_message(chat_id=user_id, text="شما در حال حاضر هیچ سرویس فعالی ندارید.")
-        return
+    if not services: await context.bot.send_message(chat_id=user_id, text="شما در حال حاضر هیچ سرویس فعالی ندارید."); return
     keyboard = [[InlineKeyboardButton(f"⚙️ {s['name'] or 'سرویس بدون نام'}", callback_data=f"view_service_{s['service_id']}")] for s in services]
     await context.bot.send_message(chat_id=user_id, text="لطفاً سرویسی که می‌خواهید مدیریتش کنید را انتخاب نمایید:", reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -55,7 +49,7 @@ async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
             if original_message: await original_message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb))
             else: await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=InlineKeyboardMarkup(kb))
             return
-        caption = create_service_info_message(info, SUBSCRIPTION_LINK)
+        caption = create_service_info_message(info)
         keyboard_rows = []
         if not minimal:
             keyboard_rows.append([InlineKeyboardButton("🔄 به‌روزرسانی اطلاعات", callback_data=f"refresh_{service['service_id']}"), InlineKeyboardButton("🔗 لینک‌های بیشتر", callback_data=f"more_links_{service['sub_uuid']}")])
@@ -97,8 +91,7 @@ async def show_link_options_menu(message: Message, user_uuid: str, service_id: i
 async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     parts = q.data.split('_'); link_type, user_uuid = parts[1], parts[2]
-    service = db.get_service_by_uuid(user_uuid)
-    plan = db.get_plan(service.get('plan_id')) if service else None
+    service = db.get_service_by_uuid(user_uuid); plan = db.get_plan(service.get('plan_id')) if service else None
     sub_domain = get_domain_for_plan(plan)
     from config import SUB_PATH, ADMIN_PATH
     sub_path = SUB_PATH or ADMIN_PATH; base_link = f"https://{sub_domain}/{sub_path}/{user_uuid}"
@@ -107,8 +100,7 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if link_type == "full":
         await q.edit_message_text("در حال دریافت کانفیگ‌های تکی... ⏳"); full_config_link = f"{base_link}/all.txt"
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(full_config_link); response.raise_for_status()
+            async with httpx.AsyncClient() as client: response = await client.get(full_config_link); response.raise_for_status()
             configs_bytes = response.content; await q.message.delete()
             await context.bot.send_document(chat_id=q.from_user.id, document=InputFile(io.BytesIO(configs_bytes), filename=f"{config_name}_configs.txt"), caption="📄 کانفیگ‌های تکی شما به صورت فایل ارسال شد.")
         except Exception as e: logger.error("Failed to fetch/send full configs: %s", e); await q.edit_message_text("❌ دریافت کانفیگ‌های تکی با خطا مواجه شد.")
@@ -116,7 +108,7 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url_link_type = link_type.replace('clashmeta', 'clash-meta')
     final_link = f"{base_link}/{url_link_type}/?name={config_name.replace(' ', '_')}"
     img = qrcode.make(final_link); bio = io.BytesIO(); bio.name = 'qrcode.png'; img.save(bio, 'PNG'); bio.seek(0)
-    display_link_type = link_type.replace('sub', 'V2ray').replace('meta', ' Meta').title()
+    display_link_type = _link_label(link_type)
     caption = f"نام کانفیگ: **{config_name}**\nنوع لینک: **{display_link_type}**\n\nبا اسکن QR یا استفاده از لینک زیر متصل شوید:\n\n`{final_link}`"
     await q.message.delete()
     await context.bot.send_photo(chat_id=q.message.chat_id, photo=bio, caption=caption, parse_mode="Markdown")
@@ -152,8 +144,7 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
             await q.edit_message_text("در حال حذف سرویس از پنل... ⏳")
             success_on_panel = await hiddify_api.delete_user_from_panel(service['sub_uuid'])
             if not success_on_panel: await q.edit_message_text("❌ حذف سرویس از پنل با خطا مواجه شد. لطفاً به پشتیبانی اطلاع دهید."); return
-            db.delete_service(service_id)
-            await q.edit_message_text("✅ سرویس با موفقیت از پنل و ربات حذف شد.")
+            db.delete_service(service_id); await q.edit_message_text("✅ سرویس با موفقیت از پنل و ربات حذف شد.")
         except Exception as e: logger.error("Delete service %s failed: %s", service_id, e, exc_info=True); await q.edit_message_text("❌ حذف سرویس با خطای ناشناخته مواجه شد.")
         return
     if data.startswith("delete_service_cancel_"):
