@@ -16,14 +16,16 @@ def parse_date_flexible(date_str: str) -> Union[datetime, None]:
     s = str(date_str).strip().replace("Z", "+00:00")
     try:
         dt = datetime.fromisoformat(s)
+        # Always make it timezone-aware
         if dt.tzinfo is None: dt = dt.replace(tzinfo=timezone.utc)
         return dt.astimezone() # Convert to local timezone
     except Exception: pass
     fmts = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d")
     for fmt in fmts:
         try:
-            dt = datetime.strptime(s.split('.')[0], fmt)
-            return dt # Assume local time if no timezone info
+            dt_naive = datetime.strptime(s.split('.')[0], fmt)
+            # Assume it's local time if no timezone info
+            return dt_naive.astimezone()
         except Exception: continue
     logger.error(f"Date parse failed for '{date_str}'.")
     return None
@@ -49,23 +51,20 @@ def create_service_info_message(user_data: dict, title: str = "🎉 سرویس �
         start_dt = parse_date_flexible(start_date_str)
         if start_dt:
             package_days = int(user_data.get('package_days', 0))
-            # برای جلوگیری از محاسبه اشتباه، روز را به انتهای روز منتقل می کنیم
-            start_dt_end_of_day = start_dt.replace(hour=23, minute=59, second=59)
-            expire_dt = start_dt_end_of_day + timedelta(days=package_days)
+            expire_dt = start_dt + timedelta(days=package_days)
 
     expire_date_shamsi = "نامشخص"
     remaining_days = 0
+    now_aware = datetime.now().astimezone() # Use timezone-aware 'now'
+
     if expire_dt:
         try:
             shamsi_date = jdatetime.date.fromgregorian(date=expire_dt.date())
             expire_date_shamsi = shamsi_date.strftime('%Y-%m-%d')
-            # محاسبه دقیق روزهای باقی مانده
-            now = datetime.now()
-            # اگر تاریخ انقضا در آینده باشد
-            if expire_dt > now:
-                remaining_days = (expire_dt.date() - now.date()).days
+            if expire_dt > now_aware:
+                remaining_days = (expire_dt.date() - now_aware.date()).days
             else:
-                remaining_days = 0 # اگر گذشته باشد، صفر است
+                remaining_days = 0
         except Exception as e:
             logger.error(f"Jdatetime conversion error: {e}")
             pass
@@ -75,8 +74,8 @@ def create_service_info_message(user_data: dict, title: str = "🎉 سرویس �
         is_active = False
     elif total_gb > 0 and remaining_gb <= 0:
         is_active = False
-    elif remaining_days == 0 and expire_dt and expire_dt < datetime.now():
-        is_active = False # اگر روزها صفر است و تاریخ هم گذشته
+    elif expire_dt and expire_dt < now_aware:
+        is_active = False
     
     status_text = "✅ فعال" if is_active else "❌ غیرفعال"
 
