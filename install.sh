@@ -5,6 +5,8 @@ set -Eeuo pipefail
 
 SERVICE_NAME="vpn_bot"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+MERGER_SERVICE_NAME="sub_merger"
+MERGER_SERVICE_FILE="/etc/systemd/system/${MERGER_SERVICE_NAME}.service"
 CONF_FILE="/etc/vpn_bot.conf"
 DEFAULT_GITHUB_REPO="https://github.com/Mohammad1724/vpn_bot.git"
 
@@ -69,8 +71,8 @@ create_system_user() {
   fi
 }
 
-create_service_file() {
-  print_color yellow "Creating/updating systemd service..."
+create_service_files() {
+  print_color yellow "Creating/updating systemd service for the bot..."
   cat > "$SERVICE_FILE" << EOL
 [Unit]
 Description=Hiddify Telegram Bot Service
@@ -88,6 +90,24 @@ Environment=PYTHONUNBUFFERED=1
 [Install]
 WantedBy=multi-user.target
 EOL
+
+  print_color yellow "Creating/updating systemd service for the merger script..."
+  cat > "$MERGER_SERVICE_FILE" << EOL
+[Unit]
+Description=Subscription Merger Service
+After=network.target
+
+[Service]
+User=vpn-bot
+Group=vpn-bot
+WorkingDirectory=${INSTALL_DIR}/src
+ExecStart=${INSTALL_DIR}/venv/bin/gunicorn --workers 4 --bind 127.0.0.1:5000 sub_merger:app
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOL
+
   systemctl daemon-reload
 }
 
@@ -112,30 +132,29 @@ ensure_install_dir_vars() {
 configure_config_py() {
   local CONFIG_FILE="${INSTALL_DIR}/src/config.py"
   local TEMPLATE_FILE="${INSTALL_DIR}/src/config_template.py"
-  if [ ! -f "$TEMPLATE_FILE" ]; then
-    print_color red "Missing template file: ${TEMPLATE_FILE}"
-    exit 1
-  fi
   cp "$TEMPLATE_FILE" "$CONFIG_FILE"
 
   read -rp "Telegram Bot Token: " BOT_TOKEN
   read -rp "Telegram Admin ID (numeric): " ADMIN_ID
-  read -rp "Hiddify panel domain (e.g., mypanel.com): " PANEL_DOMAIN
-  read -rp "Hiddify ADMIN secret path: " ADMIN_PATH
-  read -rp "Hiddify SUBSCRIPTION secret path (can be the same): " SUB_PATH
-  read -rp "Hiddify API Key: " API_KEY
   read -rp "Support username (without @): " SUPPORT_USERNAME
 
-  echo
-  print_color yellow "Enter subscription domains comma-separated (or leave empty to use PANEL_DOMAIN):"
-  read -rp "Subscription Domains: " SUB_DOMAINS_INPUT
-  local PYTHON_LIST_FORMAT="[]"
-  if [ -n "$SUB_DOMAINS_INPUT" ]; then
-    PYTHON_LIST_FORMAT="[\"$(echo "$SUB_DOMAINS_INPUT" | sed 's/,/\", \"/g')\"]"
-  fi
+  print_color blue "\n--- Panel 1 (Main) ---"
+  read -rp "Panel 1 Domain (e.g., panel1.com): " PANEL_DOMAIN_P1
+  read -rp "Panel 1 Admin Path: " ADMIN_PATH_P1
+  read -rp "Panel 1 Sub Path: " SUB_PATH_P1
+  read -rp "Panel 1 API Key: " API_KEY_P1
 
-  echo
-  print_color blue "--- Free Trial ---"
+  print_color blue "\n--- Panel 2 (Secondary) ---"
+  read -rp "Panel 2 Domain (e.g., panel2.com): " PANEL_DOMAIN_P2
+  read -rp "Panel 2 Admin Path: " ADMIN_PATH_P2
+  read -rp "Panel 2 Sub Path: " SUB_PATH_P2
+  read -rp "Panel 2 API Key: " API_KEY_P2
+
+  print_color blue "\n--- Merger Script ---"
+  read -rp "Merger script base URL [http://127.0.0.1:5000]: " MERGER_BASE_URL_INPUT
+  local MERGER_BASE_URL="${MERGER_BASE_URL_INPUT:-http://127.0.0.1:5000}"
+
+  print_color blue "\n--- Free Trial ---"
   read -rp "Enable free trial? [Y/n]: " ENABLE_TRIAL
   ENABLE_TRIAL=${ENABLE_TRIAL:-Y}
   local TRIAL_ENABLED_VAL="False"
@@ -149,60 +168,40 @@ configure_config_py() {
     TRIAL_GB_VAL=${TRIAL_GB_INPUT:-1}
   fi
 
-  echo
-  print_color blue "--- Referral & Reminders ---"
-  read -rp "Referral bonus amount (Toman) [5000]: " REFERRAL_BONUS_INPUT
-  local REFERRAL_BONUS_AMOUNT="${REFERRAL_BONUS_INPUT:-5000}"
-  read -rp "Expiry reminder days before end [3]: " EXPIRY_REMINDER_INPUT
-  local EXPIRY_REMINDER_DAYS="${EXPIRY_REMINDER_INPUT:-3}"
-
-  echo
-  print_color blue "--- Usage Alert ---"
-  read -rp "Low-usage alert threshold (0.0 - 1.0) [0.8]: " USAGE_ALERT_INPUT
-  local USAGE_ALERT_THRESHOLD="${USAGE_ALERT_INPUT:-0.8}"
-
   # Escape values for sed
   local BOT_TOKEN_E; BOT_TOKEN_E=$(escape_sed "$BOT_TOKEN")
-  local PANEL_DOMAIN_E; PANEL_DOMAIN_E=$(escape_sed "$PANEL_DOMAIN")
-  local ADMIN_PATH_E; ADMIN_PATH_E=$(escape_sed "$ADMIN_PATH")
-  local SUB_PATH_E; SUB_PATH_E=$(escape_sed "$SUB_PATH")
-  local API_KEY_E; API_KEY_E=$(escape_sed "$API_KEY")
   local SUPPORT_USERNAME_E; SUPPORT_USERNAME_E=$(escape_sed "$SUPPORT_USERNAME")
+  local PANEL_DOMAIN_P1_E; PANEL_DOMAIN_P1_E=$(escape_sed "$PANEL_DOMAIN_P1")
+  local ADMIN_PATH_P1_E; ADMIN_PATH_P1_E=$(escape_sed "$ADMIN_PATH_P1")
+  local SUB_PATH_P1_E; SUB_PATH_P1_E=$(escape_sed "$SUB_PATH_P1")
+  local API_KEY_P1_E; API_KEY_P1_E=$(escape_sed "$API_KEY_P1")
+  local PANEL_DOMAIN_P2_E; PANEL_DOMAIN_P2_E=$(escape_sed "$PANEL_DOMAIN_P2")
+  local ADMIN_PATH_P2_E; ADMIN_PATH_P2_E=$(escape_sed "$ADMIN_PATH_P2")
+  local SUB_PATH_P2_E; SUB_PATH_P2_E=$(escape_sed "$SUB_PATH_P2")
+  local API_KEY_P2_E; API_KEY_P2_E=$(escape_sed "$API_KEY_P2")
+  local MERGER_BASE_URL_E; MERGER_BASE_URL_E=$(escape_sed "$MERGER_BASE_URL")
 
   sed -i "s|^BOT_TOKEN = .*|BOT_TOKEN = \"${BOT_TOKEN_E}\"|" "$CONFIG_FILE"
   sed -i "s|^ADMIN_ID = .*|ADMIN_ID = ${ADMIN_ID}|" "$CONFIG_FILE"
-  sed -i "s|^PANEL_DOMAIN = .*|PANEL_DOMAIN = \"${PANEL_DOMAIN_E}\"|" "$CONFIG_FILE"
-  sed -i "s|^ADMIN_PATH = .*|ADMIN_PATH = \"${ADMIN_PATH_E}\"|" "$CONFIG_FILE"
-  sed -i "s|^SUB_PATH = .*|SUB_PATH = \"${SUB_PATH_E}\"|" "$CONFIG_FILE"
-  sed -i "s|^API_KEY = .*|API_KEY = \"${API_KEY_E}\"|" "$CONFIG_FILE"
   sed -i "s|^SUPPORT_USERNAME = .*|SUPPORT_USERNAME = \"${SUPPORT_USERNAME_E}\"|" "$CONFIG_FILE"
-  sed -i "s|^SUB_DOMAINS = .*|SUB_DOMAINS = ${PYTHON_LIST_FORMAT}|" "$CONFIG_FILE"
+  
+  sed -i "s|^PANEL_DOMAIN_P1 = .*|PANEL_DOMAIN_P1 = \"${PANEL_DOMAIN_P1_E}\"|" "$CONFIG_FILE"
+  sed -i "s|^ADMIN_PATH_P1 = .*|ADMIN_PATH_P1 = \"${ADMIN_PATH_P1_E}\"|" "$CONFIG_FILE"
+  sed -i "s|^SUB_PATH_P1 = .*|SUB_PATH_P1 = \"${SUB_PATH_P1_E}\"|" "$CONFIG_FILE"
+  sed -i "s|^API_KEY_P1 = .*|API_KEY_P1 = \"${API_KEY_P1_E}\"|" "$CONFIG_FILE"
+  
+  sed -i "s|^PANEL_DOMAIN_P2 = .*|PANEL_DOMAIN_P2 = \"${PANEL_DOMAIN_P2_E}\"|" "$CONFIG_FILE"
+  sed -i "s|^ADMIN_PATH_P2 = .*|ADMIN_PATH_P2 = \"${ADMIN_PATH_P2_E}\"|" "$CONFIG_FILE"
+  sed -i "s|^SUB_PATH_P2 = .*|SUB_PATH_P2 = \"${SUB_PATH_P2_E}\"|" "$CONFIG_FILE"
+  sed -i "s|^API_KEY_P2 = .*|API_KEY_P2 = \"${API_KEY_P2_E}\"|" "$CONFIG_FILE"
+  
+  sed -i "s|^MERGER_BASE_URL = .*|MERGER_BASE_URL = \"${MERGER_BASE_URL_E}\"|" "$CONFIG_FILE"
+  
   sed -i "s|^TRIAL_ENABLED = .*|TRIAL_ENABLED = ${TRIAL_ENABLED_VAL}|" "$CONFIG_FILE"
   sed -i "s|^TRIAL_DAYS = .*|TRIAL_DAYS = ${TRIAL_DAYS_VAL}|" "$CONFIG_FILE"
   sed -i "s|^TRIAL_GB = .*|TRIAL_GB = ${TRIAL_GB_VAL}|" "$CONFIG_FILE"
-  sed -i "s|^REFERRAL_BONUS_AMOUNT = .*|REFERRAL_BONUS_AMOUNT = ${REFERRAL_BONUS_AMOUNT}|" "$CONFIG_FILE"
-  sed -i "s|^EXPIRY_REMINDER_DAYS = .*|EXPIRY_REMINDER_DAYS = ${EXPIRY_REMINDER_DAYS}|" "$CONFIG_FILE"
-  sed -i "s|^USAGE_ALERT_THRESHOLD = .*|USAGE_ALERT_THRESHOLD = ${USAGE_ALERT_THRESHOLD}|" "$CONFIG_FILE"
 
   print_color green "config.py created successfully."
-}
-
-append_missing_keys_if_any() {
-  local CONFIG_FILE="${INSTALL_DIR}/src/config.py"
-  [ -f "$CONFIG_FILE" ] || return 0
-  local changed=0
-  if ! grep -q '^REFERRAL_BONUS_AMOUNT' "$CONFIG_FILE"; then
-    echo 'REFERRAL_BONUS_AMOUNT = 5000' >> "$CONFIG_FILE"; changed=1
-  fi
-  if ! grep -q '^EXPIRY_REMINDER_DAYS' "$CONFIG_FILE"; then
-    echo 'EXPIRY_REMINDER_DAYS = 3' >> "$CONFIG_FILE"; changed=1
-  fi
-  if ! grep -q '^USAGE_ALERT_THRESHOLD' "$CONFIG_FILE"; then
-    echo 'USAGE_ALERT_THRESHOLD = 0.8' >> "$CONFIG_FILE"; changed=1
-  fi
-  if [ "$changed" -eq 1 ]; then
-    print_color yellow "Added missing config keys to config.py."
-  fi
 }
 
 install_or_reinstall() {
@@ -221,8 +220,9 @@ install_or_reinstall() {
     print_color yellow "Previous installation found at ${INSTALL_DIR}."
     read -rp "Reuse previous config.py and database? [y/N]: " REUSE_CONFIG
     REUSE_CONFIG=${REUSE_CONFIG:-N}
-    print_color yellow "Stopping existing service (if running)..."
+    print_color yellow "Stopping existing services (if running)..."
     systemctl stop "${SERVICE_NAME}.service" || true
+    systemctl stop "${MERGER_SERVICE_NAME}.service" || true
 
     if [[ "$REUSE_CONFIG" =~ ^[Yy]$ ]]; then
       BACKUP_DIR="/tmp/vpn-bot-backup-$(date +%s)"
@@ -250,6 +250,8 @@ install_or_reinstall() {
     exit 1
   fi
   pip install -r requirements.txt >/dev/null 2>&1
+  # Install merger dependencies
+  pip install Flask gunicorn httpx >/dev/null 2>&1
   deactivate_venv
 
   mkdir -p "${INSTALL_DIR}/backups"
@@ -258,27 +260,28 @@ install_or_reinstall() {
     print_color yellow "Restoring previous config and database..."
     [ -f "${BACKUP_DIR}/config.py" ] && cp "${BACKUP_DIR}/config.py" "${INSTALL_DIR}/src/config.py" || true
     [ -f "${BACKUP_DIR}/vpn_bot.db" ] && cp "${BACKUP_DIR}/vpn_bot.db" "${INSTALL_DIR}/src/vpn_bot.db" || true
-    append_missing_keys_if_any
   else
     print_color blue "--- Bot Configuration ---"
     configure_config_py
   fi
 
-  # Create log file and set permissions
   touch "${INSTALL_DIR}/src/bot.log"
   create_system_user
   chown -R vpn-bot:vpn-bot "${INSTALL_DIR}"
 
-  create_service_file
+  create_service_files
 
-  print_color yellow "Enabling and starting service..."
+  print_color yellow "Enabling and starting services..."
   systemctl enable "${SERVICE_NAME}" >/dev/null 2>&1 || true
   systemctl start "${SERVICE_NAME}"
+  systemctl enable "${MERGER_SERVICE_NAME}" >/dev/null 2>&1 || true
+  systemctl start "${MERGER_SERVICE_NAME}"
 
   save_conf
 
   print_color blue "--- Installation Complete ---"
   print_color green "Service '${SERVICE_NAME}' started."
+  print_color green "Service '${MERGER_SERVICE_NAME}' started."
   print_color yellow "Status: systemctl status ${SERVICE_NAME}"
   print_color yellow "Live logs: journalctl -u ${SERVICE_NAME} -f"
 }
@@ -295,8 +298,9 @@ update_bot() {
     exit 1
   fi
 
-  print_color yellow "Stopping service for update..."
+  print_color yellow "Stopping services for update..."
   systemctl stop "${SERVICE_NAME}" || true
+  systemctl stop "${MERGER_SERVICE_NAME}" || true
 
   print_color yellow "Pulling latest changes..."
   git -C "$INSTALL_DIR" pull --ff-only
@@ -307,36 +311,41 @@ update_bot() {
   if [ -f "${INSTALL_DIR}/requirements.txt" ]; then
     pip install -r "${INSTALL_DIR}/requirements.txt" >/dev/null 2>&1 || true
   fi
+  pip install Flask gunicorn httpx >/dev/null 2>&1
   deactivate_venv
 
-  # Ensure log file exists and has correct permissions
   touch "${INSTALL_DIR}/src/bot.log"
   chown vpn-bot:vpn-bot "${INSTALL_DIR}/src/bot.log"
 
-  print_color yellow "Restarting service..."
+  print_color yellow "Restarting services..."
   systemctl start "${SERVICE_NAME}"
+  systemctl start "${MERGER_SERVICE_NAME}"
 
   print_color green "Update completed."
 }
 
 restart_bot() {
   ensure_root
-  print_color yellow "Restarting service..."
+  print_color yellow "Restarting bot service..."
   systemctl restart "${SERVICE_NAME}" || true
+  print_color yellow "Restarting merger service..."
+  systemctl restart "${MERGER_SERVICE_NAME}" || true
   print_color green "Done."
 }
 
 status_bot() {
   ensure_root
-  print_color yellow "Service status:"
+  print_color yellow "Bot service status:"
   systemctl status "${SERVICE_NAME}" --no-pager || true
+  echo
+  print_color yellow "Merger service status:"
+  systemctl status "${MERGER_SERVICE_NAME}" --no-pager || true
 }
 
 follow_journal() {
   ensure_root
-  print_color yellow "Following live journal logs (Ctrl+C to exit)"
-  # Run in a subshell so Ctrl+C doesn't exit the main script
-  ( journalctl -u "${SERVICE_NAME}" -f )
+  print_color yellow "Following live journal logs for BOTH services (Ctrl+C to exit)"
+  ( journalctl -u "${SERVICE_NAME}" -u "${MERGER_SERVICE_NAME}" -f )
   print_color yellow "Stopped following logs."
 }
 
@@ -356,7 +365,7 @@ follow_bot_log() {
 uninstall_bot() {
   ensure_root
   load_conf
-  print_color red "WARNING: This will remove the service and delete all files."
+  print_color red "WARNING: This will remove services and delete all files."
   read -rp "Are you sure? [y/N]: " CONFIRM
   CONFIRM=${CONFIRM:-N}
   if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
@@ -364,15 +373,19 @@ uninstall_bot() {
     return
   fi
 
-  print_color yellow "Stopping and disabling service..."
+  print_color yellow "Stopping and disabling services..."
   systemctl stop "${SERVICE_NAME}" || true
   systemctl disable "${SERVICE_NAME}" || true
+  systemctl stop "${MERGER_SERVICE_NAME}" || true
+  systemctl disable "${MERGER_SERVICE_NAME}" || true
 
   if [ -f "$SERVICE_FILE" ]; then
-    print_color yellow "Removing service file..."
     rm -f "$SERVICE_FILE"
-    systemctl daemon-reload
   fi
+  if [ -f "$MERGER_SERVICE_FILE" ]; then
+    rm -f "$MERGER_SERVICE_FILE"
+  fi
+  systemctl daemon-reload
 
   local DIR="${INSTALL_DIR:-/opt/vpn-bot}"
   if [ -d "$DIR" ]; then
