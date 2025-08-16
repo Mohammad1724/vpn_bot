@@ -290,35 +290,4 @@ def build_application():
     application.add_handler(CallbackQueryHandler(check_channel_membership(us_h.view_service_callback), pattern="^view_service_"), group=2)
     application.add_handler(CallbackQueryHandler(check_channel_membership(us_h.back_to_services_callback), pattern="^back_to_services$"), group=2)
     application.add_handler(CallbackQueryHandler(check_channel_membership(us_h.get_link_callback), pattern="^getlink_"), group=2)
-    application.add_handler(CallbackQueryHandler(check_channel_membership(us_h.refresh_service_details), pattern="^refresh_"), group=2)
-    application.add_handler(CallbackQueryHandler(check_channel_membership(us_h.more_links_callback), pattern="^more_links_"), group=2)
-    application.add_handler(CallbackQueryHandler(check_channel_membership(us_h.renew_service_handler), pattern="^renew_"), group=2)
-    application.add_handler(CallbackQueryHandler(check_channel_membership(us_h.confirm_renewal_callback), pattern="^confirmrenew$"), group=2)
-    application.add_handler(CallbackQueryHandler(check_channel_membership(us_h.cancel_renewal_callback), pattern="^cancelrenew$"), group=2)
-    application.add_handler(CallbackQueryHandler(check_channel_membership(us_h.delete_service_callback), pattern="^delete_service_"), group=2)
-
-    # Account info callbacks
-    application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.show_purchase_history_callback), pattern="^acc_purchase_history$"))
-    application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.show_charge_history_callback), pattern="^acc_charge_history$"))
-    application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.show_charging_guide_callback), pattern="^acc_charging_guide$"))
-    application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.show_account_info), pattern="^acc_back_to_main$"))
-
-    # Guide callbacks
-    application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.show_guide_content), pattern="^guide_(connection|charging|buying)$"))
-    application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.back_to_guide_menu), pattern="^guide_back_to_menu$"))
-
-    # Plan category selection
-    application.add_handler(CallbackQueryHandler(check_channel_membership(buy_h.show_plans_in_category), pattern="^user_cat_"))
-    application.add_handler(CallbackQueryHandler(check_channel_membership(buy_h.buy_service_list), pattern="^back_to_cats$"))
-
-    # Main commands and menus
-    application.add_handler(CommandHandler("start", check_channel_membership(start_h.start)), group=3)
-    application.add_handler(MessageHandler(filters.Regex('^🛍️ خرید سرویس$'), check_channel_membership(buy_h.buy_service_list)), group=3)
-    application.add_handler(MessageHandler(filters.Regex('^📋 سرویس‌های من$'), check_channel_membership(us_h.list_my_services)), group=3)
-    application.add_handler(MessageHandler(filters.Regex('^👤 اطلاعات حساب کاربری$'), check_channel_membership(start_h.show_account_info)), group=3)
-    application.add_handler(MessageHandler(filters.Regex('^📞 پشتیبانی$'), check_channel_membership(support_h.support_ticket_start)), group=3)
-    application.add_handler(MessageHandler(filters.Regex('^📚 راهنما$'), check_channel_membership(start_h.show_guide)), group=3)
-    application.add_handler(MessageHandler(filters.Regex('^🧪 دریافت سرویس تست رایگان$'), check_channel_membership(trial_get_trial_service)), group=3)
-    application.add_handler(MessageHandler(filters.Regex('^🎁 معرفی دوستان$'), check_channel_membership(start_h.show_referral_link)), group=3)
-
-    return application
+    application.add_handler(CallbackQueryHandler(check_channel_membership(us_h.refresh_service_details), 
