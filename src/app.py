@@ -9,6 +9,7 @@ from telegram.ext import (
 )
 from telegram import Update
 from telegram.request import HTTPXRequest
+from telegram.error import NetworkError
 
 from bot import jobs, constants
 from bot.handlers import start as start_h
@@ -33,12 +34,28 @@ warnings.filterwarnings("ignore", category=PTBUserWarning)
 logger = logging.getLogger(__name__)
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logger.error("خطا در هنگام پردازش آپدیت:", exc_info=context.error)
+    err = context.error
+    # Quiet transient network hiccups from Telegram long-polling
+    if isinstance(err, NetworkError) and (
+        "ReadError" in str(err) or
+        "Server disconnected" in str(err) or
+        "Timeout" in str(err)
+    ):
+        logging.getLogger("telegram.network").warning("Transient network error ignored: %s", err)
+        return
+
+    logger.error("خطا در هنگام پردازش آپدیت:", exc_info=err)
     if isinstance(update, Update):
         logger.error(f"آپدیت مربوطه: {update}")
 
 def build_application():
-    request = HTTPXRequest(connect_timeout=10.0, read_timeout=30.0, write_timeout=30.0, pool_timeout=60.0)
+    # More relaxed timeouts for long-polling stability
+    request = HTTPXRequest(
+        connect_timeout=15.0,
+        read_timeout=180.0,
+        write_timeout=30.0,
+        pool_timeout=90.0
+    )
 
     application = (
         ApplicationBuilder()
@@ -59,7 +76,7 @@ def build_application():
         states={
             constants.GET_CUSTOM_NAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, buy_h.get_custom_name),
-                CommandHandler('skip', buy_h.skip_custom_name),
+                CommandHandler('skip', buy_h.skip_custom_name)
             ],
         },
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
@@ -69,9 +86,7 @@ def build_application():
     gift_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^🎁 کد هدیه$') & user_filter, check_channel_membership(gift_h.gift_code_entry))],
         states={
-            constants.REDEEM_GIFT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, gift_h.redeem_gift_code),
-            ],
+            constants.REDEEM_GIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, gift_h.redeem_gift_code)]
         },
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
         per_user=True, per_chat=True
@@ -84,9 +99,7 @@ def build_application():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, charge_h.charge_amount_received),
                 CallbackQueryHandler(charge_h.charge_amount_confirm_cb, pattern="^charge_amount_(confirm|cancel)$"),
             ],
-            constants.CHARGE_RECEIPT: [
-                MessageHandler(filters.PHOTO, charge_h.charge_receipt_received),
-            ],
+            constants.CHARGE_RECEIPT: [MessageHandler(filters.PHOTO, charge_h.charge_receipt_received)]
         },
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
         per_user=True, per_chat=True
@@ -149,18 +162,14 @@ def build_application():
 
     create_gift_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^➕ ساخت کد هدیه جدید$') & admin_filter, admin_gift.create_gift_code_start)],
-        states={
-            admin_gift.CREATE_GIFT_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_gift.create_gift_amount_received)],
-        },
+        states={admin_gift.CREATE_GIFT_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_gift.create_gift_amount_received)]},
         fallbacks=[CommandHandler('cancel', admin_c.admin_conv_cancel)],
         map_to_parent={ConversationHandler.END: constants.ADMIN_MENU}
     )
 
     settings_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_settings.edit_setting_start, pattern="^admin_edit_setting_")],
-        states={
-            constants.AWAIT_SETTING_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_settings.setting_value_received)],
-        },
+        states={constants.AWAIT_SETTING_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_settings.setting_value_received)]},
         fallbacks=[CommandHandler('cancel', admin_c.admin_conv_cancel)],
         map_to_parent={constants.ADMIN_MENU: constants.ADMIN_MENU, ConversationHandler.END: constants.ADMIN_MENU}
     )
@@ -241,15 +250,13 @@ def build_application():
             ],
             constants.MANAGE_USER_ID: [
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.back_to_admin_menu),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_users.manage_user_id_received),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_users.manage_user_id_received)
             ],
             constants.MANAGE_USER_ACTION: [
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.back_to_admin_menu),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_users.manage_user_action_handler),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_users.manage_user_action_handler)
             ],
-            constants.MANAGE_USER_AMOUNT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_users.manage_user_amount_received),
-            ],
+            constants.MANAGE_USER_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_users.manage_user_amount_received)],
             constants.MANAGE_SERVICE_ACTION: [
                 CallbackQueryHandler(admin_users.admin_view_service, pattern="^admin_view_service_"),
                 CallbackQueryHandler(admin_users.admin_renew_service, pattern="^admin_renew_service_"),
@@ -274,11 +281,11 @@ def build_application():
     application.add_handler(gift_from_balance_conv)
     application.add_handler(support_conv)
 
-    # تایید/لغو خرید سرویس
+    # تایید/لغو خرید سرویس (مطابق buy.py جدید)
     application.add_handler(CallbackQueryHandler(buy_h.confirm_purchase_callback, pattern="^confirmbuy$"), group=2)
     application.add_handler(CallbackQueryHandler(buy_h.cancel_purchase_callback, pattern="^cancelbuy$"), group=2)
 
-    # Admin reply to support
+    # Admin reply to support (reply to user's message)
     application.add_handler(MessageHandler(filters.REPLY & admin_filter, support_h.admin_reply_handler))
     application.add_handler(CallbackQueryHandler(support_h.close_ticket, pattern="^close_ticket_"))
 
@@ -332,12 +339,12 @@ def build_application():
     application.add_handler(CallbackQueryHandler(check_channel_membership(buy_h.show_plans_in_category), pattern="^user_cat_"))
     application.add_handler(CallbackQueryHandler(check_channel_membership(buy_h.buy_service_list), pattern="^back_to_cats$"))
 
-    # Main commands and menus (group 3)
+    # Main commands & menus (group 3)
     application.add_handler(CommandHandler("start", check_channel_membership(start_h.start)), group=3)
     application.add_handler(MessageHandler(filters.Regex('^🛍️ خرید سرویس$'), check_channel_membership(buy_h.buy_service_list)), group=3)
     application.add_handler(MessageHandler(filters.Regex('^📋 سرویس‌های من$'), check_channel_membership(us_h.list_my_services)), group=3)
     application.add_handler(MessageHandler(filters.Regex('^👤 اطلاعات حساب کاربری$'), check_channel_membership(start_h.show_account_info)), group=3)
-    # هندلر تکراری پشتیبانی عمداً حذف شده است
+    # پشتیبانی (از طریق support_conv مدیریت می‌شود) - اینجا ثبت دوباره نمی‌کنیم
     application.add_handler(MessageHandler(filters.Regex('^📚 راهنما$'), check_channel_membership(start_h.show_guide)), group=3)
     application.add_handler(MessageHandler(filters.Regex('^🧪 دریافت سرویس تست رایگان$'), check_channel_membership(trial_get_trial_service)), group=3)
     application.add_handler(MessageHandler(filters.Regex('^🎁 معرفی دوستان$'), check_channel_membership(start_h.show_referral_link)), group=3)
