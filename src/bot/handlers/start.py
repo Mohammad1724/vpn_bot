@@ -98,7 +98,7 @@ async def show_account_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
          InlineKeyboardButton("💸 سوابق شارژ", callback_data="acc_charge_history")],
         [InlineKeyboardButton("🤝 انتقال موجودی", callback_data="acc_transfer_start"),
          InlineKeyboardButton("🎁 ساخت کد هدیه", callback_data="acc_gift_from_balance_start")],
-        # حذف «💡 راهنمای شارژ» و جایگزینی با منوی راهنما
+        # راهنما به صورت منو
         [InlineKeyboardButton("📚 منوی راهنما", callback_data="guide_back_to_menu")],
     ]
 
@@ -164,18 +164,45 @@ async def show_guide(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_guide_content(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    guide_key = q.data
+    guide_key = q.data  # "guide_connection" | "guide_charging" | "guide_buying"
 
     guide_text = db.get_setting(guide_key)
     if not guide_text:
         guide_text = "متاسفانه هنوز راهنمایی برای این بخش ثبت نشده است."
 
     kb = [[InlineKeyboardButton("🔙 بازگشت به منوی راهنما", callback_data="guide_back_to_menu")]]
+
+    # اگر دکمه روی پیام عکس (QR) زده شد، پیام را پاک کن و متن را به صورت پیام جدید بفرست
+    if q.message and q.message.photo:
+        try:
+            await q.message.delete()
+        except Exception:
+            pass
+        await context.bot.send_message(
+            chat_id=q.from_user.id,
+            text=guide_text,
+            reply_markup=InlineKeyboardMarkup(kb),
+            disable_web_page_preview=True
+        )
+        return
+
+    # در غیر این صورت، تلاش برای ویرایش متن همان پیام
     try:
-        await q.edit_message_text(guide_text, reply_markup=InlineKeyboardMarkup(kb), disable_web_page_preview=True)
+        await q.edit_message_text(
+            guide_text,
+            reply_markup=InlineKeyboardMarkup(kb),
+            disable_web_page_preview=True
+        )
     except BadRequest as e:
-        if "message is not modified" not in str(e):
-            raise e
+        # اگر پیام قابل ویرایش نبود (مثلاً اصلاً متن نداشت یا محدودیت دیگری)، یک پیام جدید ارسال کن
+        if "message is not modified" in str(e):
+            return
+        await context.bot.send_message(
+            chat_id=q.from_user.id,
+            text=guide_text,
+            reply_markup=InlineKeyboardMarkup(kb),
+            disable_web_page_preview=True
+        )
 
 async def back_to_guide_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
