@@ -2,7 +2,7 @@
 
 import logging
 from telegram.ext import ContextTypes
-from telegram import Update, InputFile
+from telegram import Update, InputFile, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.error import BadRequest
 from telegram.constants import ParseMode
 
@@ -29,10 +29,13 @@ async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
         trial_days = int(db.get_setting("trial_days") or 1)
         trial_gb = int(db.get_setting("trial_gb") or 1)
         note = _build_note_for_user(user_id, username)
+
         provision = await hiddify_api.create_hiddify_user(plan_days=trial_days, plan_gb=trial_gb, user_telegram_id=note, custom_name=name)
         if not provision or not provision.get("uuid"): raise RuntimeError("Provisioning for trial failed or no uuid returned.")
+
         new_uuid = provision["uuid"]; sub_link = provision.get('full_link', '')
         db.add_active_service(user_id, name, new_uuid, sub_link, plan_id=None); db.set_user_trial_used(user_id)
+
         try: await loading_message.delete()
         except BadRequest: pass
 
@@ -41,9 +44,35 @@ async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sub_url = utils.build_subscription_url(new_uuid)
             qr_bio = utils.make_qr_bytes(sub_url)
             caption = utils.create_service_info_caption(user_data, title="🎉 سرویس تست شما با موفقیت ساخته شد!")
-            await context.bot.send_photo(chat_id=user_id, photo=InputFile(qr_bio), caption=caption, parse_mode=ParseMode.MARKDOWN)
+
+            inline_kb = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("📚 راهنمای اتصال", callback_data="guide_connection"),
+                    InlineKeyboardButton("📋 سرویس‌های من", callback_data="back_to_services")
+                ]
+            ])
+
+            await context.bot.send_photo(
+                chat_id=user_id,
+                photo=InputFile(qr_bio),
+                caption=caption,
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=inline_kb
+            )
+
+            # جایگزینی کیبورد /cancel با منوی اصلی
+            from bot.keyboards import get_main_menu_keyboard
+            await context.bot.send_message(
+                chat_id=user_id,
+                text="منوی اصلی:",
+                reply_markup=get_main_menu_keyboard(user_id)
+            )
         else:
-            await update.message.reply_text("✅ سرویس تست ساخته شد، اما دریافت اطلاعات سرویس با خطا مواجه شد. از «📋 سرویس‌های من» استفاده کنید.")
+            from bot.keyboards import get_main_menu_keyboard
+            await update.message.reply_text(
+                "✅ سرویس تست ساخته شد، اما دریافت اطلاعات سرویس با خطا مواجه شد. از «📋 سرویس‌های من» استفاده کنید.",
+                reply_markup=get_main_menu_keyboard(user_id)
+            )
     except Exception as e:
         logger.error("Trial provision failed for user %s: %s", user_id, e, exc_info=True)
         try: await loading_message.edit_text("❌ ساخت سرویس تست ناموفق بود. لطفاً بعداً تلاش کنید.")
