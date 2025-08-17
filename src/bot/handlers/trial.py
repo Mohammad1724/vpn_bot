@@ -2,15 +2,13 @@
 
 import logging
 from telegram.ext import ContextTypes
-from telegram import Update
+from telegram import Update, InputFile
 from telegram.error import BadRequest
 from telegram.constants import ParseMode
 
 import database as db
 import hiddify_api
-from config import TRIAL_ENABLED, TRIAL_DAYS, TRIAL_GB
 from bot import utils
-from bot.handlers.start import get_main_menu_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -21,31 +19,31 @@ def _build_note_for_user(user_id: int, username: str | None): return f"tg:@{user
 async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user; user_id = user.id; username = user.username
     if _maint_on(): await update.message.reply_text(_maint_msg()); return
-    if not TRIAL_ENABLED: await update.message.reply_text("🧪 سرویس تست در حال حاضر فعال نیست."); return
     info = db.get_or_create_user(user_id, user.username or "")
     if info and info.get("has_used_trial"): await update.message.reply_text("🧪 شما قبلاً از سرویس تست استفاده کرده‌اید."); return
-    name = "سرویس تست"; loading_message = await update.message.reply_text("⏳ در حال ایجاد سرویس تست شما...")
+
+    name = "سرویس تست"
+    loading_message = await update.message.reply_text("⏳ در حال ایجاد سرویس تست شما...")
     try:
+        # پارامترهای تست از تنظیمات
+        trial_days = int(db.get_setting("trial_days") or 1)
+        trial_gb = int(db.get_setting("trial_gb") or 1)
         note = _build_note_for_user(user_id, username)
-        provision = await hiddify_api.create_hiddify_user(plan_days=TRIAL_DAYS, plan_gb=TRIAL_GB, user_telegram_id=note, custom_name=name)
+        provision = await hiddify_api.create_hiddify_user(plan_days=trial_days, plan_gb=trial_gb, user_telegram_id=note, custom_name=name)
         if not provision or not provision.get("uuid"): raise RuntimeError("Provisioning for trial failed or no uuid returned.")
-        
-        new_uuid = provision["uuid"]
-        sub_link = provision.get('full_link', '')
-        
-        # --- خطای احتمالی اینجا هم بود و آرگومان sub_link اضافه شد ---
-        db.add_active_service(user_id, name, new_uuid, sub_link, plan_id=None)
-        db.set_user_trial_used(user_id)
-        
+        new_uuid = provision["uuid"]; sub_link = provision.get('full_link', '')
+        db.add_active_service(user_id, name, new_uuid, sub_link, plan_id=None); db.set_user_trial_used(user_id)
         try: await loading_message.delete()
         except BadRequest: pass
+
         user_data = await hiddify_api.get_user_info(new_uuid)
         if user_data:
-            message_title = "🎉 سرویس تست شما با موفقیت ساخته شد!"
-            message_text = utils.create_service_info_message(user_data, title=message_title)
-            await context.bot.send_message(chat_id=user_id, text=message_text, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_menu_keyboard(user_id))
+            sub_url = utils.build_subscription_url(new_uuid)
+            qr_bio = utils.make_qr_bytes(sub_url)
+            caption = utils.create_service_info_caption(user_data, title="🎉 سرویس تست شما با موفقیت ساخته شد!")
+            await context.bot.send_photo(chat_id=user_id, photo=InputFile(qr_bio), caption=caption, parse_mode=ParseMode.MARKDOWN)
         else:
-            await update.message.reply_text("✅ سرویس تست شما با موفقیت ساخته شد، اما در دریافت اطلاعات سرویس مشکلی پیش آمد. لطفاً از منوی «سرویس‌های من» آن را مشاهده کنید.", reply_markup=get_main_menu_keyboard(user_id))
+            await update.message.reply_text("✅ سرویس تست ساخته شد، اما دریافت اطلاعات سرویس با خطا مواجه شد. از «📋 سرویس‌های من» استفاده کنید.")
     except Exception as e:
         logger.error("Trial provision failed for user %s: %s", user_id, e, exc_info=True)
         try: await loading_message.edit_text("❌ ساخت سرویس تست ناموفق بود. لطفاً بعداً تلاش کنید.")
