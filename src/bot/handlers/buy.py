@@ -10,7 +10,7 @@ import database as db
 import hiddify_api
 from bot import utils
 from bot.constants import GET_CUSTOM_NAME, CMD_CANCEL, CMD_SKIP
-from bot.handlers.start import get_main_menu_keyboard
+from bot.keyboards import get_main_menu_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -237,7 +237,28 @@ async def _do_purchase_confirmed(q, context: ContextTypes.DEFAULT_TYPE, custom_n
             sub_url = utils.build_subscription_url(new_uuid)
             qr_bio = utils.make_qr_bytes(sub_url)
             caption = utils.create_service_info_caption(user_data, title="🎉 سرویس شما با موفقیت ساخته شد!")
-            await context.bot.send_photo(chat_id=user_id, photo=InputFile(qr_bio), caption=caption, parse_mode=ParseMode.MARKDOWN)
+
+            inline_kb = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("📚 راهنمای اتصال", callback_data="guide_connection"),
+                    InlineKeyboardButton("📋 سرویس‌های من", callback_data="back_to_services")
+                ]
+            ])
+
+            await context.bot.send_photo(
+                chat_id=user_id,
+                photo=InputFile(qr_bio),
+                caption=caption,
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=inline_kb
+            )
+
+            # جایگزینی کیبورد /cancel با منوی اصلی
+            await context.bot.send_message(
+                chat_id=user_id,
+                text="منوی اصلی:",
+                reply_markup=get_main_menu_keyboard(user_id)
+            )
         else:
             await context.bot.send_message(
                 chat_id=user_id,
