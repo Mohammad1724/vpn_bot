@@ -138,6 +138,13 @@ def create_service_info_caption(user_data: dict, title: str = "🎉 سرویس �
     )
     return caption
 
+# سازگاری عقب‌رو: بعضی فایل‌ها هنوز این نام را import می‌کنند.
+def create_service_info_message(user_data: dict, title: str = "🎉 سرویس شما!") -> str:
+    """
+    Wrapper برای سازگاری با کد قدیمی. متن کوتاه (Caption) را برمی‌گرداند.
+    """
+    return create_service_info_caption(user_data, title=title)
+
 def get_domain_for_plan(plan: dict | None) -> str:
     is_unlimited = plan and plan.get('gb', 1) == 0
     if is_unlimited:
