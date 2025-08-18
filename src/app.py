@@ -140,7 +140,7 @@ def build_application():
         entry_points=[
             # اگر دکمه ReplyKeyboard است:
             MessageHandler(filters.Regex(r'^➕ افزودن پلن جدید$') & admin_filter, admin_plans.add_plan_start),
-            # اگر دکمه InlineKeyboard است، callback_data آن را مطابق pattern زیر قرار دهید (یا pattern را تغییر دهید):
+            # اگر دکمه InlineKeyboard است:
             CallbackQueryHandler(admin_plans.add_plan_start, pattern=r'^admin_add_plan$'),
         ],
         states={
@@ -151,7 +151,41 @@ def build_application():
             constants.PLAN_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_category_received)],
         },
         fallbacks=[CommandHandler('cancel', admin_plans.cancel_add_plan)],
-        # چون این کانورسیشن در منوی مدیریت پلن‌ها باز می‌شود، بعد از پایان به همان منو برگرد
+        # بعد از پایان افزودن، به منوی مدیریت پلن‌ها برگرد
+        map_to_parent={ConversationHandler.END: constants.PLAN_MENU},
+        per_user=True,
+        per_chat=True,
+        allow_reentry=True
+    )
+
+    # ویرایش پلن (کانورسیشن جدا)
+    edit_plan_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(admin_plans.edit_plan_start, pattern=r'^admin_edit_plan_\d+$'),
+        ],
+        states={
+            constants.EDIT_PLAN_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_name_received),
+                CommandHandler('skip', admin_plans.skip_edit_plan_name),
+            ],
+            constants.EDIT_PLAN_PRICE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_price_received),
+                CommandHandler('skip', admin_plans.skip_edit_plan_price),
+            ],
+            constants.EDIT_PLAN_DAYS: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_days_received),
+                CommandHandler('skip', admin_plans.skip_edit_plan_days),
+            ],
+            constants.EDIT_PLAN_GB: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_gb_received),
+                CommandHandler('skip', admin_plans.skip_edit_plan_gb),
+            ],
+            constants.EDIT_PLAN_CATEGORY: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_category_received),
+                CommandHandler('skip', admin_plans.skip_edit_plan_category),
+            ],
+        },
+        fallbacks=[CommandHandler('cancel', admin_plans.cancel_edit_plan)],
         map_to_parent={ConversationHandler.END: constants.PLAN_MENU},
         per_user=True,
         per_chat=True,
@@ -227,9 +261,22 @@ def build_application():
             ],
             # منوی مدیریت پلن‌ها
             constants.PLAN_MENU: [
-                # کانورسیشن افزودن پلن جدید داخل این منو
+                # دکمه‌های Reply/Inline برای این منو
+                MessageHandler(filters.Regex(r'^📋 لیست پلن‌ها$'), admin_plans.list_plans_admin),
+                CallbackQueryHandler(admin_plans.list_plans_admin, pattern=r'^admin_list_plans$'),
+
+                # کال‌بک‌های اینلاین آیتم‌های لیست
+                CallbackQueryHandler(admin_plans.admin_toggle_plan_visibility_callback, pattern=r'^admin_toggle_plan_\d+$'),
+                CallbackQueryHandler(admin_plans.admin_delete_plan_callback, pattern=r'^admin_delete_plan_\d+$'),
+
+                # کانورسیشن ویرایش پلن
+                edit_plan_conv,
+
+                # کانورسیشن افزودن پلن جدید
                 add_plan_conv,
-                # در صورت داشتن دکمه‌های دیگر (ویرایش/حذف/لیست/بازگشت) اینجا اضافه کنید
+
+                # بازگشت به منوی ادمین
+                MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.admin_entry),
             ],
         },
         fallbacks=[
