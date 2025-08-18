@@ -1,297 +1,315 @@
 # -*- coding: utf-8 -*-
 
+import logging
+from typing import Optional
+
 from telegram.ext import ContextTypes, ConversationHandler
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ParseMode
 from telegram.error import BadRequest
 
-from bot.constants import AWAIT_SETTING_VALUE, ADMIN_MENU
-from bot.keyboards import get_admin_menu_keyboard
 import database as db
+from bot.constants import ADMIN_MENU, AWAIT_SETTING_VALUE
+from bot.keyboards import get_admin_menu_keyboard
 
+logger = logging.getLogger(__name__)
 
-def _check_enabled(key: str, default: str = "1") -> bool:
-    val = db.get_setting(key)
-    if val is None:
-        val = default
-    return str(val).lower() in ("1", "true", "on", "yes")
+# -------------------------
+# Helpers
+# -------------------------
 
+def _get_bool(key: str, default: bool = False) -> bool:
+    v = db.get_setting(key)
+    if v is None:
+        return default
+    return str(v).strip().lower() in ("1", "true", "on", "yes", "y")
 
-# ===== Main Settings Menu =====
+def _toggle(key: str, default: bool = False) -> bool:
+    new_val = not _get_bool(key, default)
+    db.set_setting(key, "1" if new_val else "0")
+    return new_val
+
+def _kb(rows):
+    return InlineKeyboardMarkup(rows)
+
+def _admin_edit_btn(title: str, key: str):
+    return InlineKeyboardButton(title, callback_data=f"admin_edit_setting_{key}")
+
+def _back_to_settings_btn():
+    return InlineKeyboardButton("🔙 بازگشت به تنظیمات", callback_data="back_to_settings")
+
+# -------------------------
+# Main Settings Menu
+# -------------------------
+
 async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
+    q = getattr(update, "callback_query", None)
+    text = (
+        "⚙️ تنظیمات\n\n"
+        "یکی از گزینه‌های زیر را انتخاب کنید:"
+    )
+    kb = _kb([
+        [InlineKeyboardButton("🛠 نگهداری", callback_data="settings_maintenance"),
+         InlineKeyboardButton("📎 اجبار عضویت", callback_data="settings_force_join")],
+        [InlineKeyboardButton("⏳ یادآور انقضا", callback_data="settings_expiry"),
+         InlineKeyboardButton("💳 پرداخت", callback_data="settings_payment")],
+        [InlineKeyboardButton("🌐 دامنه‌های ساب", callback_data="settings_subdomains"),
+         InlineKeyboardButton("📚 راهنماها", callback_data="settings_guides")],
+        # دکمه جدید تنظیمات سرویس تست (به trial_settings_ui وصل شده در app.py)
+        [InlineKeyboardButton("🧪 تنظیمات سرویس تست", callback_data="settings_trial")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back_to_menu")]
+    ])
+
     if q:
         await q.answer()
-        send_func = q.edit_message_text
+        try:
+            await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+        except Exception:
+            await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
     else:
-        send_func = update.message.reply_text
+        await update.message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
 
-    daily_on = "✅" if _check_enabled("daily_report_enabled", "1") else "❌"
-    weekly_on = "✅" if _check_enabled("weekly_report_enabled", "1") else "❌"
+# -------------------------
+# Submenus
+# -------------------------
 
-    keyboard = [
-        [InlineKeyboardButton("🛠️ حالت نگه‌داری", callback_data="settings_maintenance")],
-        [InlineKeyboardButton("📢 اجبار عضویت", callback_data="settings_force_join")],
-        [InlineKeyboardButton("⏰ یادآوری انقضا", callback_data="settings_expiry")],
-        [InlineKeyboardButton("💳 تنظیمات پرداخت", callback_data="settings_payment")],
-        [InlineKeyboardButton("🌐 تنظیمات ساب‌دامین‌ها", callback_data="settings_subdomains")],
-        [InlineKeyboardButton("📝 ویرایش متن‌های راهنما", callback_data="settings_guides")],
-        [
-            InlineKeyboardButton(f"{daily_on} گزارش روزانه", callback_data="toggle_report_daily"),
-            InlineKeyboardButton(f"{weekly_on} گزارش هفتگی", callback_data="toggle_report_weekly"),
-        ],
-        [InlineKeyboardButton("🔗 ویرایش نوع لینک پیش‌فرض", callback_data="edit_default_link_type")],
-        [InlineKeyboardButton("↩️ بازگشت به منوی ادمین", callback_data="admin_back_to_menu")],
-    ]
-    await send_func("بخش تنظیمات اصلی:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-
-# ===== Submenus =====
 async def maintenance_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    maint_on = _check_enabled("maintenance_enabled", "0")
-    maint_label = f"حالت نگه‌داری: {'روشن 🟢' if maint_on else 'خاموش 🔴'}"
-    keyboard = [
-        [InlineKeyboardButton(maint_label, callback_data="toggle_maintenance")],
-        [InlineKeyboardButton("✏️ ویرایش پیام", callback_data="admin_edit_setting_maintenance_message")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_settings")],
-    ]
-    await q.edit_message_text("تنظیمات حالت نگه‌داری:", reply_markup=InlineKeyboardMarkup(keyboard))
+    q = update.callback_query; await q.answer()
+    enabled = _get_bool("maintenance_enabled", False)
+    status = "روشن ✅" if enabled else "خاموش ❌"
+    text = f"🛠 نگهداری\n\nوضعیت فعلی: {status}"
+    kb = _kb([
+        [InlineKeyboardButton("تغییر وضعیت نگهداری", callback_data="toggle_maintenance")],
+        [_admin_edit_btn("✍️ متن پیام نگهداری", "maintenance_message")],
+        [_back_to_settings_btn()]
+    ])
+    try:
+        await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    except Exception:
+        await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
 
 async def force_join_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    force_join_on = _check_enabled("force_channel_enabled", "0")
-    force_join_label = f"اجبار عضویت: {'روشن 🟢' if force_join_on else 'خاموش 🔴'}"
-    keyboard = [
-        [InlineKeyboardButton(force_join_label, callback_data="toggle_force_join")],
-        [InlineKeyboardButton("✏️ ویرایش شناسه کانال(ها)", callback_data="admin_edit_setting_force_channel_id")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_settings")],
-    ]
-    await q.edit_message_text("تنظیمات اجبار عضویت:", reply_markup=InlineKeyboardMarkup(keyboard))
+    q = update.callback_query; await q.answer()
+    enabled = _get_bool("force_join_enabled", False)
+    channel = db.get_setting("force_join_channel") or "ثبت نشده"
+    status = "فعال ✅" if enabled else "غیرفعال ❌"
+    text = f"📎 اجبار عضویت\n\nوضعیت: {status}\nکانال: {channel}"
+    kb = _kb([
+        [InlineKeyboardButton("تغییر وضعیت اجبار عضویت", callback_data="toggle_force_join")],
+        [_admin_edit_btn("✍️ نام کانال (بدون @)", "force_join_channel")],
+        [_back_to_settings_btn()]
+    ])
+    try:
+        await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    except Exception:
+        await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
 
 async def expiry_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    exp_on = _check_enabled("expiry_reminder_enabled", "1")
-    exp_label = f"یادآوری انقضا: {'روشن 🟢' if exp_on else 'خاموش 🔴'}"
-    keyboard = [
-        [InlineKeyboardButton(exp_label, callback_data="toggle_expiry_reminder")],
-        [InlineKeyboardButton("📅 روزهای مانده", callback_data="admin_edit_setting_expiry_reminder_days")],
-        [InlineKeyboardButton("🕒 ساعت ارسال", callback_data="admin_edit_setting_expiry_reminder_hour")],
-        [InlineKeyboardButton("✏️ متن پیام", callback_data="admin_edit_setting_expiry_reminder_message")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_settings")],
-    ]
-    await q.edit_message_text("تنظیمات یادآوری انقضا:", reply_markup=InlineKeyboardMarkup(keyboard))
+    q = update.callback_query; await q.answer()
+    enabled = _get_bool("expiry_reminder_enabled", True)
+    days = db.get_setting("expiry_reminder_days") or "3"
+    status = "فعال ✅" if enabled else "غیرفعال ❌"
+    text = f"⏳ یادآور انقضا\n\nوضعیت: {status}\nارسال یادآوری {days} روز قبل از انقضا"
+    kb = _kb([
+        [InlineKeyboardButton("تغییر وضعیت یادآور", callback_data="toggle_expiry_reminder")],
+        [_admin_edit_btn("✍️ تعداد روز یادآوری", "expiry_reminder_days")],
+        [_back_to_settings_btn()]
+    ])
+    try:
+        await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    except Exception:
+        await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
 
 async def payment_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    keyboard = [
-        [InlineKeyboardButton("💳 ویرایش شماره کارت", callback_data="admin_edit_setting_card_number")],
-        [InlineKeyboardButton("👤 ویرایش نام صاحب حساب", callback_data="admin_edit_setting_card_holder")],
-        [InlineKeyboardButton("🎁 ویرایش هدیه دعوت", callback_data="admin_edit_setting_referral_bonus_amount")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_settings")],
-    ]
-    await q.edit_message_text("تنظیمات پرداخت و هدیه:", reply_markup=InlineKeyboardMarkup(keyboard))
+    q = update.callback_query; await q.answer()
+    instr = db.get_setting("payment_instruction_text") or "راهنمایی ثبت نشده است."
+    text = "💳 پرداخت\n\nراهنمای پرداخت/شارژ:"
+    kb = _kb([
+        [_admin_edit_btn("✍️ ویرایش متن راهنمای پرداخت", "payment_instruction_text")],
+        [_back_to_settings_btn()]
+    ])
+    try:
+        await q.edit_message_text(text + f"\n\n{instr[:500]}", reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    except Exception:
+        await context.bot.send_message(chat_id=q.from_user.id, text=text + f"\n\n{instr[:500]}", reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
 
 async def subdomains_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    keyboard = [
-        [InlineKeyboardButton("🌐 ویرایش ساب‌دامین‌های حجمی", callback_data="admin_edit_setting_volume_based_sub_domains")],
-        [InlineKeyboardButton("♾️ ویرایش ساب‌دامین‌های نامحدود", callback_data="admin_edit_setting_unlimited_sub_domains")],
-        [InlineKeyboardButton("🌍 ویرایش ساب‌دامین‌های عمومی", callback_data="admin_edit_setting_sub_domains")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_settings")],
-    ]
-    await q.edit_message_text("تنظیمات ساب‌دامین‌ها:", reply_markup=InlineKeyboardMarkup(keyboard))
+    q = update.callback_query; await q.answer()
+    vol = db.get_setting("volume_based_sub_domains") or "(خالی)"
+    unlim = db.get_setting("unlimited_sub_domains") or "(خالی)"
+    gen = db.get_setting("sub_domains") or "(خالی)"
+    text = (
+        "🌐 دامنه‌های ساب\n\n"
+        "دامنه‌ها را با کاما جدا کنید. نمونه: sub1.example.com, sub2.example.com\n\n"
+        f"حجمی: {vol}\n"
+        f"نامحدود: {unlim}\n"
+        f"عمومی: {gen}"
+    )
+    kb = _kb([
+        [_admin_edit_btn("✍️ حجمی", "volume_based_sub_domains"),
+         _admin_edit_btn("✍️ نامحدود", "unlimited_sub_domains")],
+        [_admin_edit_btn("✍️ عمومی", "sub_domains")],
+        [_back_to_settings_btn()]
+    ])
+    try:
+        await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    except Exception:
+        await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
 
 async def guides_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    keyboard = [
-        [InlineKeyboardButton("راهنمای اتصال", callback_data="admin_edit_setting_guide_connection")],
-        [InlineKeyboardButton("راهنمای شارژ", callback_data="admin_edit_setting_guide_charging")],
-        [InlineKeyboardButton("راهنمای خرید", callback_data="admin_edit_setting_guide_buying")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_settings")],
-    ]
-    await q.edit_message_text("کدام متن راهنما را می‌خواهید ویرایش کنید؟", reply_markup=InlineKeyboardMarkup(keyboard))
+    q = update.callback_query; await q.answer()
+    text = "📚 راهنماها\n\nراهنماها را ویرایش کنید."
+    kb = _kb([
+        [_admin_edit_btn("✍️ راهنمای اتصال", "guide_connection")],
+        [_admin_edit_btn("✍️ راهنمای شارژ حساب", "guide_charging")],
+        [_admin_edit_btn("✍️ راهنمای خرید از ربات", "guide_buying")],
+        [_back_to_settings_btn()]
+    ])
+    try:
+        await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    except Exception:
+        await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
 
-# ===== Toggles =====
-async def toggle_maintenance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    curr = _check_enabled("maintenance_enabled", "0")
-    db.set_setting("maintenance_enabled", "0" if curr else "1")
-    await maintenance_submenu(update, context)
+# -------------------------
+# Default link type
+# -------------------------
 
-async def toggle_expiry_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    curr = _check_enabled("expiry_reminder_enabled", "1")
-    db.set_setting("expiry_reminder_enabled", "0" if curr else "1")
-    await expiry_submenu(update, context)
-
-async def toggle_force_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    curr = _check_enabled("force_channel_enabled", "0")
-    db.set_setting("force_channel_enabled", "0" if curr else "1")
-    await force_join_submenu(update, context)
-
-async def toggle_report_setting(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    typ = q.data.replace("toggle_report_", "")
-    key = "daily_report_enabled" if typ == "daily" else "weekly_report_enabled"
-    curr = _check_enabled(key, "1")
-    db.set_setting(key, "0" if curr else "1")
-    await settings_menu(update, context)
-
-# ===== Default link type =====
 async def edit_default_link_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-
-    current = (db.get_setting("default_sub_link_type") or "sub").lower()
-    mapping = [
-        ("sub", "V2Ray (sub)"),
-        ("auto", "هوشمند (Auto)"),
-        ("sub64", "Base64 (sub64)"),
-        ("singbox", "SingBox"),
-        ("xray", "Xray"),
-        ("clash", "Clash"),
-        ("clash-meta", "Clash Meta"),
-    ]
-    rows = []
-    for key, title in mapping:
-        mark = "✅ " if key == current else ""
-        rows.append([InlineKeyboardButton(f"{mark}{title}", callback_data=f"set_default_link_{key}")])
-    rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_settings")])
-
-    await q.edit_message_text("نوع لینک پیش‌فرض را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(rows))
-
+    q = update.callback_query; await q.answer()
+    current = db.get_setting("default_sub_link_type") or "sub"
+    text = f"🔗 نوع پیش‌فرض لینک اشتراک (فعلی: {current}) را انتخاب کنید:"
+    kb = _kb([
+        [
+            InlineKeyboardButton("V2Ray (sub)", callback_data="set_default_link_sub"),
+            InlineKeyboardButton("Auto", callback_data="set_default_link_auto"),
+        ],
+        [
+            InlineKeyboardButton("Base64 (sub64)", callback_data="set_default_link_sub64"),
+            InlineKeyboardButton("Sing-Box", callback_data="set_default_link_singbox"),
+        ],
+        [
+            InlineKeyboardButton("Xray", callback_data="set_default_link_xray"),
+            InlineKeyboardButton("Clash", callback_data="set_default_link_clash"),
+        ],
+        [
+            InlineKeyboardButton("Clash Meta", callback_data="set_default_link_clashmeta"),
+        ],
+        [_back_to_settings_btn()]
+    ])
+    try:
+        await q.edit_message_text(text, reply_markup=kb)
+    except Exception:
+        await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=kb)
 
 async def set_default_link_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
+    q = update.callback_query; await q.answer()
     try:
-        val = q.data.replace("set_default_link_", "")
-        db.set_setting("default_sub_link_type", val)
-        await settings_menu(update, context)
+        link_type = q.data.replace("set_default_link_", "").strip()
+        db.set_setting("default_sub_link_type", link_type)
+        await q.edit_message_text(f"✅ نوع پیش‌فرض روی «{link_type}» تنظیم شد.", reply_markup=_kb([[ _back_to_settings_btn() ]]))
     except Exception as e:
-        await q.edit_message_text(f"❌ خطا در ذخیره تنظیم: {e}")
+        logger.error("set_default_link_type error: %s", e, exc_info=True)
+        await q.edit_message_text("❌ خطا در تنظیم نوع لینک.", reply_markup=_kb([[ _back_to_settings_btn() ]]))
 
+# -------------------------
+# Toggles
+# -------------------------
 
-# ===== Edit settings (generic handler) =====
+async def toggle_maintenance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query; await q.answer()
+    new_val = _toggle("maintenance_enabled", False)
+    msg = "🛠 نگهداری: روشن ✅" if new_val else "🛠 نگهداری: خاموش ❌"
+    try:
+        await q.edit_message_text(msg, reply_markup=_kb([[InlineKeyboardButton("🔙 بازگشت", callback_data="settings_maintenance")]]))
+    except Exception:
+        await context.bot.send_message(chat_id=q.from_user.id, text=msg, reply_markup=_kb([[InlineKeyboardButton("🔙 بازگشت", callback_data="settings_maintenance")]]))
+
+async def toggle_force_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query; await q.answer()
+    new_val = _toggle("force_join_enabled", False)
+    msg = "📎 اجبار عضویت: فعال ✅" if new_val else "📎 اجبار عضویت: غیرفعال ❌"
+    try:
+        await q.edit_message_text(msg, reply_markup=_kb([[InlineKeyboardButton("🔙 بازگشت", callback_data="settings_force_join")]]))
+    except Exception:
+        await context.bot.send_message(chat_id=q.from_user.id, text=msg, reply_markup=_kb([[InlineKeyboardButton("🔙 بازگشت", callback_data="settings_force_join")]]))
+
+async def toggle_expiry_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query; await q.answer()
+    new_val = _toggle("expiry_reminder_enabled", True)
+    msg = "⏳ یادآور انقضا: فعال ✅" if new_val else "⏳ یادآور انقضا: غیرفعال ❌"
+    try:
+        await q.edit_message_text(msg, reply_markup=_kb([[InlineKeyboardButton("🔙 بازگشت", callback_data="settings_expiry")]]))
+    except Exception:
+        await context.bot.send_message(chat_id=q.from_user.id, text=msg, reply_markup=_kb([[InlineKeyboardButton("🔙 بازگشت", callback_data="settings_expiry")]]))
+
+async def toggle_report_setting(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    الگوی کلی: toggle_report_<key> → مقدار True/False در DB با کلید همان <key>
+    """
+    q = update.callback_query; await q.answer()
+    try:
+        key = q.data.replace("toggle_report_", "").strip()
+        new_val = _toggle(key, False)
+        msg = f"🗒 {key}: {'فعال ✅' if new_val else 'غیرفعال ❌'}"
+    except Exception as e:
+        logger.error("toggle_report_setting error: %s", e, exc_info=True)
+        msg = "❌ خطا در تغییر وضعیت گزارش."
+    try:
+        await q.edit_message_text(msg, reply_markup=_kb([[ _back_to_settings_btn() ]]))
+    except Exception:
+        await context.bot.send_message(chat_id=q.from_user.id, text=msg, reply_markup=_kb([[ _back_to_settings_btn() ]]))
+
+# -------------------------
+# Edit Any Setting (generic)
+# -------------------------
+
 async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    data = q.data
-    if not data.startswith("admin_edit_setting_"):
-        await q.edit_message_text("دستور نامعتبر است.")
-        return ConversationHandler.END
-
-    setting_key = data.replace("admin_edit_setting_", "")
-    context.user_data["setting_key"] = setting_key
-
-    current = db.get_setting(setting_key) or "—"
-    msg = ""
-
-    if setting_key in ("sub_domains", "volume_based_sub_domains", "unlimited_sub_domains"):
-        msg = (
-            f"🌐 ساب‌دامین‌های فعلی:\n{current}\n\n"
-            "لطفاً لیست جدید ساب‌دامین‌ها را با کاما (,) جدا کرده و ارسال کنید (مثلاً: sub1.domain.com,sub2.domain.com).\n"
-            "برای خالی کردن، یک خط تیره (-) بفرستید."
-        )
-    elif setting_key.startswith("guide_"):
-        title_map = {"guide_connection": "اتصال", "guide_charging": "شارژ", "guide_buying": "خرید"}
-        title = title_map.get(setting_key, "راهنما")
-        msg = f"📝 متن فعلی راهنمای {title}:\n\n{current}\n\nلطفاً متن جدید را ارسال کنید:"
-    elif setting_key == "card_number":
-        msg = f"💳 شماره کارت فعلی:\n{current}\n\nشماره کارت جدید را ارسال کنید:"
-    elif setting_key == "card_holder":
-        msg = f"👤 نام صاحب حساب فعلی:\n{current}\n\nنام جدید را ارسال کنید:"
-    elif setting_key == "referral_bonus_amount":
-        msg = f"🎁 هدیه دعوت فعلی (تومان):\n{current}\n\nمبلغ جدید را به صورت عدد (تومان) ارسال کنید:"
-    elif setting_key == "maintenance_message":
-        msg = f"🛠 پیام فعلی حالت نگه‌داری:\n\n{current}\n\nمتن جدید را ارسال کنید:"
-    elif setting_key == "expiry_reminder_days":
-        msg = f"📅 روزهای مانده فعلی: {current}\n\nعدد روزها را ارسال کنید (مثلاً 3):"
-    elif setting_key == "expiry_reminder_hour":
-        msg = f"🕒 ساعت ارسال فعلی: {current}\n\nیک عدد بین 0 تا 23 ارسال کنید:"
-    elif setting_key == "expiry_reminder_message":
-        msg = (
-            f"✏️ متن فعلی پیام یادآوری:\n\n{current}\n\n"
-            "متن جدید را ارسال کنید.\n"
-            "می‌توانید از {days} و {service_name} در متن استفاده کنید."
-        )
-    elif setting_key == "force_channel_id":
-        msg = (
-            f"📢 شناسه کانال(های) فعلی:\n{current}\n\n"
-            "شناسه عددی کانال(ها) را ارسال کنید.\n"
-            "برای چند کانال، با کاما (,) جدا کنید (مثلاً: -100123,-100456)."
-        )
-    else:
-        msg = "لطفاً مقدار جدید را ارسال کنید:"
-
-    await q.message.reply_text(msg, reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True))
+    q = update.callback_query; await q.answer()
+    key = q.data.replace("admin_edit_setting_", "").strip()
+    context.user_data['editing_setting_key'] = key
+    cur = db.get_setting(key)
+    tip = ""
+    if key in ("sub_domains", "volume_based_sub_domains", "unlimited_sub_domains"):
+        tip = "\n(دامنه‌ها را با کاما جدا کنید)"
+    elif key == "expiry_reminder_days":
+        tip = "\n(یک عدد بین 1 تا 30 پیشنهاد می‌شود)"
+    elif key == "force_join_channel":
+        tip = "\n(نام کانال را بدون @ وارد کنید)"
+    text = f"✍️ مقدار جدید برای «{key}» را ارسال کنید.{tip}\n/cancel برای انصراف\n\nمقدار فعلی:\n{(cur or '(خالی)')}"
+    try:
+        await q.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
+    except Exception:
+        await context.bot.send_message(chat_id=q.from_user.id, text=text, parse_mode=ParseMode.MARKDOWN)
     return AWAIT_SETTING_VALUE
 
-
 async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    key = context.user_data.get("setting_key")
-    value_raw = (update.message.text or "").strip()
-
+    key = context.user_data.get('editing_setting_key')
     if not key:
-        await update.message.reply_text("کلید تنظیمات مشخص نیست.", reply_markup=get_admin_menu_keyboard())
+        await update.message.reply_text("❌ کلید تنظیم نامشخص است. دوباره تلاش کنید.")
         return ConversationHandler.END
 
-    if key in ("referral_bonus_amount", "expiry_reminder_days", "expiry_reminder_hour"):
-        try:
-            num = int(float(value_raw))
-            if key == "expiry_reminder_hour" and not (0 <= num <= 23):
-                raise ValueError("ساعت باید بین 0 تا 23 باشد.")
-            if key == "expiry_reminder_days" and num <= 0:
-                raise ValueError("روز باید بزرگ‌تر از 0 باشد.")
-            db.set_setting(key, str(num))
-        except ValueError as e:
-            await update.message.reply_text(f"❌ مقدار نامعتبر است. {e}")
-            return AWAIT_SETTING_VALUE
-    elif key == "force_channel_id":
-        ids = [s.strip() for s in value_raw.split(',') if s.strip()]
-        valid = all(s.startswith('-100') and s[1:].isdigit() for s in ids)
-        if not valid and value_raw:
-            await update.message.reply_text("❌ شناسه نامعتبر است. باید با -100 شروع شود و فقط عدد باشد.")
-            return AWAIT_SETTING_VALUE
-        db.set_setting(key, ",".join(ids))
-    elif key in ("sub_domains", "volume_based_sub_domains", "unlimited_sub_domains"):
-        if value_raw == "-":
-            db.set_setting(key, "")
-        else:
-            domains = [d.strip() for d in value_raw.split(',') if d.strip()]
-            if not all("." in d for d in domains):
-                await update.message.reply_text("❌ فرمت نامعتبر است. لطفاً دامنه‌ها را با کاما جدا کنید.")
-                return AWAIT_SETTING_VALUE
-            db.set_setting(key, ",".join(domains))
-    else:
-        if not value_raw:
-            await update.message.reply_text("❌ مقدار خالی است. لطفاً دوباره ارسال کنید.")
-            return AWAIT_SETTING_VALUE
-        db.set_setting(key, value_raw)
+    val = (update.message.text or "").strip()
+    try:
+        db.set_setting(key, val)
+        await update.message.reply_text(f"✅ مقدار «{key}» ذخیره شد.")
+    except Exception as e:
+        logger.error("setting_value_received error: %s", e, exc_info=True)
+        await update.message.reply_text("❌ خطا در ذخیره مقدار.")
+    finally:
+        context.user_data.pop('editing_setting_key', None)
 
-    await update.message.reply_text("✅ مقدار با موفقیت ذخیره شد.", reply_markup=get_admin_menu_keyboard())
-    context.user_data.clear()
+    # بازگشت به منوی تنظیمات
+    await settings_menu(update, context)
     return ConversationHandler.END
 
+# -------------------------
+# Back to admin menu
+# -------------------------
 
-# ===== Back to admin menu =====
 async def back_to_admin_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     try:
-        await q.message.delete()
-    except Exception:
-        pass
-    await q.from_user.send_message("به منوی ادمین بازگشتید.", reply_markup=get_admin_menu_keyboard())
-    return ADMIN_MENU
+        await q.edit_message_text("🔙 بازگشت به منوی مدیریت", reply_markup=get_admin_menu_keyboard())
+    except BadRequest:
+        await context.bot.send_message(chat_id=q.from_user.id, text="🔙 بازگشت به منوی مدیریت", reply_markup=get_admin_menu_keyboard())
