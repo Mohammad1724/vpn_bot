@@ -29,7 +29,7 @@ def _kb(rows): return InlineKeyboardMarkup(rows)
 def _admin_edit_btn(title: str, key: str): return InlineKeyboardButton(title, callback_data=f"admin_edit_setting_{key}")
 def _back_to_settings_btn(): return InlineKeyboardButton("🔙 بازگشت به تنظیمات", callback_data="back_to_settings")
 
-# --- Main Settings Menu (Entry Point) ---
+# --- Main Settings Menu ---
 async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = getattr(update, "callback_query", None)
     text = "⚙️ **تنظیمات ربات**\n\nلطفاً بخش مورد نظر را انتخاب کنید:"
@@ -75,7 +75,7 @@ async def payment_and_guides_submenu(update: Update, context: ContextTypes.DEFAU
         [_back_to_settings_btn()]
     ])
     await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN); return ADMIN_SETTINGS_MENU
-
+    
 async def payment_info_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     instr = _get("payment_instruction_text", "راهنمایی ثبت نشده است.")
@@ -102,7 +102,7 @@ async def service_configs_submenu(update: Update, context: ContextTypes.DEFAULT_
         [_back_to_settings_btn()]
     ])
     await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN); return ADMIN_SETTINGS_MENU
-
+    
 async def subdomains_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     vol = _get("volume_based_sub_domains", "(خالی)"); unlim = _get("unlimited_sub_domains", "(خالی)"); gen = _get("sub_domains", "(خالی)")
@@ -140,6 +140,7 @@ async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     tip = ""
     if key.startswith("payment_card_"): tip = "\n(برای پاک کردن، یک خط تیره `-` ارسال کنید)"
     elif "sub_domains" in key: tip = "\n(دامنه‌ها را با کاما جدا کنید)"
+    
     text = f"✍️ مقدار جدید برای **{key}** را ارسال کنید.{tip}\n/cancel برای انصراف\n\n**مقدار فعلی:**\n`{cur}`"
     try: await q.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
     except BadRequest: await q.edit_message_text(text)
