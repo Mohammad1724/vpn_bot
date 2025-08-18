@@ -14,6 +14,7 @@ from bot.constants import (
     BROADCAST_TO_USER_ID, BROADCAST_TO_USER_MESSAGE,
     MANAGE_USER_AMOUNT
 )
+from bot import utils  # برای فرمت تومان
 import database as db
 import hiddify_api
 
@@ -86,21 +87,32 @@ def _update_balance(user_id: int, delta: int) -> bool:
     """
     _ensure_user_exists(user_id)
     try:
+        # 1) change_balance(user_id, delta)
         if hasattr(db, "change_balance"):
-            db.change_balance(user_id, delta); return True
+            db.change_balance(user_id, delta)
+            return True
+        # 2) update_balance(user_id, delta)
         if hasattr(db, "update_balance"):
-            db.update_balance(user_id, delta); return True
+            db.update_balance(user_id, delta)
+            return True
+        # 3) increase/decrease balance
         if delta >= 0 and hasattr(db, "increase_balance"):
-            db.increase_balance(user_id, delta); return True
+            db.increase_balance(user_id, delta)
+            return True
         if delta < 0 and hasattr(db, "decrease_balance"):
-            db.decrease_balance(user_id, -delta); return True
+            db.decrease_balance(user_id, -delta)
+            return True
+        # 4) add_balance(user_id, amount)
         if delta >= 0 and hasattr(db, "add_balance"):
-            db.add_balance(user_id, delta); return True
+            db.add_balance(user_id, delta)
+            return True
+        # 5) set_balance(user_id, new_balance)
         if hasattr(db, "get_user") and hasattr(db, "set_balance"):
             info = db.get_user(user_id)
             cur = int(info.get("balance", 0)) if info else 0
             new_bal = max(cur + delta, 0)
-            db.set_balance(user_id, new_bal); return True
+            db.set_balance(user_id, new_bal)
+            return True
     except Exception as e:
         logger.warning("Balance update failed: %s", e, exc_info=True)
     return False
@@ -158,10 +170,8 @@ async def admin_user_refresh_cb(update: Update, context: ContextTypes.DEFAULT_TY
 async def admin_user_services_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     target_id = int(q.data.split('_')[-1])
-    try:
-        await q.answer("لیست سرویس‌ها در پیام‌های جداگانه ارسال شد.", show_alert=False)
-    except Exception:
-        pass
+    # هیچ متن توست (ویز) نمایش نده؛ فقط لودینگ را ببند
+    await q.answer()
 
     services = db.get_user_services(target_id) or []
     if not services:
@@ -171,6 +181,7 @@ async def admin_user_services_cb(update: Update, context: ContextTypes.DEFAULT_T
             pass
         return
 
+    # لیست سرویس‌ها در پیام‌های جداگانه
     for s in services:
         name = s.get('name') or f"سرویس {s.get('service_id')}"
         sid = s.get('service_id')
@@ -183,10 +194,7 @@ async def admin_user_services_cb(update: Update, context: ContextTypes.DEFAULT_T
 async def admin_user_purchases_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     target_id = int(q.data.split('_')[-1])
-    try:
-        await q.answer("سوابق خرید در پیام‌های جداگانه ارسال شد.", show_alert=False)
-    except Exception:
-        pass
+    await q.answer()
 
     purchases = None
     try:
@@ -235,10 +243,7 @@ async def admin_user_trial_reset_cb(update: Update, context: ContextTypes.DEFAUL
         ok = False
 
     if ok:
-        try:
-            await q.answer("✅ وضعیت تست ریست شد.", show_alert=False)
-        except Exception:
-            pass
+        # نمایش هشدار توست نده؛ مستقیم پنل کاربر را رندر کن
         await _send_user_panel(update, target_id)
     else:
         try:
@@ -310,11 +315,36 @@ async def manage_user_amount_received(update: Update, context: ContextTypes.DEFA
     delta = amount if op == "add" else -amount
     ok = _update_balance(target_id, delta)
 
+    # پیام به کاربر: مبلغ تغییر و موجودی فعلی
+    try:
+        info2 = db.get_user(target_id)
+        new_bal = int(info2.get("balance", 0)) if info2 else None
+    except Exception:
+        new_bal = None
+
     if ok:
         await em.reply_text("✅ موجودی کاربر به‌روزرسانی شد.")
+        # اطلاع‌رسانی به خود کاربر
+        try:
+            op_text = "افزایش" if delta >= 0 else "کاهش"
+            amount_str = utils.format_toman(abs(delta), persian_digits=True)
+            if new_bal is not None:
+                new_bal_str = utils.format_toman(new_bal, persian_digits=True)
+                note_txt = f"موجودی فعلی: {new_bal_str}."
+            else:
+                note_txt = ""
+            await context.bot.send_message(
+                chat_id=target_id,
+                text=f"کیف پول شما توسط پشتیبانی {op_text} یافت به مبلغ {amount_str}. {note_txt}"
+            )
+        except Forbidden:
+            pass
+        except Exception as e:
+            logger.warning("Notify user about balance change failed: %s", e)
     else:
         await em.reply_text("❌ به‌روزرسانی موجودی ناموفق بود یا در DB پشتیبانی نشده است.")
 
+    # پاکسازی و بازگشت به پنل کاربر
     context.user_data.pop("muid", None)
     context.user_data.pop("mop", None)
     await _send_user_panel(update, target_id)
