@@ -22,17 +22,23 @@ def _maint_msg() -> str:
     return db.get_setting("maintenance_message") or "⛔️ ربات در حال بروزرسانی است. لطفاً کمی بعد مراجعه کنید."
 
 def _short_price(price: float) -> str:
-    # فرمت استاندارد تومان با جداکننده هزار
-    return utils.format_toman(price, persian_digits=False)
+    # قیمت با جداکننده هزار و ارقام فارسی
+    return utils.format_toman(price, persian_digits=True)
+
+def _vol_label(gb: int) -> str:
+    # حجم با ارقام فارسی و واژه فارسی برای جلوگیری از به‌هم‌ریختگی RTL
+    g = int(gb)
+    return "نامحدود" if g == 0 else f"{utils.to_persian_digits(str(g))} گیگابایت"
 
 def _short_label(p: dict) -> str:
-    # ترتیب درست: نام | روز | حجم | قیمت
+    # ترتیب ثابت: نام | روز | حجم | قیمت (همه با ارقام فارسی)
     name = (p.get('name') or 'پلن')[:18]
     days = int(p.get('days', 0))
     gb = int(p.get('gb', 0))
-    vol = "نامحدود" if gb == 0 else f"{gb}GB"
+    vol = _vol_label(gb)
     price_str = _short_price(p.get('price', 0))
-    label = f"{name} | {days} روز | {vol} | {price_str}"
+    days_fa = utils.to_persian_digits(str(days))
+    label = f"{name} | {days_fa} روز | {vol} | {price_str}"
     # در صورت طولانی بودن، کوتاه‌ترش کن
     return label[:62] + "…" if len(label) > 63 else label
 
@@ -151,13 +157,15 @@ async def _ask_purchase_confirm(update: Update, context: ContextTypes.DEFAULT_TY
         'custom_name': custom_name
     }
 
-    volume_text = f"{plan['gb']} گیگابایت" if int(plan['gb']) > 0 else "نامحدود"
-    price_text = utils.format_toman(plan['price'], persian_digits=False)
+    volume_text = _vol_label(int(plan['gb']))
+    price_text = utils.format_toman(plan['price'], persian_digits=True)
+    days_fa = utils.to_persian_digits(str(plan['days']))
+
     text = f"""
 🛒 تایید خرید سرویس
 
 نام سرویس: {custom_name or '(بدون نام)'}
-مدت: {plan['days']} روز
+مدت: {days_fa} روز
 حجم: {volume_text}
 قیمت: {price_text}
 
@@ -228,7 +236,7 @@ async def _do_purchase_confirmed(q, context: ContextTypes.DEFAULT_TYPE, custom_n
 
         # نام پیشفرض برای نامحدود
         gb_i = int(plan['gb'])
-        default_name = "سرویس نامحدود" if gb_i == 0 else f"سرویس {gb_i} گیگ"
+        default_name = "سرویس نامحدود" if gb_i == 0 else f"سرویس {utils.to_persian_digits(str(gb_i))} گیگابایت"
         final_name = custom_name or default_name
 
         note = f"tg:@{username}|id:{user_id}" if username else f"tg:id:{user_id}"
