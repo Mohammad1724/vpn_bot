@@ -54,12 +54,11 @@ def build_application():
     )
     application.add_error_handler(error_handler)
 
-    # ADMIN_ID → int برای فیلتر ادمین
+    # Admin filter
     try:
         admin_id_int = int(ADMIN_ID)
     except Exception:
         admin_id_int = ADMIN_ID
-
     admin_filter = filters.User(user_id=admin_id_int)
     user_filter = ~admin_filter
 
@@ -119,12 +118,10 @@ def build_application():
         entry_points=[MessageHandler(filters.Regex('^📞 پشتیبانی$') & user_filter, check_channel_membership(support_h.support_ticket_start))],
         states={constants.SUPPORT_TICKET_OPEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, support_h.forward_to_admin)]},
         fallbacks=[CommandHandler('cancel', support_h.support_ticket_cancel)],
-        per_user=True,
-        per_chat=True
+        per_user=True, per_chat=True
     )
 
     # --- Admin Conversations (nested) ---
-    # افزودن پلن
     add_plan_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(r'^➕ افزودن پلن جدید$') & admin_filter, admin_plans.add_plan_start),
@@ -142,7 +139,6 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # ویرایش پلن
     edit_plan_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_plans.edit_plan_start, pattern=r'^admin_edit_plan_\d+$')],
         states={
@@ -172,7 +168,7 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # تنظیمات تست (nested در تنظیمات ادمین)
+    # Trial settings (nested in settings)
     trial_settings_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(trial_ui.trial_menu, pattern="^settings_trial$")],
         states={
@@ -195,27 +191,21 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # ساخت کد هدیه (nested)
+    # Gift code create conversation
     gift_code_create_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(r'^➕ ساخت کد هدیه جدید$') & admin_filter, admin_gift.create_gift_code_start),
             CallbackQueryHandler(admin_gift.create_gift_code_start, pattern=r'^admin_gift_create$'),
         ],
-        states={
-            admin_gift.CREATE_GIFT_AMOUNT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_gift.create_gift_amount_received)
-            ],
-        },
+        states={admin_gift.CREATE_GIFT_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_gift.create_gift_amount_received)]},
         fallbacks=[CommandHandler('cancel', admin_gift.cancel_create_gift)],
         map_to_parent={ConversationHandler.END: constants.ADMIN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # ارسال پیام (broadcast) — کانورسیشن کامل
+    # Broadcast conversation (send message to users)
     broadcast_conv = ConversationHandler(
-        entry_points=[
-            MessageHandler(filters.Regex(r'^📩 ارسال پیام$') & admin_filter, admin_users.broadcast_menu),
-        ],
+        entry_points=[MessageHandler(filters.Regex(r'^📩 ارسال پیام$') & admin_filter, admin_users.broadcast_menu)],
         states={
             constants.BROADCAST_MENU: [
                 MessageHandler(filters.Regex(r'^ارسال به همه کاربران$') & admin_filter, admin_users.broadcast_to_all_start),
@@ -243,7 +233,7 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # تنظیمات ادمین (nested)
+    # Admin settings conversation
     admin_settings_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex('^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
@@ -257,17 +247,13 @@ def build_application():
                 CallbackQueryHandler(admin_settings.service_configs_submenu, pattern="^settings_service_configs$"),
                 CallbackQueryHandler(admin_settings.subdomains_submenu, pattern="^settings_subdomains$"),
                 CallbackQueryHandler(admin_settings.reports_and_reminders_submenu, pattern="^settings_reports_reminders$"),
-
                 CallbackQueryHandler(admin_settings.edit_default_link_start, pattern="^edit_default_link_type$"),
                 CallbackQueryHandler(admin_settings.set_default_link_type, pattern="^set_default_link_"),
-
                 CallbackQueryHandler(admin_settings.toggle_maintenance, pattern="^toggle_maintenance$"),
                 CallbackQueryHandler(admin_settings.toggle_force_join, pattern="^toggle_force_join$"),
                 CallbackQueryHandler(admin_settings.toggle_expiry_reminder, pattern="^toggle_expiry_reminder$"),
                 CallbackQueryHandler(admin_settings.toggle_report_setting, pattern="^toggle_report_"),
-
                 trial_settings_conv,
-
                 CallbackQueryHandler(admin_settings.edit_setting_start, pattern="^admin_edit_setting_"),
                 CallbackQueryHandler(admin_settings.back_to_admin_menu_cb, pattern="^admin_back_to_menu$"),
             ],
@@ -290,19 +276,16 @@ def build_application():
             CallbackQueryHandler(admin_c.admin_entry, pattern="^admin_panel$")
         ],
         states={
-            # منوی اصلی ادمین
+            # ADMIN_MENU
             constants.ADMIN_MENU: [
-                # ReplyKeyboard
                 MessageHandler(filters.Regex('^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
                 MessageHandler(filters.Regex('^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
                 MessageHandler(filters.Regex('^💾 پشتیبان‌گیری$') & admin_filter, admin_backup.backup_restore_menu),
                 MessageHandler(filters.Regex('^👥 مدیریت کاربران$') & admin_filter, admin_users.user_management_menu),
                 MessageHandler(filters.Regex('^🎁 مدیریت کد هدیه$') & admin_filter, admin_gift.gift_code_management_menu),
-                # توجه: «📩 ارسال پیام» را به عنوان Conversation (broadcast_conv) اضافه می‌کنیم، نه MessageHandler ساده
-                # MessageHandler(filters.Regex('^📩 ارسال پیام$') & admin_filter, admin_users.broadcast_menu),
                 MessageHandler(filters.Regex('^🛑 خاموش کردن ربات$') & admin_filter, admin_c.shutdown_bot),
 
-                # InlineKeyboard معادل
+                # Inline equivalents
                 CallbackQueryHandler(admin_plans.plan_management_menu, pattern="^admin_plans$"),
                 CallbackQueryHandler(admin_reports.reports_menu, pattern="^admin_reports$"),
                 CallbackQueryHandler(admin_backup.backup_restore_menu, pattern="^admin_backup$"),
@@ -310,10 +293,10 @@ def build_application():
                 CallbackQueryHandler(admin_gift.gift_code_management_menu, pattern="^admin_gift$"),
                 CallbackQueryHandler(admin_c.shutdown_bot, pattern="^admin_shutdown$"),
 
-                # کال‌بک‌های عمومی
+                # Common callbacks
                 CallbackQueryHandler(admin_users.admin_delete_service, pattern=r'^admin_delete_service_\d+$'),
 
-                # کانورسیشن‌ها
+                # Nested conversations available from main admin menu
                 admin_settings_conv,
                 add_plan_conv,
                 edit_plan_conv,
@@ -321,7 +304,7 @@ def build_application():
                 broadcast_conv,
             ],
 
-            # منوی مدیریت پلن‌ها
+            # PLAN_MENU
             constants.PLAN_MENU: [
                 MessageHandler(filters.Regex(r'^📋 لیست پلن‌ها$') & admin_filter, admin_plans.list_plans_admin),
                 CallbackQueryHandler(admin_plans.list_plans_admin, pattern=r'^admin_list_plans$'),
@@ -332,7 +315,7 @@ def build_application():
                 edit_plan_conv,
             ],
 
-            # منوی گزارش‌ها و آمار
+            # REPORTS_MENU
             constants.REPORTS_MENU: [
                 MessageHandler(filters.Regex(r'^📊 آمار کلی$') & admin_filter, admin_reports.show_stats_report),
                 MessageHandler(filters.Regex(r'^📈 گزارش فروش امروز$') & admin_filter, admin_reports.show_daily_report),
@@ -345,24 +328,24 @@ def build_application():
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
             ],
 
-            # منوی مدیریت کاربران (اضافه شد)
+            # USER_MANAGEMENT_MENU (added)
             constants.USER_MANAGEMENT_MENU: [
-                # حداقل‌ها: بازگشت و کال‌بک‌های حذف سرویس
-                MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
+                # If your "send message" button is shown here, broadcast conversation will catch it
+                broadcast_conv,
+                # Admin service delete callback (if triggered from here)
                 CallbackQueryHandler(admin_users.admin_delete_service, pattern=r'^admin_delete_service_\d+$'),
-                # اگر دکمه‌های دیگری دارید (جستجو/شارژ/بلاک/آن‌بلاک/لیست سرویس‌ها)، پس از دریافت فایل کامل users.py این‌ها را اینجا اضافه می‌کنیم
+                # Back to admin
+                MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
             ],
         },
         fallbacks=[
             MessageHandler(filters.Regex(f'^{constants.BTN_EXIT_ADMIN_PANEL}$') & admin_filter, admin_c.exit_admin_panel),
             CommandHandler('cancel', admin_c.admin_generic_cancel)
         ],
-        per_user=True,
-        per_chat=True,
-        allow_reentry=True
+        per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # ثبت کانورسیشن‌ها
+    # Register conversations
     application.add_handler(buy_conv)
     application.add_handler(gift_conv)
     application.add_handler(charge_conv)
@@ -371,17 +354,20 @@ def build_application():
     application.add_handler(support_conv)
     application.add_handler(admin_conv)
 
-    # دستورات ادمین برای تنظیم سرویس تست
+    # Admin-only trial command handlers
     application.add_handler(CommandHandler("set_trial_days", set_trial_days, filters=admin_filter))
     application.add_handler(CommandHandler("set_trial_gb", set_trial_gb, filters=admin_filter))
 
     # --- Global Callbacks ---
     application.add_handler(CallbackQueryHandler(buy_h.confirm_purchase_callback, pattern="^confirmbuy$"), group=2)
     application.add_handler(CallbackQueryHandler(buy_h.cancel_purchase_callback, pattern="^cancelbuy$"), group=2)
+
     application.add_handler(MessageHandler(filters.REPLY & admin_filter, support_h.admin_reply_handler))
     application.add_handler(CallbackQueryHandler(support_h.close_ticket, pattern="^close_ticket_"))
+
     application.add_handler(CallbackQueryHandler(admin_users.admin_confirm_charge_callback, pattern="^admin_confirm_charge_"), group=1)
     application.add_handler(CallbackQueryHandler(admin_users.admin_reject_charge_callback, pattern="^admin_reject_charge_"), group=1)
+
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern="^check_membership$"))
 
     # --- Other Handlers ---
