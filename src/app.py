@@ -80,11 +80,7 @@ def build_application():
 
     gift_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^🎁 کد هدیه$') & user_filter, check_channel_membership(gift_h.gift_code_entry))],
-        states={
-            constants.REDEEM_GIFT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, gift_h.redeem_gift_code)
-            ]
-        },
+        states={constants.REDEEM_GIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, gift_h.redeem_gift_code)]},
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
         per_user=True,
         per_chat=True
@@ -97,9 +93,7 @@ def build_application():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, charge_h.charge_amount_received),
                 CallbackQueryHandler(charge_h.charge_amount_confirm_cb, pattern="^charge_amount_(confirm|cancel)$"),
             ],
-            constants.CHARGE_RECEIPT: [
-                MessageHandler(filters.PHOTO, charge_h.charge_receipt_received)
-            ]
+            constants.CHARGE_RECEIPT: [MessageHandler(filters.PHOTO, charge_h.charge_receipt_received)],
         },
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
         per_user=True,
@@ -134,9 +128,10 @@ def build_application():
     )
 
     # --- Admin Conversations (nested) ---
-    # افزودن پلن جدید
+    # افزودن پلن
     add_plan_conv = ConversationHandler(
         entry_points=[
+            MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),  # پوشش ورود با متن
             MessageHandler(filters.Regex(r'^➕ افزودن پلن جدید$') & admin_filter, admin_plans.add_plan_start),
             CallbackQueryHandler(admin_plans.add_plan_start, pattern=r'^admin_add_plan$'),
         ],
@@ -205,18 +200,19 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # Gift code create conversation (nested inside ADMIN_MENU)
-    gift_code_create_conv = ConversationHandler(
+    # Gift codes creation conversation (nested inside GIFT_CODES_MENU)
+    gift_codes_conv = ConversationHandler(
         entry_points=[
-            MessageHandler(filters.Regex(r'^➕ ساخت کد هدیه جدید$'), admin_gift.create_gift_code_start),
+            MessageHandler(filters.Regex(r'^➕ ساخت کد هدیه جدید$') & admin_filter, admin_gift.create_gift_code_start),
+            CallbackQueryHandler(admin_gift.create_gift_code_start, pattern=r'^admin_gift_create$'),
         ],
         states={
             admin_gift.CREATE_GIFT_AMOUNT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_gift.create_gift_amount_received),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_gift.create_gift_amount_received)
             ],
         },
-        fallbacks=[CommandHandler('cancel', admin_gift.cancel_create_gift_code)],
-        map_to_parent={ConversationHandler.END: constants.ADMIN_MENU},
+        fallbacks=[CommandHandler('cancel', admin_gift.cancel_create_gift)],
+        map_to_parent={ConversationHandler.END: constants.GIFT_CODES_MENU},
         per_user=True, per_chat=True, allow_reentry=True
     )
 
@@ -278,12 +274,6 @@ def build_application():
                 MessageHandler(filters.Regex('^📩 ارسال پیام$'), admin_users.broadcast_menu),
                 MessageHandler(filters.Regex('^🛑 خاموش کردن ربات$'), admin_c.shutdown_bot),
 
-                # دکمه‌های منوی مدیریت کد هدیه
-                MessageHandler(filters.Regex(r'^📋 لیست کدهای هدیه$'), admin_gift.list_gift_codes),
-
-                # دکمه بازگشت به منوی ادمین (اگر در همین استیت هم فشرده شد)
-                MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.admin_entry),
-
                 # InlineKeyboard معادل
                 CallbackQueryHandler(admin_plans.plan_management_menu, pattern="^admin_plans$"),
                 CallbackQueryHandler(admin_reports.reports_menu, pattern="^admin_reports$"),
@@ -293,12 +283,8 @@ def build_application():
                 CallbackQueryHandler(admin_users.broadcast_menu, pattern="^admin_broadcast$"),
                 CallbackQueryHandler(admin_c.shutdown_bot, pattern="^admin_shutdown$"),
 
-                # کال‌بک حذف کد هدیه
-                CallbackQueryHandler(admin_gift.delete_gift_code_callback, pattern=r'^delete_gift_code_'),
-
-                # کانورسیشن‌ها
+                # کانورسیشن تنظیمات
                 admin_settings_conv,
-                gift_code_create_conv,
             ],
             # منوی مدیریت پلن‌ها
             constants.PLAN_MENU: [
@@ -322,12 +308,26 @@ def build_application():
                 CallbackQueryHandler(admin_reports.show_popular_plans_report, pattern=r'^admin_report_popular$'),
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.admin_entry),
             ],
+            # منوی مدیریت کد هدیه
+            constants.GIFT_CODES_MENU: [
+                # لیست
+                MessageHandler(filters.Regex(r'^📋 لیست کدهای هدیه$'), admin_gift.list_gift_codes),
+                CallbackQueryHandler(admin_gift.list_gift_codes, pattern=r'^admin_gift_list$'),
+                # حذف
+                CallbackQueryHandler(admin_gift.delete_gift_code_callback, pattern=r'^delete_gift_code_'),
+                # ساخت (کانورسیشن)
+                gift_codes_conv,
+                # بازگشت
+                MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.admin_entry),
+            ],
         },
         fallbacks=[
             MessageHandler(filters.Regex(f'^{constants.BTN_EXIT_ADMIN_PANEL}$'), admin_c.exit_admin_panel),
             CommandHandler('cancel', admin_c.admin_generic_cancel)
         ],
-        per_user=True, per_chat=True, allow_reentry=True
+        per_user=True,
+        per_chat=True,
+        allow_reentry=True
     )
 
     # Register conversations
