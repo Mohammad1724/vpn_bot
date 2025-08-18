@@ -21,6 +21,26 @@ def _maint_on() -> bool:
 def _maint_msg() -> str:
     return db.get_setting("maintenance_message") or "⛔️ ربات در حال بروزرسانی است. لطفاً کمی بعد مراجعه کنید."
 
+def _short_price(price: float) -> str:
+    try:
+        p = int(float(price))
+    except Exception:
+        return str(price)
+    if p >= 1000000:
+        return f"{p//1000}k"
+    return f"{p//1000}k"
+
+def _short_label(p: dict) -> str:
+    # کوتاه و جمع‌وجور: نام کوتاه | Nروز | GB/نامحدود | قیمتk
+    name = (p.get('name') or 'پلن')[:18]
+    days = int(p.get('days', 0))
+    gb = int(p.get('gb', 0))
+    vol = "نامحدود" if gb == 0 else f"{gb}GB"
+    price_k = _short_price(p.get('price', 0))
+    label = f"{name} | {days}روز | {vol} | {price_k}"
+    # در صورت طولانی بودن، کوتاه‌ترش کن
+    return label[:62] + "…" if len(label) > 63 else label
+
 # --------------------------
 # لیست دسته‌بندی و پلن‌ها
 # --------------------------
@@ -66,9 +86,7 @@ async def show_plans_in_category(update: Update, context: ContextTypes.DEFAULT_T
     text = f"پلن‌های دسته‌بندی «{category}»:"
     kb = []
     for p in plans:
-        volume_text = f"{p['gb']} گیگ" if p['gb'] > 0 else "نامحدود"
-        title = f"{p['name']} | {p['days']} روزه {volume_text} - {p['price']:.0f} تومان"
-        kb.append([InlineKeyboardButton(title, callback_data=f"user_buy_{p['plan_id']}")])
+        kb.append([InlineKeyboardButton(_short_label(p), callback_data=f"user_buy_{p['plan_id']}")])
 
     kb.append([InlineKeyboardButton("🔙 بازگشت به دسته‌بندی‌ها", callback_data="back_to_cats")])
     await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
@@ -138,7 +156,7 @@ async def _ask_purchase_confirm(update: Update, context: ContextTypes.DEFAULT_TY
         'custom_name': custom_name
     }
 
-    volume_text = f"{plan['gb']} گیگابایت" if plan['gb'] > 0 else "نامحدود"
+    volume_text = f"{plan['gb']} گیگابایت" if int(plan['gb']) > 0 else "نامحدود"
     text = f"""
 🛒 تایید خرید سرویس
 
@@ -172,10 +190,7 @@ async def confirm_purchase_callback(update: Update, context: ContextTypes.DEFAUL
         return
 
     custom_name = data.get('custom_name', '')
-    # پس از تایید، فرآیند ایجاد سرویس
     await _do_purchase_confirmed(q, context, custom_name)
-
-    # پاکسازی
     context.user_data.pop('pending_buy', None)
 
 async def cancel_purchase_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -215,12 +230,16 @@ async def _do_purchase_confirmed(q, context: ContextTypes.DEFAULT_TYPE, custom_n
         except BadRequest:
             await context.bot.send_message(chat_id=user_id, text="⏳ در حال ایجاد سرویس شما...")
 
-        final_name = custom_name or f"سرویس {plan['gb']} گیگ"
+        # نام پیشفرض برای نامحدود
+        gb_i = int(plan['gb'])
+        default_name = "سرویس نامحدود" if gb_i == 0 else f"سرویس {gb_i} گیگ"
+        final_name = custom_name or default_name
+
         note = f"tg:@{username}|id:{user_id}" if username else f"tg:id:{user_id}"
 
         provision = await hiddify_api.create_hiddify_user(
             plan_days=plan['days'],
-            plan_gb=plan['gb'],
+            plan_gb=float(plan['gb']),
             user_telegram_id=note,
             custom_name=final_name
         )
@@ -233,7 +252,6 @@ async def _do_purchase_confirmed(q, context: ContextTypes.DEFAULT_TYPE, custom_n
 
         user_data = await hiddify_api.get_user_info(new_uuid)
         if user_data:
-            # QR + Caption کوتاه + لینک داخل backtick
             sub_url = utils.build_subscription_url(new_uuid)
             qr_bio = utils.make_qr_bytes(sub_url)
             caption = utils.create_service_info_caption(user_data, title="🎉 سرویس شما با موفقیت ساخته شد!")
@@ -253,7 +271,6 @@ async def _do_purchase_confirmed(q, context: ContextTypes.DEFAULT_TYPE, custom_n
                 reply_markup=inline_kb
             )
 
-            # جایگزینی کیبورد /cancel با منوی اصلی
             await context.bot.send_message(
                 chat_id=user_id,
                 text="منوی اصلی:",
