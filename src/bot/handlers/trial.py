@@ -12,33 +12,74 @@ from bot import utils
 
 logger = logging.getLogger(__name__)
 
-def _maint_on(): return str(db.get_setting("maintenance_enabled")).lower() in ("1", "true", "on", "yes")
-def _maint_msg(): return db.get_setting("maintenance_message") or "⛔️ ربات در حال بروزرسانی است. لطفاً کمی بعد مراجعه کنید."
-def _build_note_for_user(user_id: int, username: str | None): return f"tg:@{username.lstrip('@')}|id:{user_id}" if username else f"tg:id:{user_id}"
+def _maint_on() -> bool:
+    return str(db.get_setting("maintenance_enabled")).lower() in ("1", "true", "on", "yes")
+
+def _maint_msg() -> str:
+    return db.get_setting("maintenance_message") or "⛔️ ربات در حال بروزرسانی است. لطفاً کمی بعد مراجعه کنید."
+
+def _build_note_for_user(user_id: int, username: str | None) -> str:
+    return f"tg:@{username.lstrip('@')}|id:{user_id}" if username else f"tg:id:{user_id}"
 
 async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user; user_id = user.id; username = user.username
-    if _maint_on(): await update.message.reply_text(_maint_msg()); return
+    em = update.effective_message
+    user = update.effective_user
+    user_id = user.id
+    username = user.username
+
+    if _maint_on():
+        await em.reply_text(_maint_msg())
+        return
+
     info = db.get_or_create_user(user_id, user.username or "")
-    if info and info.get("has_used_trial"): await update.message.reply_text("🧪 شما قبلاً از سرویس تست استفاده کرده‌اید."); return
+    if info and info.get("has_used_trial"):
+        await em.reply_text("🧪 شما قبلاً از سرویس تست استفاده کرده‌اید.")
+        return
+
+    # خواندن تنظیمات با تحمل اعشار و ویرگول
+    raw_days = str(db.get_setting("trial_days") or "1").strip().replace(",", ".")
+    raw_gb = str(db.get_setting("trial_gb") or "1").strip().replace(",", ".")
+    try:
+        trial_days = max(1, int(float(raw_days)))
+    except Exception:
+        trial_days = 1
+    try:
+        trial_gb = float(raw_gb)
+        if trial_gb <= 0:
+            raise ValueError()
+    except Exception:
+        trial_gb = 1.0
 
     name = "سرویس تست"
-    loading_message = await update.message.reply_text("⏳ در حال ایجاد سرویس تست شما...")
+    loading_message = await em.reply_text("⏳ در حال ایجاد سرویس تست شما...")
+
     try:
-        # پارامترهای تست از تنظیمات
-        trial_days = int(db.get_setting("trial_days") or 1)
-        trial_gb = int(db.get_setting("trial_gb") or 1)
         note = _build_note_for_user(user_id, username)
 
-        provision = await hiddify_api.create_hiddify_user(plan_days=trial_days, plan_gb=trial_gb, user_telegram_id=note, custom_name=name)
-        if not provision or not provision.get("uuid"): raise RuntimeError("Provisioning for trial failed or no uuid returned.")
+        # plan_gb به صورت float ارسال می‌شود تا مقدارهای اعشاری (مثل 0.5) معتبر باشند
+        provision = await hiddify_api.create_hiddify_user(
+            plan_days=trial_days,
+            plan_gb=trial_gb,
+            user_telegram_id=note,
+            custom_name=name
+        )
+        if not provision or not provision.get("uuid"):
+            raise RuntimeError("Provisioning for trial failed or no uuid returned.")
 
-        new_uuid = provision["uuid"]; sub_link = provision.get('full_link', '')
-        db.add_active_service(user_id, name, new_uuid, sub_link, plan_id=None); db.set_user_trial_used(user_id)
+        new_uuid = provision["uuid"]
+        sub_link = provision.get('full_link', '')
 
-        try: await loading_message.delete()
-        except BadRequest: pass
+        # ثبت سرویس و علامت‌گذاری استفاده از تست
+        db.add_active_service(user_id, name, new_uuid, sub_link, plan_id=None)
+        db.set_user_trial_used(user_id)
 
+        # حذف پیام لودینگ
+        try:
+            await loading_message.delete()
+        except BadRequest:
+            pass
+
+        # نمایش اطلاعات سرویس
         user_data = await hiddify_api.get_user_info(new_uuid)
         if user_data:
             sub_url = utils.build_subscription_url(new_uuid)
@@ -69,11 +110,14 @@ async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         else:
             from bot.keyboards import get_main_menu_keyboard
-            await update.message.reply_text(
+            await em.reply_text(
                 "✅ سرویس تست ساخته شد، اما دریافت اطلاعات سرویس با خطا مواجه شد. از «📋 سرویس‌های من» استفاده کنید.",
                 reply_markup=get_main_menu_keyboard(user_id)
             )
+
     except Exception as e:
         logger.error("Trial provision failed for user %s: %s", user_id, e, exc_info=True)
-        try: await loading_message.edit_text("❌ ساخت سرویس تست ناموفق بود. لطفاً بعداً تلاش کنید.")
-        except BadRequest: await update.message.reply_text("❌ ساخت سرویس تست ناموفق بود. لطفاً بعداً تلاش کنید.")
+        try:
+            await loading_message.edit_text("❌ ساخت سرویس تست ناموفق بود. لطفاً بعداً تلاش کنید.")
+        except BadRequest:
+            await em.reply_text("❌ ساخت سرویس تست ناموفق بود. لطفاً بعداً تلاش کنید.")
