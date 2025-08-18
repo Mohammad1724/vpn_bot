@@ -46,7 +46,6 @@ def _action_kb(target_id: int, is_banned: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 def _sanitize_for_code(s: str) -> str:
-    # در صورت وجود backtick داخل نام کاربری/متن، حذف می‌کنیم تا Markdown به‌هم نریزد
     return (s or "").replace("`", "")
 
 async def _render_user_panel_text(target_id: int) -> tuple[str, bool]:
@@ -60,7 +59,6 @@ async def _render_user_panel_text(target_id: int) -> tuple[str, bool]:
 
     ban_state = bool(info.get('is_banned'))
 
-    # آماده‌سازی نام کاربری و شناسه برای tap-to-copy
     username = info.get('username') or "-"
     if username != "-" and not username.startswith("@"):
         username = f"@{username}"
@@ -133,10 +131,16 @@ async def admin_user_services_cb(update: Update, context: ContextTypes.DEFAULT_T
 
     services = db.get_user_services(target_id) or []
     if not services:
+        # پس از پیام، پنل کاربر را بازگردان
         await q.edit_message_text("این کاربر سرویس فعالی ندارد.")
+        await _send_user_panel(update, target_id)
         return
 
-    await q.edit_message_text("📋 سرویس‌های فعال کاربر:")
+    # ارسال لیست سرویس‌ها در پیام‌های جداگانه
+    try:
+        await q.edit_message_text("📋 سرویس‌های فعال کاربر (در پیام‌های جداگانه ارسال شد).")
+    except Exception:
+        pass
     for s in services:
         name = s.get('name') or f"سرویس {s.get('service_id')}"
         sid = s.get('service_id')
@@ -145,6 +149,9 @@ async def admin_user_services_cb(update: Update, context: ContextTypes.DEFAULT_T
             await q.from_user.send_message(f"- {name} (ID: {sid})", reply_markup=kb)
         except Exception:
             pass
+
+    # بازگشت به پنل کاربر
+    await _send_user_panel(update, target_id)
 
 async def admin_user_purchases_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -162,9 +169,14 @@ async def admin_user_purchases_cb(update: Update, context: ContextTypes.DEFAULT_
 
     if not purchases:
         await q.edit_message_text("هیچ سابقه خریدی یافت نشد یا این قابلیت در پایگاه‌داده شما پیاده‌سازی نشده است.")
+        await _send_user_panel(update, target_id)
         return
 
-    await q.edit_message_text("🧾 سوابق خرید کاربر:")
+    try:
+        await q.edit_message_text("🧾 سوابق خرید کاربر (در پیام‌های جداگانه ارسال شد).")
+    except Exception:
+        pass
+
     for p in purchases[:30]:
         try:
             price = int(float(p.get('price', 0)))
@@ -177,12 +189,14 @@ async def admin_user_purchases_cb(update: Update, context: ContextTypes.DEFAULT_
         except Exception:
             pass
 
+    await _send_user_panel(update, target_id)
+
 async def admin_user_trial_reset_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer()
     target_id = int(q.data.split('_')[-1])
     ok = False
     try:
+        await q.answer()
         if hasattr(db, "reset_user_trial"):
             db.reset_user_trial(target_id); ok = True
         elif hasattr(db, "set_user_trial_used"):
@@ -195,10 +209,18 @@ async def admin_user_trial_reset_cb(update: Update, context: ContextTypes.DEFAUL
         logger.warning("Trial reset failed: %s", e)
         ok = False
 
+    # نمایش پیام کوتاه و برگشت به پنل کاربر
     if ok:
-        await q.edit_message_text("✅ وضعیت تست کاربر ریست شد.")
+        try:
+            await q.answer("✅ وضعیت تست ریست شد.", show_alert=False)
+        except Exception:
+            pass
+        await _send_user_panel(update, target_id)
     else:
-        await q.edit_message_text("❌ ریست تست ناموفق بود یا در DB پشتیبانی نشده است.")
+        try:
+            await q.answer("❌ ریست تست ناموفق بود یا در DB پشتیبانی نشده است.", show_alert=True)
+        except Exception:
+            pass
 
 async def admin_user_toggle_ban_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
