@@ -27,6 +27,7 @@ from bot.handlers.admin import settings as admin_settings
 from bot.handlers.admin import backup as admin_backup
 from bot.handlers.admin import users as admin_users
 from bot.handlers.admin import gift_codes as admin_gift
+from bot.handlers.admin import trial_settings as trial_cfg
 from bot.handlers.trial import get_trial_service as trial_get_trial_service
 from config import BOT_TOKEN, ADMIN_ID
 
@@ -35,7 +36,6 @@ logger = logging.getLogger(__name__)
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     err = context.error
-    # Quiet transient network hiccups from Telegram long-polling
     if isinstance(err, NetworkError) and (
         "ReadError" in str(err) or
         "Server disconnected" in str(err) or
@@ -49,7 +49,6 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.error(f"آپدیت مربوطه: {update}")
 
 def build_application():
-    # More relaxed timeouts for long-polling stability
     request = HTTPXRequest(
         connect_timeout=15.0,
         read_timeout=180.0,
@@ -85,9 +84,7 @@ def build_application():
 
     gift_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^🎁 کد هدیه$') & user_filter, check_channel_membership(gift_h.gift_code_entry))],
-        states={
-            constants.REDEEM_GIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, gift_h.redeem_gift_code)]
-        },
+        states={constants.REDEEM_GIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, gift_h.redeem_gift_code)]},
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
         per_user=True, per_chat=True
     )
@@ -126,9 +123,7 @@ def build_application():
 
     support_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^📞 پشتیبانی$') & user_filter, check_channel_membership(support_h.support_ticket_start))],
-        states={
-            constants.SUPPORT_TICKET_OPEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, support_h.forward_to_admin)],
-        },
+        states={constants.SUPPORT_TICKET_OPEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, support_h.forward_to_admin)]},
         fallbacks=[CommandHandler('cancel', support_h.support_ticket_cancel)],
         per_user=True, per_chat=True
     )
@@ -193,9 +188,7 @@ def build_application():
 
     backup_settings_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_backup.edit_backup_target_start, pattern="^edit_backup_target$")],
-        states={
-            constants.AWAIT_SETTING_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_backup.backup_target_received)],
-        },
+        states={constants.AWAIT_SETTING_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_backup.backup_target_received)]},
         fallbacks=[CommandHandler('cancel', admin_backup.cancel_backup_settings)],
         map_to_parent={constants.BACKUP_MENU: constants.BACKUP_MENU, ConversationHandler.END: constants.BACKUP_MENU}
     )
@@ -281,15 +274,19 @@ def build_application():
     application.add_handler(gift_from_balance_conv)
     application.add_handler(support_conv)
 
-    # تایید/لغو خرید سرویس (مطابق buy.py جدید)
+    # دکمه‌های تایید/لغو خرید سرویس
     application.add_handler(CallbackQueryHandler(buy_h.confirm_purchase_callback, pattern="^confirmbuy$"), group=2)
     application.add_handler(CallbackQueryHandler(buy_h.cancel_purchase_callback, pattern="^cancelbuy$"), group=2)
 
-    # Admin reply to support (reply to user's message)
+    # دستورات ادمین برای تنظیم سرویس تست
+    application.add_handler(CommandHandler("set_trial_days", trial_cfg.set_trial_days), group=3)
+    application.add_handler(CommandHandler("set_trial_gb", trial_cfg.set_trial_gb), group=3)
+
+    # Admin reply to support
     application.add_handler(MessageHandler(filters.REPLY & admin_filter, support_h.admin_reply_handler))
     application.add_handler(CallbackQueryHandler(support_h.close_ticket, pattern="^close_ticket_"))
 
-    # Global callbacks (with higher priority)
+    # Global callbacks
     application.add_handler(CallbackQueryHandler(admin_users.admin_confirm_charge_callback, pattern="^admin_confirm_charge_"), group=1)
     application.add_handler(CallbackQueryHandler(admin_users.admin_reject_charge_callback, pattern="^admin_reject_charge_"), group=1)
 
@@ -344,7 +341,6 @@ def build_application():
     application.add_handler(MessageHandler(filters.Regex('^🛍️ خرید سرویس$'), check_channel_membership(buy_h.buy_service_list)), group=3)
     application.add_handler(MessageHandler(filters.Regex('^📋 سرویس‌های من$'), check_channel_membership(us_h.list_my_services)), group=3)
     application.add_handler(MessageHandler(filters.Regex('^👤 اطلاعات حساب کاربری$'), check_channel_membership(start_h.show_account_info)), group=3)
-    # پشتیبانی (از طریق support_conv مدیریت می‌شود) - اینجا ثبت دوباره نمی‌کنیم
     application.add_handler(MessageHandler(filters.Regex('^📚 راهنما$'), check_channel_membership(start_h.show_guide)), group=3)
     application.add_handler(MessageHandler(filters.Regex('^🧪 دریافت سرویس تست رایگان$'), check_channel_membership(trial_get_trial_service)), group=3)
     application.add_handler(MessageHandler(filters.Regex('^🎁 معرفی دوستان$'), check_channel_membership(start_h.show_referral_link)), group=3)
