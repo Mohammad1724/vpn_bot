@@ -72,6 +72,52 @@ async def _render_user_panel_text(target_id: int) -> tuple[str, bool]:
     )
     return text, ban_state
 
+def _ensure_user_exists(user_id: int):
+    try:
+        if hasattr(db, "get_or_create_user"):
+            db.get_or_create_user(user_id)
+    except Exception:
+        pass
+
+def _update_balance(user_id: int, delta: int) -> bool:
+    """
+    تلاش برای اعمال تغییر موجودی با نام‌های متداول توابع دیتابیس.
+    delta می‌تواند مثبت یا منفی باشد.
+    """
+    _ensure_user_exists(user_id)
+    try:
+        # 1) change_balance(user_id, delta)
+        if hasattr(db, "change_balance"):
+            db.change_balance(user_id, delta)
+            return True
+        # 2) update_balance(user_id, delta)
+        if hasattr(db, "update_balance"):
+            db.update_balance(user_id, delta)
+            return True
+        # 3) increase/decrease
+        if delta >= 0 and hasattr(db, "increase_balance"):
+            db.increase_balance(user_id, delta)
+            return True
+        if delta < 0 and hasattr(db, "decrease_balance"):
+            db.decrease_balance(user_id, -delta)
+            return True
+        # 4) add_balance(user_id, amount)
+        if delta >= 0 and hasattr(db, "add_balance"):
+            db.add_balance(user_id, delta)
+            return True
+        # 5) set_balance(user_id, new_balance) ← fallback
+        if hasattr(db, "get_user") and hasattr(db, "set_balance"):
+            info = db.get_user(user_id)
+            cur = int(info.get("balance", 0)) if info else 0
+            new_bal = cur + delta
+            if new_bal < 0:
+                new_bal = 0
+            db.set_balance(user_id, new_bal)
+            return True
+    except Exception as e:
+        logger.warning("Balance update failed: %s", e, exc_info=True)
+    return False
+
 # -------------------------------
 # ورود به منوی مدیریت کاربران
 # -------------------------------
@@ -124,22 +170,20 @@ async def admin_user_refresh_cb(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def admin_user_services_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer()
     target_id = int(q.data.split('_')[-1])
+    # پنل را دست نمی‌زنیم تا چشمک نزند؛ فقط اطلاع می‌دهیم
+    try:
+        await q.answer("لیست سرویس‌ها در پیام‌های جداگانه ارسال شد.", show_alert=False)
+    except Exception:
+        pass
 
     services = db.get_user_services(target_id) or []
     if not services:
         try:
-            await q.edit_message_text("این کاربر سرویس فعالی ندارد.")
+            await q.from_user.send_message("این کاربر سرویس فعالی ندارد.")
         except Exception:
             pass
-        await _send_user_panel(update, target_id)
         return
-
-    try:
-        await q.edit_message_text("📋 سرویس‌های فعال کاربر (در پیام‌های جداگانه ارسال شد).")
-    except Exception:
-        pass
 
     for s in services:
         name = s.get('name') or f"سرویس {s.get('service_id')}"
@@ -150,12 +194,13 @@ async def admin_user_services_cb(update: Update, context: ContextTypes.DEFAULT_T
         except Exception:
             pass
 
-    await _send_user_panel(update, target_id)
-
 async def admin_user_purchases_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer()
     target_id = int(q.data.split('_')[-1])
+    try:
+        await q.answer("سوابق خرید در پیام‌های جداگانه ارسال شد.", show_alert=False)
+    except Exception:
+        pass
 
     purchases = None
     try:
@@ -168,16 +213,10 @@ async def admin_user_purchases_cb(update: Update, context: ContextTypes.DEFAULT_
 
     if not purchases:
         try:
-            await q.edit_message_text("هیچ سابقه خریدی یافت نشد یا این قابلیت در پایگاه‌داده شما پیاده‌سازی نشده است.")
+            await q.from_user.send_message("هیچ سابقه خریدی یافت نشد یا این قابلیت در پایگاه‌داده شما پیاده‌سازی نشده است.")
         except Exception:
             pass
-        await _send_user_panel(update, target_id)
         return
-
-    try:
-        await q.edit_message_text("🧾 سوابق خرید کاربر (در پیام‌های جداگانه ارسال شد).")
-    except Exception:
-        pass
 
     for p in purchases[:30]:
         try:
@@ -190,8 +229,6 @@ async def admin_user_purchases_cb(update: Update, context: ContextTypes.DEFAULT_
             await q.from_user.send_message(txt)
         except Exception:
             pass
-
-    await _send_user_panel(update, target_id)
 
 async def admin_user_trial_reset_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -285,25 +322,13 @@ async def manage_user_amount_received(update: Update, context: ContextTypes.DEFA
         return USER_MANAGEMENT_MENU
 
     delta = amount if op == "add" else -amount
-    ok = False
-    try:
-        if hasattr(db, "change_balance"):
-            db.change_balance(target_id, delta); ok = True
-        elif delta >= 0 and hasattr(db, "add_balance"):
-            db.add_balance(target_id, amount); ok = True
-        elif delta < 0 and hasattr(db, "decrease_balance"):
-            db.decrease_balance(target_id, -delta); ok = True
-        elif hasattr(db, "get_user") and hasattr(db, "set_balance"):
-            info = db.get_user(target_id)
-            new_bal = int(info.get('balance', 0)) + delta
-            if new_bal < 0:
-                new_bal = 0
-            db.set_balance(target_id, new_bal); ok = True
-    except Exception as e:
-        logger.warning("Balance update failed: %s", e)
-        ok = False
+    ok = _update_balance(target_id, delta)
 
-    await em.reply_text("✅ موجودی کاربر به‌روزرسانی شد." if ok else "❌ به‌روزرسانی موجودی ناموفق بود یا در DB پشتیبانی نشده است.")
+    if ok:
+        await em.reply_text("✅ موجودی کاربر به‌روزرسانی شد.")
+    else:
+        await em.reply_text("❌ به‌روزرسانی موجودی ناموفق بود یا در DB پشتیبانی نشده است.")
+
     context.user_data.pop("muid", None)
     context.user_data.pop("mop", None)
     await _send_user_panel(update, target_id)
@@ -341,7 +366,6 @@ async def admin_delete_service(update: Update, context: ContextTypes.DEFAULT_TYP
     success = await hiddify_api.delete_user_from_panel(svc['sub_uuid'])
     if success:
         db.delete_service(service_id)
-        # پس از حذف، در صورت داشتن target_id به پنل همان کاربر برگرد
         if target_id:
             await _send_user_panel(update, target_id)
         else:
@@ -350,7 +374,7 @@ async def admin_delete_service(update: Update, context: ContextTypes.DEFAULT_TYP
         await q.edit_message_text("❌ حذف سرویس از پنل ناموفق بود.")
 
 # -------------------------------
-# ارسال پیام (Broadcast) — بدون تغییر بنیادین
+# ارسال پیام (Broadcast)
 # -------------------------------
 def _broadcast_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup([["ارسال به همه کاربران", "ارسال به کاربر خاص"], [BTN_BACK_TO_ADMIN_MENU]], resize_keyboard=True)
