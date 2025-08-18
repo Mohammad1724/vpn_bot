@@ -24,8 +24,8 @@ from bot.handlers.admin import (
 )
 import bot.handlers.admin.trial_settings_ui as trial_ui
 from bot.handlers.trial import get_trial_service as trial_get_trial_service
-# اصلاح import — مسیر درست فایل trial_settings
-from bot.handlers import trial_settings as trial_cmds
+# مسیر درست برای ایمپورت دستورات تنظیم سرویس تست
+from bot.handlers.admin.trial_settings import set_trial_days, set_trial_gb
 from config import BOT_TOKEN, ADMIN_ID
 
 warnings.filterwarnings("ignore", category=PTBUserWarning)
@@ -200,7 +200,7 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # Gift codes creation conversation (nested inside ADMIN_MENU)
+    # ساخت کد هدیه (Conversation)
     gift_code_create_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(r'^➕ ساخت کد هدیه جدید$') & admin_filter, admin_gift.create_gift_code_start),
@@ -275,7 +275,7 @@ def build_application():
                 MessageHandler(filters.Regex('^📩 ارسال پیام$'), admin_users.broadcast_menu),
                 MessageHandler(filters.Regex('^🛑 خاموش کردن ربات$'), admin_c.shutdown_bot),
 
-                # دکمه‌های کد هدیه در همین state
+                # دکمه‌های کد هدیه داخل همین state
                 MessageHandler(filters.Regex(r'^📋 لیست کدهای هدیه$'), admin_gift.list_gift_codes),
                 CallbackQueryHandler(admin_gift.delete_gift_code_callback, pattern=r'^delete_gift_code_'),
 
@@ -288,7 +288,7 @@ def build_application():
                 CallbackQueryHandler(admin_users.broadcast_menu, pattern="^admin_broadcast$"),
                 CallbackQueryHandler(admin_c.shutdown_bot, pattern="^admin_shutdown$"),
 
-                # کانورسیشن تنظیمات + ساخت کد هدیه
+                # کانورسیشن‌ها
                 admin_settings_conv,
                 gift_code_create_conv,
             ],
@@ -336,8 +336,8 @@ def build_application():
     application.add_handler(admin_conv)
 
     # --- Admin-only trial command handlers ---
-    application.add_handler(CommandHandler("set_trial_days", trial_cmds.set_trial_days, filters=admin_filter))
-    application.add_handler(CommandHandler("set_trial_gb", trial_cmds.set_trial_gb, filters=admin_filter))
+    application.add_handler(CommandHandler("set_trial_days", set_trial_days, filters=admin_filter))
+    application.add_handler(CommandHandler("set_trial_gb", set_trial_gb, filters=admin_filter))
 
     # --- Global Callbacks ---
     application.add_handler(CallbackQueryHandler(buy_h.confirm_purchase_callback, pattern="^confirmbuy$"), group=2)
