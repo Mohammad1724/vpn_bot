@@ -12,6 +12,12 @@ logger = logging.getLogger(__name__)
 # States for the conversation
 TRIAL_MENU, WAIT_DAYS, WAIT_GB = range(3)
 
+# تبدیل ADMIN_ID به int برای مقایسه صحیح
+try:
+    ADMIN_ID_INT = int(ADMIN_ID)
+except Exception:
+    ADMIN_ID_INT = ADMIN_ID
+
 def _get_current_values():
     days_raw = db.get_setting("trial_days")
     gb_raw = db.get_setting("trial_gb")
@@ -35,7 +41,7 @@ def _menu_keyboard():
 
 async def trial_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Only admin
-    if update.effective_user.id != ADMIN_ID:
+    if update.effective_user.id != ADMIN_ID_INT:
         return ConversationHandler.END
 
     days, gb = _get_current_values()
@@ -69,7 +75,7 @@ async def ask_gb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return WAIT_GB
 
 async def days_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
+    if update.effective_user.id != ADMIN_ID_INT:
         return ConversationHandler.END
     txt = (update.message.text or "").strip()
     try:
@@ -86,7 +92,7 @@ async def days_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await trial_menu(update, context)
 
 async def gb_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
+    if update.effective_user.id != ADMIN_ID_INT:
         return ConversationHandler.END
     txt = (update.message.text or "").strip().replace(",", ".")
     try:
@@ -100,4 +106,9 @@ async def gb_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db.set_setting("trial_gb", str(gb))
     await update.message.reply_text(f"✅ حجم سرویس تست روی {gb} گیگابایت تنظیم شد.")
     # بازگشت به منوی تنظیمات تست
+    return await trial_menu(update, context)
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # لغو و برگشت به منوی تست
+    await update.message.reply_text("❌ عملیات لغو شد.")
     return await trial_menu(update, context)
