@@ -8,26 +8,38 @@ from bot.constants import (
     CMD_CANCEL, CMD_SKIP,
     PLAN_MENU, PLAN_NAME, PLAN_PRICE, PLAN_DAYS, PLAN_GB, PLAN_CATEGORY,
     EDIT_PLAN_NAME, EDIT_PLAN_PRICE, EDIT_PLAN_DAYS, EDIT_PLAN_GB, EDIT_PLAN_CATEGORY,
-    BTN_BACK_TO_ADMIN_MENU  # ← این import اضافه شده
+    BTN_BACK_TO_ADMIN_MENU
 )
 import database as db
+
 
 def _plan_menu_keyboard() -> ReplyKeyboardMarkup:
     # کیبورد مخصوص منوی مدیریت پلن‌ها
     keyboard = [["➕ افزودن پلن جدید", "📋 لیست پلن‌ها"], [BTN_BACK_TO_ADMIN_MENU]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
+
 async def plan_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("بخش مدیریت پلن‌ها", reply_markup=_plan_menu_keyboard())
+    # این تابع ممکن است هم با Message و هم با CallbackQuery صدا زده شود
+    q = getattr(update, "callback_query", None)
+    if q:
+        await q.answer()
+    await update.effective_message.reply_text("بخش مدیریت پلن‌ها", reply_markup=_plan_menu_keyboard())
     return PLAN_MENU
 
+
 async def list_plans_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # این تابع ممکن است هم با Message و هم با CallbackQuery صدا زده شود
+    q = getattr(update, "callback_query", None)
+    if q:
+        await q.answer()
+
     plans = db.list_plans()
     if not plans:
-        await update.message.reply_text("هیچ پلنی تعریف نشده است.")
+        await update.effective_message.reply_text("هیچ پلنی تعریف نشده است.")
         return PLAN_MENU
 
-    await update.message.reply_text("لیست پلن‌های تعریف‌شده:")
+    await update.effective_message.reply_text("لیست پلن‌های تعریف‌شده:")
     for plan in plans:
         visibility_icon = "👁️" if plan['is_visible'] else "🙈"
         category_text = f"▫️ دسته‌بندی: {plan['category']}\n" if plan['category'] else ""
@@ -44,21 +56,28 @@ async def list_plans_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton(f"{visibility_icon} تغییر وضعیت", callback_data=f"admin_toggle_plan_{plan['plan_id']}"),
             InlineKeyboardButton("🗑️ حذف", callback_data=f"admin_delete_plan_{plan['plan_id']}")
         ]]
-        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+        await update.effective_message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
     return PLAN_MENU
+
 
 # ===== Add Plan Conversation =====
 async def add_plan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
+    # این تابع ممکن است با Message یا CallbackQuery شروع شود
+    q = getattr(update, "callback_query", None)
+    if q:
+        await q.answer()
+    await update.effective_message.reply_text(
         "لطفاً نام پلن جدید را وارد کنید:",
         reply_markup=ReplyKeyboardMarkup([[CMD_CANCEL]], resize_keyboard=True)
     )
     return PLAN_NAME
 
+
 async def plan_name_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['plan_name'] = update.message.text.strip()
     await update.message.reply_text("قیمت (تومان) را وارد کنید:")
     return PLAN_PRICE
+
 
 async def plan_price_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -69,6 +88,7 @@ async def plan_price_received(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("قیمت را به صورت عدد وارد کنید.")
         return PLAN_PRICE
 
+
 async def plan_days_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         context.user_data['plan_days'] = int(update.message.text)
@@ -78,6 +98,7 @@ async def plan_days_received(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("مدت را به صورت عدد وارد کنید.")
         return PLAN_DAYS
 
+
 async def plan_gb_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         context.user_data['plan_gb'] = int(update.message.text)
@@ -86,6 +107,7 @@ async def plan_gb_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text("حجم را به صورت عدد وارد کنید.")
         return PLAN_GB
+
 
 async def plan_category_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['plan_category'] = update.message.text.strip()
@@ -103,20 +125,28 @@ async def plan_category_received(update: Update, context: ContextTypes.DEFAULT_T
     context.user_data.clear()
     return ConversationHandler.END
 
+
 async def cancel_add_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await update.message.reply_text("عملیات لغو شد.", reply_markup=_plan_menu_keyboard())
     return ConversationHandler.END
 
+
 # ===== Edit Plan Conversation =====
 async def edit_plan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    plan_id = int(q.data.split('_')[-1])
+    try:
+        plan_id = int(q.data.split('_')[-1])
+    except Exception:
+        await q.edit_message_text("پلن یافت نشد.")
+        return ConversationHandler.END
+
     plan = db.get_plan(plan_id)
     if not plan:
         await q.edit_message_text("پلن یافت نشد.")
         return ConversationHandler.END
+
     context.user_data['edit_plan_id'] = plan_id
     context.user_data['edit_plan_data'] = {}
     await q.message.reply_text(
@@ -126,14 +156,17 @@ async def edit_plan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return EDIT_PLAN_NAME
 
+
 async def edit_plan_name_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['edit_plan_data']['name'] = update.message.text.strip()
     await update.message.reply_text(f"قیمت جدید را به تومان وارد کنید (یا {CMD_SKIP}).")
     return EDIT_PLAN_PRICE
 
+
 async def skip_edit_plan_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"از تغییر نام صرف‌نظر شد. قیمت جدید را به تومان وارد کنید (یا {CMD_SKIP}).")
     return EDIT_PLAN_PRICE
+
 
 async def edit_plan_price_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -144,9 +177,11 @@ async def edit_plan_price_received(update: Update, context: ContextTypes.DEFAULT
         await update.message.reply_text("قیمت را به صورت عدد وارد کنید.")
         return EDIT_PLAN_PRICE
 
+
 async def skip_edit_plan_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"از تغییر قیمت صرف‌نظر شد. مدت جدید (روز) را وارد کنید (یا {CMD_SKIP}).")
     return EDIT_PLAN_DAYS
+
 
 async def edit_plan_days_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -157,9 +192,11 @@ async def edit_plan_days_received(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text("مدت را به صورت عدد وارد کنید.")
         return EDIT_PLAN_DAYS
 
+
 async def skip_edit_plan_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"از تغییر مدت صرف‌نظر شد. حجم جدید (گیگابایت) را وارد کنید (یا {CMD_SKIP}).")
     return EDIT_PLAN_GB
+
 
 async def edit_plan_gb_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -170,24 +207,29 @@ async def edit_plan_gb_received(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text("حجم را به صورت عدد وارد کنید.")
         return EDIT_PLAN_GB
 
+
 async def skip_edit_plan_gb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"از تغییر حجم صرف‌نظر شد. دسته‌بندی جدید را وارد کنید (یا {CMD_SKIP}).")
     return EDIT_PLAN_CATEGORY
+
 
 async def edit_plan_category_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['edit_plan_data']['category'] = update.message.text.strip()
     await finish_plan_edit(update, context)
     return ConversationHandler.END
 
+
 async def skip_edit_plan_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("از تغییر دسته‌بندی صرف‌نظر شد.")
     await finish_plan_edit(update, context)
     return ConversationHandler.END
 
+
 async def cancel_edit_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await update.message.reply_text("ویرایش لغو شد.", reply_markup=_plan_menu_keyboard())
     return ConversationHandler.END
+
 
 async def finish_plan_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     plan_id = context.user_data.get('edit_plan_id')
@@ -199,6 +241,7 @@ async def finish_plan_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("✅ پلن با موفقیت به‌روزرسانی شد!", reply_markup=_plan_menu_keyboard())
     context.user_data.clear()
     return PLAN_MENU
+
 
 async def admin_delete_plan_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -226,6 +269,7 @@ async def admin_delete_plan_callback(update: Update, context: ContextTypes.DEFAU
     )
     await q.from_user.send_message(msg)
     return PLAN_MENU
+
 
 async def admin_toggle_plan_visibility_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
