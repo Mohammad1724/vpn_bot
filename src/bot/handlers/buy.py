@@ -22,22 +22,17 @@ def _maint_msg() -> str:
     return db.get_setting("maintenance_message") or "⛔️ ربات در حال بروزرسانی است. لطفاً کمی بعد مراجعه کنید."
 
 def _short_price(price: float) -> str:
-    try:
-        p = int(float(price))
-    except Exception:
-        return str(price)
-    if p >= 1000000:
-        return f"{p//1000}k"
-    return f"{p//1000}k"
+    # فرمت استاندارد تومان با جداکننده هزار
+    return utils.format_toman(price, persian_digits=False)
 
 def _short_label(p: dict) -> str:
-    # کوتاه و جمع‌وجور: نام کوتاه | Nروز | GB/نامحدود | قیمتk
+    # کوتاه و جمع‌وجور: نام کوتاه | N روز | GB/نامحدود | قیمت کامل
     name = (p.get('name') or 'پلن')[:18]
     days = int(p.get('days', 0))
     gb = int(p.get('gb', 0))
     vol = "نامحدود" if gb == 0 else f"{gb}GB"
-    price_k = _short_price(p.get('price', 0))
-    label = f"{name} | {days}روز | {vol} | {price_k}"
+    price_str = _short_price(p.get('price', 0))
+    label = f"{name} | {days} روز | {vol} | {price_str}"
     # در صورت طولانی بودن، کوتاه‌ترش کن
     return label[:62] + "…" if len(label) > 63 else label
 
@@ -157,13 +152,14 @@ async def _ask_purchase_confirm(update: Update, context: ContextTypes.DEFAULT_TY
     }
 
     volume_text = f"{plan['gb']} گیگابایت" if int(plan['gb']) > 0 else "نامحدود"
+    price_text = utils.format_toman(plan['price'], persian_digits=False)
     text = f"""
 🛒 تایید خرید سرویس
 
 نام سرویس: {custom_name or '(بدون نام)'}
 مدت: {plan['days']} روز
 حجم: {volume_text}
-قیمت: {plan['price']:,} تومان
+قیمت: {price_text}
 
 با تایید، مبلغ از کیف‌پول شما کسر شده و سرویس بلافاصله ساخته می‌شود.
 ادامه می‌دهید؟
