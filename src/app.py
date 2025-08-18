@@ -27,8 +27,8 @@ from bot.handlers.admin import settings as admin_settings
 from bot.handlers.admin import backup as admin_backup
 from bot.handlers.admin import users as admin_users
 from bot.handlers.admin import gift_codes as admin_gift
-from bot.handlers.admin import trial_settings as trial_cfg   # دستورات /set_trial_days و /set_trial_gb (اگر خواستی نگه‌دار)
-from bot.handlers.admin import trial_settings_ui as trial_ui  # منوی دکمه‌ای جدید سرویس تست
+from bot.handlers.admin import trial_settings as trial_cfg         # دستورات متنی (اختیاری)
+from bot.handlers.admin import trial_settings_ui as trial_ui       # منوی دکمه‌ای سرویس تست
 from bot.handlers.trial import get_trial_service as trial_get_trial_service
 from config import BOT_TOKEN, ADMIN_ID
 
@@ -129,7 +129,7 @@ def build_application():
         per_user=True, per_chat=True
     )
 
-    # --- Trial settings conversation (new) ---
+    # --- Trial settings conversation (buttoned UI) ---
     trial_settings_conv = ConversationHandler(
         entry_points=[CommandHandler("trial_settings", trial_ui.trial_menu, filters=admin_filter)],
         states={
@@ -224,7 +224,7 @@ def build_application():
                 MessageHandler(filters.Regex('^🎁 مدیریت کد هدیه$'), admin_gift.gift_code_management_menu),
                 MessageHandler(filters.Regex('^📋 لیست کدهای هدیه$'), admin_gift.list_gift_codes),
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.back_to_admin_menu),
-                # زیرمجموعه‌ها
+                # نِست‌ها
                 add_plan_conv,
                 edit_plan_conv,
                 settings_conv,
@@ -298,9 +298,12 @@ def build_application():
     application.add_handler(CallbackQueryHandler(buy_h.confirm_purchase_callback, pattern="^confirmbuy$"), group=2)
     application.add_handler(CallbackQueryHandler(buy_h.cancel_purchase_callback, pattern="^cancelbuy$"), group=2)
 
-    # دستورات ادمین (اختیاری: اگر خواستی نگه‌داری)
+    # دستورات ادمین اختیاری (اگر خواستی فعال بماند)
     application.add_handler(CommandHandler("set_trial_days", trial_cfg.set_trial_days), group=3)
     application.add_handler(CommandHandler("set_trial_gb", trial_cfg.set_trial_gb), group=3)
+
+    # اتصال دکمه «🧪 تنظیمات سرویس تست» داخل منوی تنظیمات
+    application.add_handler(CallbackQueryHandler(trial_ui.trial_menu, pattern="^settings_trial$"), group=1)
 
     # Admin reply to support
     application.add_handler(MessageHandler(filters.REPLY & admin_filter, support_h.admin_reply_handler))
