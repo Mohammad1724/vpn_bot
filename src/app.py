@@ -90,24 +90,28 @@ def build_application():
         map_to_parent={constants.ADMIN_MENU: constants.ADMIN_MENU, ConversationHandler.END: constants.ADMIN_MENU}
     )
     
+    # --- Register All Handlers ---
     application.add_handler(charge_conv); application.add_handler(gift_conv); application.add_handler(buy_conv)
     application.add_handler(transfer_conv); application.add_handler(gift_from_balance_conv); application.add_handler(support_conv)
     application.add_handler(trial_settings_conv)
-    
+
+    # Global Callbacks
     application.add_handler(CallbackQueryHandler(buy_h.confirm_purchase_callback, pattern="^confirmbuy$"), group=2)
     application.add_handler(CallbackQueryHandler(buy_h.cancel_purchase_callback, pattern="^cancelbuy$"), group=2)
-    
     application.add_handler(MessageHandler(filters.REPLY & admin_filter, support_h.admin_reply_handler))
     application.add_handler(CallbackQueryHandler(support_h.close_ticket, pattern="^close_ticket_"))
-    
     application.add_handler(CallbackQueryHandler(admin_users.admin_confirm_charge_callback, pattern="^admin_confirm_charge_"), group=1)
     application.add_handler(CallbackQueryHandler(admin_users.admin_reject_charge_callback, pattern="^admin_reject_charge_"), group=1)
     
-    application.add_handler(CallbackQueryHandler(admin_settings.settings_menu, pattern="^back_to_settings$"), group=1)
+    # New Settings Submenus
     application.add_handler(CallbackQueryHandler(admin_settings.maintenance_and_join_submenu, pattern="^settings_maint_join$"), group=1)
     application.add_handler(CallbackQueryHandler(admin_settings.payment_and_guides_submenu, pattern="^settings_payment_guides$"), group=1)
     application.add_handler(CallbackQueryHandler(admin_settings.service_configs_submenu, pattern="^settings_service_configs$"), group=1)
     application.add_handler(CallbackQueryHandler(admin_settings.reports_and_reminders_submenu, pattern="^settings_reports_reminders$"), group=1)
+    application.add_handler(CallbackQueryHandler(admin_settings.payment_info_submenu, pattern="^payment_info$"), group=1)
+    
+    # Other handlers
+    application.add_handler(CallbackQueryHandler(admin_settings.settings_menu, pattern="^back_to_settings$"), group=1)
     application.add_handler(CallbackQueryHandler(admin_settings.edit_default_link_start, pattern="^edit_default_link_type$"), group=1)
     application.add_handler(CallbackQueryHandler(admin_settings.set_default_link_type, pattern="^set_default_link_"), group=1)
     application.add_handler(CallbackQueryHandler(admin_gift.delete_gift_code_callback, pattern="^delete_gift_code_"), group=1)
@@ -161,7 +165,7 @@ def build_application():
     ]
     for handler in main_menu_handlers: application.add_handler(handler, group=3)
     
-    # --- Admin conv must be last for priority reasons ---
+    # Admin conv must be last
     admin_conv_nested = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f'^{constants.BTN_ADMIN_PANEL}$') & admin_filter, admin_c.admin_entry)],
         states={
