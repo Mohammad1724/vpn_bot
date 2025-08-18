@@ -45,17 +45,19 @@ def build_application():
     support_conv = ConversationHandler(entry_points=[MessageHandler(filters.Regex('^📞 پشتیبانی$') & user_filter, check_channel_membership(support_h.support_ticket_start))], states={constants.SUPPORT_TICKET_OPEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, support_h.forward_to_admin)]}, fallbacks=[CommandHandler('cancel', support_h.support_ticket_cancel)], per_user=True, per_chat=True)
     
     # --- Admin Conversations (Nested inside the main admin conv) ---
-    trial_settings_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(trial_ui.trial_menu, pattern="^settings_trial$")],
+    add_plan_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex('^➕ افزودن پلن جدید$') & admin_filter, admin_plans.add_plan_start)],
         states={
-            trial_ui.TRIAL_MENU: [CallbackQueryHandler(trial_ui.ask_days, pattern="^trial_set_days$"), CallbackQueryHandler(trial_ui.ask_gb, pattern="^trial_set_gb$")],
-            trial_ui.WAIT_DAYS: [MessageHandler(filters.TEXT & admin_filter & ~filters.COMMAND, trial_ui.days_received)],
-            trial_ui.WAIT_GB: [MessageHandler(filters.TEXT & admin_filter & ~filters.COMMAND, trial_ui.gb_received)],
-        }, fallbacks=[CommandHandler('cancel', admin_c.admin_generic_cancel)],
-        map_to_parent={constants.ADMIN_SETTINGS_MENU: constants.ADMIN_SETTINGS_MENU, ConversationHandler.END: constants.ADMIN_SETTINGS_MENU},
-        per_user=True, per_chat=True, allow_reentry=True
+            constants.PLAN_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_name_received)],
+            constants.PLAN_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_price_received)],
+            constants.PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_days_received)],
+            constants.PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_gb_received)],
+            constants.PLAN_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_category_received)],
+        },
+        fallbacks=[CommandHandler('cancel', admin_plans.cancel_add_plan)],
+        map_to_parent={ConversationHandler.END: constants.PLAN_MENU}
     )
-
+    
     admin_settings_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu)],
         states={
@@ -72,7 +74,7 @@ def build_application():
                 CallbackQueryHandler(admin_settings.toggle_force_join, pattern="^toggle_force_join$"),
                 CallbackQueryHandler(admin_settings.toggle_expiry_reminder, pattern="^toggle_expiry_reminder$"),
                 CallbackQueryHandler(admin_settings.toggle_report_setting, pattern="^toggle_report_"),
-                trial_settings_conv, # Nested
+                CallbackQueryHandler(trial_ui.trial_menu, pattern="^settings_trial$"),
                 CallbackQueryHandler(admin_settings.edit_setting_start, pattern="^admin_edit_setting_"),
             ],
             constants.AWAIT_SETTING_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_settings.setting_value_received)],
@@ -97,6 +99,7 @@ def build_application():
                 MessageHandler(filters.Regex('^🛑 خاموش کردن ربات$'), admin_c.shutdown_bot),
                 # Nested conversations
                 admin_settings_conv,
+                add_plan_conv, # Added here
             ],
         },
         fallbacks=[MessageHandler(filters.Regex(f'^{constants.BTN_EXIT_ADMIN_PANEL}$'), admin_c.exit_admin_panel), CommandHandler('cancel', admin_c.admin_generic_cancel)],
