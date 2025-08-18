@@ -43,37 +43,55 @@ def build_application():
     transfer_conv = ConversationHandler(entry_points=[CallbackQueryHandler(check_channel_membership(acc_act.transfer_start), pattern="^acc_transfer_start$")], states={constants.TRANSFER_RECIPIENT_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, acc_act.transfer_recipient_received)], constants.TRANSFER_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, acc_act.transfer_amount_received)], constants.TRANSFER_CONFIRM: [CallbackQueryHandler(acc_act.transfer_confirm, pattern="^transfer_confirm_")]}, fallbacks=[CommandHandler('cancel', acc_act.transfer_cancel)])
     gift_from_balance_conv = ConversationHandler(entry_points=[CallbackQueryHandler(check_channel_membership(acc_act.create_gift_from_balance_start), pattern="^acc_gift_from_balance_start$")], states={constants.GIFT_FROM_BALANCE_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, acc_act.create_gift_amount_received)], constants.GIFT_FROM_BALANCE_CONFIRM: [CallbackQueryHandler(acc_act.create_gift_confirm, pattern="^gift_confirm_")]}, fallbacks=[CommandHandler('cancel', acc_act.create_gift_cancel)])
     support_conv = ConversationHandler(entry_points=[MessageHandler(filters.Regex('^📞 پشتیبانی$') & user_filter, check_channel_membership(support_h.support_ticket_start))], states={constants.SUPPORT_TICKET_OPEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, support_h.forward_to_admin)]}, fallbacks=[CommandHandler('cancel', support_h.support_ticket_cancel)], per_user=True, per_chat=True)
-    trial_settings_conv = ConversationHandler(entry_points=[CallbackQueryHandler(trial_ui.trial_menu, pattern="^settings_trial$")], states={trial_ui.TRIAL_MENU: [CallbackQueryHandler(trial_ui.ask_days, pattern="^trial_set_days$"), CallbackQueryHandler(trial_ui.ask_gb, pattern="^trial_set_gb$"), CallbackQueryHandler(admin_settings.settings_menu, pattern="^back_to_settings$")], trial_ui.WAIT_DAYS: [MessageHandler(filters.TEXT & admin_filter & ~filters.COMMAND, trial_ui.days_received)], trial_ui.WAIT_GB: [MessageHandler(filters.TEXT & admin_filter & ~filters.COMMAND, trial_ui.gb_received)]}, fallbacks=[CommandHandler('cancel', admin_c.admin_generic_cancel)], per_user=True, per_chat=True, allow_reentry=True)
-    settings_conv = ConversationHandler(entry_points=[CallbackQueryHandler(admin_settings.edit_setting_start, pattern="^admin_edit_setting_")], states={constants.AWAIT_SETTING_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_settings.setting_value_received)]}, fallbacks=[CommandHandler('cancel', admin_c.admin_conv_cancel)], map_to_parent={constants.ADMIN_MENU: constants.ADMIN_MENU, ConversationHandler.END: constants.ADMIN_MENU})
     
-    application.add_handler(charge_conv); application.add_handler(gift_conv); application.add_handler(buy_conv); application.add_handler(transfer_conv); application.add_handler(gift_from_balance_conv); application.add_handler(support_conv); application.add_handler(trial_settings_conv)
+    # --- Admin Conversations ---
+    admin_settings_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(admin_settings.settings_menu, pattern="^admin_settings_menu$")],
+        states={
+            constants.ADMIN_SETTINGS_MENU: [
+                CallbackQueryHandler(admin_settings.maintenance_and_join_submenu, pattern="^settings_maint_join$"),
+                CallbackQueryHandler(admin_settings.payment_and_guides_submenu, pattern="^settings_payment_guides$"),
+                CallbackQueryHandler(admin_settings.payment_info_submenu, pattern="^payment_info_submenu$"),
+                CallbackQueryHandler(admin_settings.service_configs_submenu, pattern="^settings_service_configs$"),
+                CallbackQueryHandler(admin_settings.subdomains_submenu, pattern="^settings_subdomains$"),
+                CallbackQueryHandler(admin_settings.reports_and_reminders_submenu, pattern="^settings_reports_reminders$"),
+                CallbackQueryHandler(admin_settings.edit_default_link_start, pattern="^edit_default_link_type$"),
+                CallbackQueryHandler(admin_settings.set_default_link_type, pattern="^set_default_link_"),
+                CallbackQueryHandler(admin_settings.toggle_maintenance, pattern="^toggle_maintenance$"),
+                CallbackQueryHandler(admin_settings.toggle_force_join, pattern="^toggle_force_join$"),
+                CallbackQueryHandler(admin_settings.toggle_expiry_reminder, pattern="^toggle_expiry_reminder$"),
+                CallbackQueryHandler(admin_settings.toggle_report_setting, pattern="^toggle_report_"),
+                CallbackQueryHandler(trial_ui.trial_menu, pattern="^settings_trial$"),
+                CallbackQueryHandler(admin_settings.edit_setting_start, pattern="^admin_edit_setting_"),
+            ],
+            constants.AWAIT_SETTING_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_settings.setting_value_received)],
+        },
+        fallbacks=[CommandHandler('cancel', admin_c.admin_generic_cancel), CallbackQueryHandler(admin_settings.back_to_admin_menu_cb, pattern="^admin_back_to_menu$")],
+        map_to_parent={constants.ADMIN_MENU: constants.ADMIN_MENU, ConversationHandler.END: constants.ADMIN_MENU},
+        per_user=True, per_chat=True, allow_reentry=True
+    )
+
+    trial_settings_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(trial_ui.trial_menu, pattern="^settings_trial$")],
+        states={
+            trial_ui.TRIAL_MENU: [CallbackQueryHandler(trial_ui.ask_days, pattern="^trial_set_days$"), CallbackQueryHandler(trial_ui.ask_gb, pattern="^trial_set_gb$"), CallbackQueryHandler(admin_settings.settings_menu, pattern="^back_to_settings$")],
+            trial_ui.WAIT_DAYS: [MessageHandler(filters.TEXT & admin_filter & ~filters.COMMAND, trial_ui.days_received)],
+            trial_ui.WAIT_GB: [MessageHandler(filters.TEXT & admin_filter & ~filters.COMMAND, trial_ui.gb_received)],
+        }, fallbacks=[CommandHandler('cancel', admin_c.admin_generic_cancel)],
+        map_to_parent={constants.ADMIN_SETTINGS_MENU: constants.ADMIN_SETTINGS_MENU, ConversationHandler.END: constants.ADMIN_SETTINGS_MENU},
+        per_user=True, per_chat=True, allow_reentry=True
+    )
+
+    application.add_handler(charge_conv); application.add_handler(gift_conv); application.add_handler(buy_conv); application.add_handler(transfer_conv); application.add_handler(gift_from_balance_conv); application.add_handler(support_conv)
     
-    # --- Global Callbacks ---
     application.add_handler(CallbackQueryHandler(buy_h.confirm_purchase_callback, pattern="^confirmbuy$"), group=2)
     application.add_handler(CallbackQueryHandler(buy_h.cancel_purchase_callback, pattern="^cancelbuy$"), group=2)
     application.add_handler(MessageHandler(filters.REPLY & admin_filter, support_h.admin_reply_handler))
     application.add_handler(CallbackQueryHandler(support_h.close_ticket, pattern="^close_ticket_"))
     application.add_handler(CallbackQueryHandler(admin_users.admin_confirm_charge_callback, pattern="^admin_confirm_charge_"), group=1)
     application.add_handler(CallbackQueryHandler(admin_users.admin_reject_charge_callback, pattern="^admin_reject_charge_"), group=1)
-    
-    # --- Settings Handlers ---
-    application.add_handler(CallbackQueryHandler(admin_settings.settings_menu, pattern="^back_to_settings$"), group=1)
-    application.add_handler(CallbackQueryHandler(admin_settings.maintenance_and_join_submenu, pattern="^settings_maint_join$"), group=1)
-    application.add_handler(CallbackQueryHandler(admin_settings.payment_and_guides_submenu, pattern="^settings_payment_guides$"), group=1)
-    application.add_handler(CallbackQueryHandler(admin_settings.payment_info_submenu, pattern="^payment_info_submenu$"), group=1) # Corrected pattern
-    application.add_handler(CallbackQueryHandler(admin_settings.service_configs_submenu, pattern="^settings_service_configs$"), group=1)
-    application.add_handler(CallbackQueryHandler(admin_settings.subdomains_submenu, pattern="^settings_subdomains$"), group=1)
-    application.add_handler(CallbackQueryHandler(admin_settings.reports_and_reminders_submenu, pattern="^settings_reports_reminders$"), group=1)
-    application.add_handler(CallbackQueryHandler(admin_settings.edit_default_link_start, pattern="^edit_default_link_type$"), group=1)
-    application.add_handler(CallbackQueryHandler(admin_settings.set_default_link_type, pattern="^set_default_link_"), group=1)
-    application.add_handler(CallbackQueryHandler(admin_gift.delete_gift_code_callback, pattern="^delete_gift_code_"), group=1)
-    application.add_handler(CallbackQueryHandler(admin_settings.toggle_report_setting, pattern="^toggle_report_"), group=1)
-    application.add_handler(CallbackQueryHandler(admin_settings.toggle_maintenance, pattern="^toggle_maintenance$"), group=1)
-    application.add_handler(CallbackQueryHandler(admin_settings.toggle_force_join, pattern="^toggle_force_join$"), group=1)
-    application.add_handler(CallbackQueryHandler(admin_settings.toggle_expiry_reminder, pattern="^toggle_expiry_reminder$"), group=1)
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern="^check_membership$"))
     
-    # --- Other Handlers ---
     user_services_handlers = [CallbackQueryHandler(check_channel_membership(us_h.view_service_callback), pattern="^view_service_"), CallbackQueryHandler(check_channel_membership(us_h.back_to_services_callback), pattern="^back_to_services$"), CallbackQueryHandler(check_channel_membership(us_h.get_link_callback), pattern="^getlink_"), CallbackQueryHandler(check_channel_membership(us_h.refresh_service_details), pattern="^refresh_"), CallbackQueryHandler(check_channel_membership(us_h.more_links_callback), pattern="^more_links_"), CallbackQueryHandler(check_channel_membership(us_h.renew_service_handler), pattern="^renew_"), CallbackQueryHandler(check_channel_membership(us_h.confirm_renewal_callback), pattern="^confirmrenew$"), CallbackQueryHandler(check_channel_membership(us_h.cancel_renewal_callback), pattern="^cancelrenew$"), CallbackQueryHandler(check_channel_membership(us_h.delete_service_callback), pattern="^delete_service_")]
     for handler in user_services_handlers: application.add_handler(handler, group=2)
     account_info_handlers = [CallbackQueryHandler(check_channel_membership(start_h.show_purchase_history_callback), pattern="^acc_purchase_history$"), CallbackQueryHandler(check_channel_membership(start_h.show_charge_history_callback), pattern="^acc_charge_history$"), CallbackQueryHandler(check_channel_membership(start_h.show_charging_guide_callback), pattern="^acc_charging_guide$"), CallbackQueryHandler(check_channel_membership(start_h.show_account_info), pattern="^acc_back_to_main$")]
@@ -85,7 +103,6 @@ def build_application():
     main_menu_handlers = [CommandHandler("start", check_channel_membership(start_h.start)), MessageHandler(filters.Regex('^🛍️ خرید سرویس$'), check_channel_membership(buy_h.buy_service_list)), MessageHandler(filters.Regex('^📋 سرویس‌های من$'), check_channel_membership(us_h.list_my_services)), MessageHandler(filters.Regex('^👤 اطلاعات حساب کاربری$'), check_channel_membership(start_h.show_account_info)), MessageHandler(filters.Regex('^📚 راهنما$'), check_channel_membership(start_h.show_guide)), MessageHandler(filters.Regex('^🧪 دریافت سرویس تست رایگان$'), check_channel_membership(trial_get_trial_service)), MessageHandler(filters.Regex('^🎁 معرفی دوستان$'), check_channel_membership(start_h.show_referral_link))]
     for handler in main_menu_handlers: application.add_handler(handler, group=3)
     
-    # --- Admin conv must be last ---
     admin_conv_nested = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f'^{constants.BTN_ADMIN_PANEL}$') & admin_filter, admin_c.admin_entry)],
         states={
@@ -93,6 +110,9 @@ def build_application():
                 MessageHandler(filters.Regex('^➕ مدیریت پلن‌ها$'), admin_plans.plan_management_menu),
                 MessageHandler(filters.Regex('^📈 گزارش‌ها و آمار$'), admin_reports.reports_menu),
                 MessageHandler(filters.Regex('^⚙️ تنظیمات$'), admin_settings.settings_menu),
+                # Conversations
+                admin_settings_conv,
+                trial_settings_conv,
             ],
         }, fallbacks=[MessageHandler(filters.Regex(f'^{constants.BTN_EXIT_ADMIN_PANEL}$'), admin_c.exit_admin_panel), CommandHandler('cancel', admin_c.admin_generic_cancel)], per_user=True, per_chat=True, allow_reentry=True
     )
