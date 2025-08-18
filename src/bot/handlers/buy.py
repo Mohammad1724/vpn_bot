@@ -26,9 +26,9 @@ def _short_price(price: float) -> str:
     return utils.format_toman(price, persian_digits=True)
 
 def _vol_label(gb: int) -> str:
-    # حجم با ارقام فارسی و واژه فارسی برای جلوگیری از به‌هم‌ریختگی RTL
+    # حجم با ارقام فارسی و واژه «گیگ» برای کوتاهی و ثبات RTL
     g = int(gb)
-    return "نامحدود" if g == 0 else f"{utils.to_persian_digits(str(g))} گیگابایت"
+    return "نامحدود" if g == 0 else f"{utils.to_persian_digits(str(g))} گیگ"
 
 def _short_label(p: dict) -> str:
     # ترتیب ثابت: نام | روز | حجم | قیمت (همه با ارقام فارسی)
@@ -236,7 +236,7 @@ async def _do_purchase_confirmed(q, context: ContextTypes.DEFAULT_TYPE, custom_n
 
         # نام پیشفرض برای نامحدود
         gb_i = int(plan['gb'])
-        default_name = "سرویس نامحدود" if gb_i == 0 else f"سرویس {utils.to_persian_digits(str(gb_i))} گیگابایت"
+        default_name = "سرویس نامحدود" if gb_i == 0 else f"سرویس {utils.to_persian_digits(str(gb_i))} گیگ"
         final_name = custom_name or default_name
 
         note = f"tg:@{username}|id:{user_id}" if username else f"tg:id:{user_id}"
