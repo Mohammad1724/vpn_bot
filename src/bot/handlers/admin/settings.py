@@ -7,7 +7,7 @@ from telegram.constants import ParseMode
 from telegram.error import BadRequest
 
 import database as db
-from bot.constants import AWAIT_SETTING_VALUE
+from bot.constants import ADMIN_MENU, AWAIT_SETTING_VALUE, ADMIN_SETTINGS_MENU
 from bot.keyboards import get_admin_menu_keyboard
 
 logger = logging.getLogger(__name__)
@@ -29,7 +29,7 @@ def _kb(rows): return InlineKeyboardMarkup(rows)
 def _admin_edit_btn(title: str, key: str): return InlineKeyboardButton(title, callback_data=f"admin_edit_setting_{key}")
 def _back_to_settings_btn(): return InlineKeyboardButton("🔙 بازگشت به تنظیمات", callback_data="back_to_settings")
 
-# --- Main Settings Menu ---
+# --- Main Settings Menu (Entry Point) ---
 async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = getattr(update, "callback_query", None)
     text = "⚙️ **تنظیمات ربات**\n\nلطفاً بخش مورد نظر را انتخاب کنید:"
@@ -46,6 +46,7 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception: await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
     else:
         await update.message.reply_text(text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
+    return ADMIN_SETTINGS_MENU
 
 # --- Submenus ---
 async def maintenance_and_join_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -61,7 +62,7 @@ async def maintenance_and_join_submenu(update: Update, context: ContextTypes.DEF
         [_admin_edit_btn("✍️ ویرایش کانال عضویت", "force_join_channel")],
         [_back_to_settings_btn()]
     ])
-    await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN); return ADMIN_SETTINGS_MENU
 
 async def payment_and_guides_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
@@ -73,8 +74,8 @@ async def payment_and_guides_submenu(update: Update, context: ContextTypes.DEFAU
         [_admin_edit_btn("✍️ راهنمای شارژ", "guide_charging")],
         [_back_to_settings_btn()]
     ])
-    await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
-    
+    await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN); return ADMIN_SETTINGS_MENU
+
 async def payment_info_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     instr = _get("payment_instruction_text", "راهنمایی ثبت نشده است.")
@@ -88,7 +89,7 @@ async def payment_info_submenu(update: Update, context: ContextTypes.DEFAULT_TYP
     for i in slots:
         rows.append([_admin_edit_btn(f"شماره کارت {i}", f"payment_card_{i}_number"), _admin_edit_btn(f"صاحب کارت {i}", f"payment_card_{i}_name"), _admin_edit_btn(f"بانک {i}", f"payment_card_{i}_bank")])
     rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="settings_payment_guides")])
-    await q.edit_message_text(text, reply_markup=_kb(rows), parse_mode=ParseMode.MARKDOWN)
+    await q.edit_message_text(text, reply_markup=_kb(rows), parse_mode=ParseMode.MARKDOWN); return ADMIN_SETTINGS_MENU
 
 async def service_configs_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
@@ -100,13 +101,11 @@ async def service_configs_submenu(update: Update, context: ContextTypes.DEFAULT_
         [InlineKeyboardButton("🌐 ویرایش دامنه‌های ساب", callback_data="settings_subdomains")],
         [_back_to_settings_btn()]
     ])
-    await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
-    
+    await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN); return ADMIN_SETTINGS_MENU
+
 async def subdomains_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
-    vol = _get("volume_based_sub_domains", "(خالی)")
-    unlim = _get("unlimited_sub_domains", "(خالی)")
-    gen = _get("sub_domains", "(خالی)")
+    vol = _get("volume_based_sub_domains", "(خالی)"); unlim = _get("unlimited_sub_domains", "(خالی)"); gen = _get("sub_domains", "(خالی)")
     text = f"**🌐 دامنه‌های ساب**\n\n- حجمی: `{vol}`\n- نامحدود: `{unlim}`\n- عمومی: `{gen}`"
     kb = _kb([
         [_admin_edit_btn("✍️ ویرایش دامنه‌های حجمی", "volume_based_sub_domains")],
@@ -114,7 +113,7 @@ async def subdomains_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE)
         [_admin_edit_btn("✍️ ویرایش دامنه‌های عمومی", "sub_domains")],
         [InlineKeyboardButton("🔙 بازگشت", callback_data="settings_service_configs")]
     ])
-    await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN); return ADMIN_SETTINGS_MENU
 
 async def reports_and_reminders_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
@@ -130,7 +129,7 @@ async def reports_and_reminders_submenu(update: Update, context: ContextTypes.DE
         [_admin_edit_btn("✍️ ویرایش روزهای یادآور", "expiry_reminder_days"), _admin_edit_btn("✍️ ویرایش حداقل حجم یادآور", "expiry_reminder_min_remaining_gb")],
         [_back_to_settings_btn()]
     ])
-    await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN); return ADMIN_SETTINGS_MENU
 
 # --- Edit Logic ---
 async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -141,7 +140,6 @@ async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     tip = ""
     if key.startswith("payment_card_"): tip = "\n(برای پاک کردن، یک خط تیره `-` ارسال کنید)"
     elif "sub_domains" in key: tip = "\n(دامنه‌ها را با کاما جدا کنید)"
-    
     text = f"✍️ مقدار جدید برای **{key}** را ارسال کنید.{tip}\n/cancel برای انصراف\n\n**مقدار فعلی:**\n`{cur}`"
     try: await q.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
     except BadRequest: await q.edit_message_text(text)
@@ -155,8 +153,7 @@ async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_T
     db.set_setting(key, val)
     await update.message.reply_text(f"✅ مقدار «{key}» ذخیره شد.")
     context.user_data.pop('editing_setting_key', None)
-    await settings_menu(update, context)
-    return ConversationHandler.END
+    await settings_menu(update, context); return ADMIN_SETTINGS_MENU
 
 # --- Toggles & Other Actions ---
 async def toggle_maintenance(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -172,7 +169,7 @@ async def edit_default_link_start(update: Update, context: ContextTypes.DEFAULT_
     q = update.callback_query; await q.answer()
     current = _get("default_sub_link_type", "sub")
     text = f"🔗 نوع پیش‌فرض لینک اشتراک (فعلی: {current}) را انتخاب کنید:"
-    kb = _kb([[InlineKeyboardButton("V2Ray (sub)", callback_data="set_default_link_sub"), InlineKeyboardButton("Auto", callback_data="set_default_link_auto")], [InlineKeyboardButton("Base64 (sub64)", callback_data="set_default_link_sub64"), InlineKeyboardButton("Sing-Box", callback_data="set_default_link_singbox")], [InlineKeyboardButton("Xray", callback_data="set_default_link_xray"), InlineKeyboardButton("Clash", callback_data="set_default_link_clash")], [InlineKeyboardButton("Clash Meta", callback_data="set_default_link_clashmeta")], [_back_to_settings_btn()]])
+    kb = _kb([[InlineKeyboardButton("V2Ray (sub)", callback_data="set_default_link_sub"), InlineKeyboardButton("Auto", callback_data="set_default_link_auto")], [InlineKeyboardButton("Base64 (sub64)", callback_data="set_default_link_sub64"), InlineKeyboardButton("Sing-Box", callback_data="set_default_link_singbox")], [InlineKeyboardButton("Xray", callback_data="set_default_link_xray"), InlineKeyboardButton("Clash", callback_data="set_default_link_clash")], [InlineKeyboardButton("Clash Meta", callback_data="set_default_link_clashmeta")], [InlineKeyboardButton("🔙 بازگشت", callback_data="settings_service_configs")]])
     await q.edit_message_text(text, reply_markup=kb)
 
 async def set_default_link_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -186,3 +183,4 @@ async def back_to_admin_menu_cb(update: Update, context: ContextTypes.DEFAULT_TY
     q = update.callback_query; await q.answer()
     try: await q.edit_message_text("🔙 بازگشت به منوی مدیریت", reply_markup=get_admin_menu_keyboard())
     except BadRequest: await context.bot.send_message(chat_id=q.from_user.id, text="🔙 بازگشت به منوی مدیریت", reply_markup=get_admin_menu_keyboard())
+    return ConversationHandler.END
