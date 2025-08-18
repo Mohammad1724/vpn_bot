@@ -62,9 +62,9 @@ def build_application():
     admin_filter = filters.User(user_id=admin_id_int)
     user_filter = ~admin_filter
 
-    # -------------------------
+    # =========================
     # User Conversations
-    # -------------------------
+    # =========================
     buy_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(check_channel_membership(buy_h.buy_start), pattern='^user_buy_')],
         states={
@@ -74,16 +74,14 @@ def build_application():
             ]
         },
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
-        per_user=True,
-        per_chat=True
+        per_user=True, per_chat=True
     )
 
     gift_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^🎁 کد هدیه$') & user_filter, check_channel_membership(gift_h.gift_code_entry))],
         states={constants.REDEEM_GIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, gift_h.redeem_gift_code)]},
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
-        per_user=True,
-        per_chat=True
+        per_user=True, per_chat=True
     )
 
     charge_conv = ConversationHandler(
@@ -96,8 +94,7 @@ def build_application():
             constants.CHARGE_RECEIPT: [MessageHandler(filters.PHOTO, charge_h.charge_receipt_received)],
         },
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
-        per_user=True,
-        per_chat=True
+        per_user=True, per_chat=True
     )
 
     transfer_conv = ConversationHandler(
@@ -123,13 +120,12 @@ def build_application():
         entry_points=[MessageHandler(filters.Regex('^📞 پشتیبانی$') & user_filter, check_channel_membership(support_h.support_ticket_start))],
         states={constants.SUPPORT_TICKET_OPEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, support_h.forward_to_admin)]},
         fallbacks=[CommandHandler('cancel', support_h.support_ticket_cancel)],
-        per_user=True,
-        per_chat=True
+        per_user=True, per_chat=True
     )
 
-    # -------------------------
+    # =========================
     # Admin Nested Conversations
-    # -------------------------
+    # =========================
     # Plans: add
     add_plan_conv = ConversationHandler(
         entry_points=[
@@ -279,9 +275,9 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # -------------------------
+    # =========================
     # Main Admin Conversation
-    # -------------------------
+    # =========================
     admin_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(f'^{constants.BTN_ADMIN_PANEL}$') & admin_filter, admin_c.admin_entry),
@@ -313,8 +309,8 @@ def build_application():
                 CallbackQueryHandler(admin_gift.gift_code_management_menu, pattern="^admin_gift$"),
                 CallbackQueryHandler(admin_c.shutdown_bot, pattern="^admin_shutdown$"),
 
-                # Common admin callbacks
-                CallbackQueryHandler(admin_users.admin_delete_service, pattern=r'^admin_delete_service_\d+$'),
+                # Common admin callbacks (delete service - flexible pattern)
+                CallbackQueryHandler(admin_users.admin_delete_service, pattern=r'^admin_delete_service_\d+(_\d+)?$'),
 
                 # Nested convs
                 admin_settings_conv,
@@ -330,6 +326,7 @@ def build_application():
                 CallbackQueryHandler(admin_plans.list_plans_admin, pattern=r'^admin_list_plans$'),
                 CallbackQueryHandler(admin_plans.admin_toggle_plan_visibility_callback, pattern=r'^admin_toggle_plan_\d+$'),
                 CallbackQueryHandler(admin_plans.admin_delete_plan_callback, pattern=r'^admin_delete_plan_\d+$'),
+                # Back
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
                 add_plan_conv,
                 edit_plan_conv,
@@ -345,6 +342,7 @@ def build_application():
                 CallbackQueryHandler(admin_reports.show_daily_report, pattern=r'^admin_report_daily$'),
                 CallbackQueryHandler(admin_reports.show_weekly_report, pattern=r'^admin_report_weekly$'),
                 CallbackQueryHandler(admin_reports.show_popular_plans_report, pattern=r'^admin_report_popular$'),
+                # Back
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
             ],
 
@@ -362,19 +360,20 @@ def build_application():
                 CallbackQueryHandler(admin_users.admin_user_toggle_ban_cb, pattern=r'^admin_user_toggle_ban_\d+$'),
                 CallbackQueryHandler(admin_users.admin_user_refresh_cb, pattern=r'^admin_user_refresh_\d+$'),
 
-                # حذف سرویس از همین منو
-                CallbackQueryHandler(admin_users.admin_delete_service, pattern=r'^admin_delete_service_\d+$'),
+                # حذف سرویس (pattern جدید و قدیم)
+                CallbackQueryHandler(admin_users.admin_delete_service, pattern=r'^admin_delete_service_\d+(_\d+)?$'),
 
-                # Broadcast (در صورت استفاده در این منو)
+                # Broadcast (اختیاری)
                 broadcast_conv,
 
-                # بازگشت
+                # Back
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
             ],
 
             # حالت دریافت مبلغ برای افزایش/کاهش موجودی
             constants.MANAGE_USER_AMOUNT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_users.manage_user_amount_received),
+                # Back
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
             ],
         },
@@ -385,9 +384,9 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # -------------------------
+    # =========================
     # Register Conversations
-    # -------------------------
+    # =========================
     application.add_handler(buy_conv)
     application.add_handler(gift_conv)
     application.add_handler(charge_conv)
@@ -400,23 +399,20 @@ def build_application():
     application.add_handler(CommandHandler("set_trial_days", set_trial_days, filters=admin_filter))
     application.add_handler(CommandHandler("set_trial_gb", set_trial_gb, filters=admin_filter))
 
-    # -------------------------
+    # =========================
     # Global Callbacks
-    # -------------------------
+    # =========================
     application.add_handler(CallbackQueryHandler(buy_h.confirm_purchase_callback, pattern="^confirmbuy$"), group=2)
     application.add_handler(CallbackQueryHandler(buy_h.cancel_purchase_callback, pattern="^cancelbuy$"), group=2)
 
     application.add_handler(MessageHandler(filters.REPLY & admin_filter, support_h.admin_reply_handler))
     application.add_handler(CallbackQueryHandler(support_h.close_ticket, pattern="^close_ticket_"))
 
-    application.add_handler(CallbackQueryHandler(admin_users.admin_confirm_charge_callback, pattern="^admin_confirm_charge_"), group=1)
-    application.add_handler(CallbackQueryHandler(admin_users.admin_reject_charge_callback, pattern="^admin_reject_charge_"), group=1)
-
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern="^check_membership$"))
 
-    # -------------------------
+    # =========================
     # Other (user) handlers
-    # -------------------------
+    # =========================
     user_services_handlers = [
         CallbackQueryHandler(check_channel_membership(us_h.view_service_callback), pattern="^view_service_"),
         CallbackQueryHandler(check_channel_membership(us_h.back_to_services_callback), pattern="^back_to_services$"),
