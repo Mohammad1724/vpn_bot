@@ -33,10 +33,15 @@ def _kb(rows):
     return InlineKeyboardMarkup(rows)
 
 def _admin_edit_btn(title: str, key: str):
+    # استفاده از الگوی موجود برای باز کردن ویرایش مقدار
     return InlineKeyboardButton(title, callback_data=f"admin_edit_setting_{key}")
 
 def _back_to_settings_btn():
     return InlineKeyboardButton("🔙 بازگشت به تنظیمات", callback_data="back_to_settings")
+
+def _get(key: str, default: str = "") -> str:
+    v = db.get_setting(key)
+    return v if v is not None else default
 
 # -------------------------
 # Main Settings Menu
@@ -44,6 +49,12 @@ def _back_to_settings_btn():
 
 async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = getattr(update, "callback_query", None)
+    # وضعیت گزارش‌ها برای نمایش
+    daily_on = _get_bool("report_daily_enabled", False)
+    weekly_on = _get_bool("report_weekly_enabled", False)
+    daily_label = f"گزارش روزانه: {'✅' if daily_on else '❌'}"
+    weekly_label = f"گزارش هفتگی: {'✅' if weekly_on else '❌'}"
+
     text = (
         "⚙️ تنظیمات\n\n"
         "یکی از گزینه‌های زیر را انتخاب کنید:"
@@ -55,8 +66,11 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
          InlineKeyboardButton("💳 پرداخت", callback_data="settings_payment")],
         [InlineKeyboardButton("🌐 دامنه‌های ساب", callback_data="settings_subdomains"),
          InlineKeyboardButton("📚 راهنماها", callback_data="settings_guides")],
-        # دکمه جدید تنظیمات سرویس تست (به trial_settings_ui وصل شده در app.py)
-        [InlineKeyboardButton("🧪 تنظیمات سرویس تست", callback_data="settings_trial")],
+        [InlineKeyboardButton("🔗 نوع لینک اشتراک", callback_data="edit_default_link_type"),
+         InlineKeyboardButton("🧪 تنظیمات سرویس تست", callback_data="settings_trial")],
+        # کلیدهای گزارش (بدون نیاز به ساب‌منو جدید)
+        [InlineKeyboardButton(daily_label, callback_data="toggle_report_report_daily_enabled"),
+         InlineKeyboardButton(weekly_label, callback_data="toggle_report_report_weekly_enabled")],
         [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back_to_menu")]
     ])
 
@@ -107,12 +121,19 @@ async def force_join_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def expiry_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     enabled = _get_bool("expiry_reminder_enabled", True)
-    days = db.get_setting("expiry_reminder_days") or "3"
+    days = _get("expiry_reminder_days", "3")
+    min_gb = _get("expiry_reminder_min_remaining_gb", "0")  # جدید: حداقل حجم باقیمانده
     status = "فعال ✅" if enabled else "غیرفعال ❌"
-    text = f"⏳ یادآور انقضا\n\nوضعیت: {status}\nارسال یادآوری {days} روز قبل از انقضا"
+    text = (
+        "⏳ یادآور انقضا\n\n"
+        f"وضعیت: {status}\n"
+        f"ارسال یادآوری {days} روز قبل از انقضا\n"
+        f"حداقل حجم باقیمانده برای یادآوری: {min_gb} GB"
+    )
     kb = _kb([
         [InlineKeyboardButton("تغییر وضعیت یادآور", callback_data="toggle_expiry_reminder")],
         [_admin_edit_btn("✍️ تعداد روز یادآوری", "expiry_reminder_days")],
+        [_admin_edit_btn("✍️ حداقل حجم باقیمانده (GB)", "expiry_reminder_min_remaining_gb")],
         [_back_to_settings_btn()]
     ])
     try:
@@ -122,22 +143,53 @@ async def expiry_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def payment_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
-    instr = db.get_setting("payment_instruction_text") or "راهنمایی ثبت نشده است."
-    text = "💳 پرداخت\n\nراهنمای پرداخت/شارژ:"
-    kb = _kb([
-        [_admin_edit_btn("✍️ ویرایش متن راهنمای پرداخت", "payment_instruction_text")],
-        [_back_to_settings_btn()]
-    ])
+    instr = _get("payment_instruction_text", "راهنمایی ثبت نشده است.")
+
+    # نمایش کارت‌ها: 1..3 (می‌توانید تا 5 افزایش دهید)
+    slots = [1, 2, 3]
+    lines = []
+    for i in slots:
+        num = _get(f"payment_card_{i}_number", "")
+        name = _get(f"payment_card_{i}_name", "")
+        bank = _get(f"payment_card_{i}_bank", "")
+        if num or name or bank:
+            lines.append(f"کارت {i}: {num} | {name} | {bank}")
+        else:
+            lines.append(f"کارت {i}: (خالی)")
+
+    text = (
+        "💳 پرداخت\n\n"
+        "راهنمای پرداخت/شارژ:\n"
+        f"{instr[:600]}\n\n"
+        "کارت‌ها (برای پاک کردن مقدار، کاراکتر «-» را به‌عنوان مقدار بفرستید):\n"
+        + "\n".join(lines)
+    )
+
+    # دکمه‌های ویرایش کارت‌ها و راهنما
+    rows = [
+        [_admin_edit_btn("✍️ ویرایش راهنمای پرداخت", "payment_instruction_text")],
+    ]
+    for i in slots:
+        rows.append([
+            _admin_edit_btn(f"✍️ شماره کارت {i}", f"payment_card_{i}_number"),
+            _admin_edit_btn(f"✍️ صاحب کارت {i}", f"payment_card_{i}_name"),
+        ])
+        rows.append([
+            _admin_edit_btn(f"✍️ نام بانک {i}", f"payment_card_{i}_bank"),
+        ])
+    rows.append([_back_to_settings_btn()])
+
+    kb = _kb(rows)
     try:
-        await q.edit_message_text(text + f"\n\n{instr[:500]}", reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+        await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
     except Exception:
-        await context.bot.send_message(chat_id=q.from_user.id, text=text + f"\n\n{instr[:500]}", reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+        await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
 
 async def subdomains_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
-    vol = db.get_setting("volume_based_sub_domains") or "(خالی)"
-    unlim = db.get_setting("unlimited_sub_domains") or "(خالی)"
-    gen = db.get_setting("sub_domains") or "(خالی)"
+    vol = _get("volume_based_sub_domains", "(خالی)")
+    unlim = _get("unlimited_sub_domains", "(خالی)")
+    gen = _get("sub_domains", "(خالی)")
     text = (
         "🌐 دامنه‌های ساب\n\n"
         "دامنه‌ها را با کاما جدا کنید. نمونه: sub1.example.com, sub2.example.com\n\n"
@@ -176,24 +228,16 @@ async def guides_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def edit_default_link_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
-    current = db.get_setting("default_sub_link_type") or "sub"
+    current = _get("default_sub_link_type", "sub")
     text = f"🔗 نوع پیش‌فرض لینک اشتراک (فعلی: {current}) را انتخاب کنید:"
     kb = _kb([
-        [
-            InlineKeyboardButton("V2Ray (sub)", callback_data="set_default_link_sub"),
-            InlineKeyboardButton("Auto", callback_data="set_default_link_auto"),
-        ],
-        [
-            InlineKeyboardButton("Base64 (sub64)", callback_data="set_default_link_sub64"),
-            InlineKeyboardButton("Sing-Box", callback_data="set_default_link_singbox"),
-        ],
-        [
-            InlineKeyboardButton("Xray", callback_data="set_default_link_xray"),
-            InlineKeyboardButton("Clash", callback_data="set_default_link_clash"),
-        ],
-        [
-            InlineKeyboardButton("Clash Meta", callback_data="set_default_link_clashmeta"),
-        ],
+        [InlineKeyboardButton("V2Ray (sub)", callback_data="set_default_link_sub"),
+         InlineKeyboardButton("Auto", callback_data="set_default_link_auto")],
+        [InlineKeyboardButton("Base64 (sub64)", callback_data="set_default_link_sub64"),
+         InlineKeyboardButton("Sing-Box", callback_data="set_default_link_singbox")],
+        [InlineKeyboardButton("Xray", callback_data="set_default_link_xray"),
+         InlineKeyboardButton("Clash", callback_data="set_default_link_clash")],
+        [InlineKeyboardButton("Clash Meta", callback_data="set_default_link_clashmeta")],
         [_back_to_settings_btn()]
     ])
     try:
@@ -245,6 +289,10 @@ async def toggle_expiry_reminder(update: Update, context: ContextTypes.DEFAULT_T
 async def toggle_report_setting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     الگوی کلی: toggle_report_<key> → مقدار True/False در DB با کلید همان <key>
+    اینجا برای مثال از کلیدهای:
+      - report_daily_enabled
+      - report_weekly_enabled
+    استفاده شده است.
     """
     q = update.callback_query; await q.answer()
     try:
@@ -275,6 +323,16 @@ async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
         tip = "\n(یک عدد بین 1 تا 30 پیشنهاد می‌شود)"
     elif key == "force_join_channel":
         tip = "\n(نام کانال را بدون @ وارد کنید)"
+    elif key == "expiry_reminder_min_remaining_gb":
+        tip = "\n(حداقل حجم باقیمانده برای ارسال یادآور. عدد اعشاری مجاز است؛ 0 یعنی فقط بر اساس تاریخ)"
+    elif key.startswith("payment_card_"):
+        tip = "\n(برای پاک‌کردن مقدار، یک «-» ارسال کنید)"
+    elif key == "report_daily_time":
+        tip = "\n(فرمت پیشنهادی: HH:MM به وقت سرور)"
+    elif key == "report_weekly_time":
+        tip = "\n(فرمت پیشنهادی: HH:MM به وقت سرور)"
+    elif key == "report_weekly_weekday":
+        tip = "\n(روز هفته به‌صورت عددی: 1=دوشنبه ... 7=یکشنبه یا نام روز)"
     text = f"✍️ مقدار جدید برای «{key}» را ارسال کنید.{tip}\n/cancel برای انصراف\n\nمقدار فعلی:\n{(cur or '(خالی)')}"
     try:
         await q.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
@@ -289,6 +347,10 @@ async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_T
         return ConversationHandler.END
 
     val = (update.message.text or "").strip()
+    # پاک کردن مقدار با '-'
+    if val == "-":
+        val = ""
+
     try:
         db.set_setting(key, val)
         await update.message.reply_text(f"✅ مقدار «{key}» ذخیره شد.")
