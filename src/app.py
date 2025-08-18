@@ -9,6 +9,7 @@ from telegram.ext import (
 )
 from telegram import Update
 from telegram.request import HTTPXRequest
+    # noqa
 from telegram.error import NetworkError
 
 from bot import jobs, constants
@@ -24,7 +25,6 @@ from bot.handlers.admin import (
 )
 import bot.handlers.admin.trial_settings_ui as trial_ui
 from bot.handlers.trial import get_trial_service as trial_get_trial_service
-# مسیر درست برای ایمپورت دستورات تنظیم سرویس تست
 from bot.handlers.admin.trial_settings import set_trial_days, set_trial_gb
 from config import BOT_TOKEN, ADMIN_ID
 
@@ -211,7 +211,8 @@ def build_application():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, admin_gift.create_gift_amount_received)
             ],
         },
-        fallbacks=[CommandHandler('cancel', admin_gift.cancel_create_gift_code)],
+        # اصلاح نام تابع در fallback
+        fallbacks=[CommandHandler('cancel', admin_gift.cancel_create_gift)],
         map_to_parent={ConversationHandler.END: constants.ADMIN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
     )
@@ -275,7 +276,7 @@ def build_application():
                 MessageHandler(filters.Regex('^📩 ارسال پیام$'), admin_users.broadcast_menu),
                 MessageHandler(filters.Regex('^🛑 خاموش کردن ربات$'), admin_c.shutdown_bot),
 
-                # دکمه‌های کد هدیه داخل همین state
+                # لیست/حذف کد هدیه (در همین state برای سازگاری)
                 MessageHandler(filters.Regex(r'^📋 لیست کدهای هدیه$'), admin_gift.list_gift_codes),
                 CallbackQueryHandler(admin_gift.delete_gift_code_callback, pattern=r'^delete_gift_code_'),
 
