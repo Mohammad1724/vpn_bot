@@ -11,7 +11,8 @@ from telegram.constants import ParseMode
 from bot.constants import (
     USER_MANAGEMENT_MENU, BTN_BACK_TO_ADMIN_MENU,
     BROADCAST_MENU, BROADCAST_MESSAGE, BROADCAST_CONFIRM,
-    BROADCAST_TO_USER_ID, BROADCAST_TO_USER_MESSAGE
+    BROADCAST_TO_USER_ID, BROADCAST_TO_USER_MESSAGE,
+    MANAGE_USER_AMOUNT
 )
 import database as db
 import hiddify_api
@@ -19,11 +20,53 @@ import hiddify_api
 logger = logging.getLogger(__name__)
 
 # -------------------------------
-# منوی مدیریت کاربران (ورود)
+# Helpers
 # -------------------------------
 def _user_mgmt_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup([[BTN_BACK_TO_ADMIN_MENU]], resize_keyboard=True)
 
+def _action_kb(target_id: int, is_banned: bool) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton("➕ افزایش موجودی", callback_data=f"admin_user_addbal_{target_id}"),
+            InlineKeyboardButton("➖ کاهش موجودی", callback_data=f"admin_user_subbal_{target_id}"),
+        ],
+        [
+            InlineKeyboardButton("📋 سرویس‌های فعال", callback_data=f"admin_user_services_{target_id}"),
+            InlineKeyboardButton("🧾 سوابق خرید", callback_data=f"admin_user_purchases_{target_id}"),
+        ],
+        [
+            InlineKeyboardButton("🧪 ریست سرویس تست", callback_data=f"admin_user_trial_reset_{target_id}"),
+            InlineKeyboardButton("🔓 آزاد کردن" if is_banned else "🚫 مسدود کردن", callback_data=f"admin_user_toggle_ban_{target_id}"),
+        ],
+        [
+            InlineKeyboardButton("🔄 بروزرسانی پنل", callback_data=f"admin_user_refresh_{target_id}")
+        ]
+    ]
+    return InlineKeyboardMarkup(rows)
+
+async def _render_user_panel_text(target_id: int) -> tuple[str, bool]:
+    info = db.get_user(target_id)
+    if not info:
+        return "❌ کاربر یافت نشد.", False
+    try:
+        services = db.get_user_services(target_id) or []
+    except Exception:
+        services = []
+    ban_state = bool(info.get('is_banned'))
+    text = (
+        f"👤 شناسه: {target_id}\n"
+        f"👥 نام کاربری: {info.get('username') or '-'}\n"
+        f"💰 موجودی: {int(info.get('balance', 0)):,} تومان\n"
+        f"🧪 تست: {'استفاده کرده' if info.get('has_used_trial') else 'آزاد'}\n"
+        f"🚫 وضعیت: {'مسدود' if ban_state else 'آزاد'}\n"
+        f"📋 تعداد سرویس‌ها: {len(services)}"
+    )
+    return text, ban_state
+
+# -------------------------------
+# ورود به منوی مدیریت کاربران
+# -------------------------------
 async def user_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     em = update.effective_message
     await em.reply_text(
@@ -33,34 +76,19 @@ async def user_management_menu(update: Update, context: ContextTypes.DEFAULT_TYP
     )
     return USER_MANAGEMENT_MENU
 
-# -------------------------------
-# نمایش پنل خلاصه کاربر
-# -------------------------------
+# نمایش پنل خلاصه کاربر (از پیام یا کال‌بک)
 async def _send_user_panel(update: Update, target_id: int):
-    em = update.effective_message
-    info = db.get_user(target_id)
-    if not info:
-        await em.reply_text("❌ کاربر یافت نشد.", reply_markup=_user_mgmt_keyboard())
-        return
-
-    try:
-        services = db.get_user_services(target_id) or []
-    except Exception:
-        services = []
-
-    ban_state = bool(info.get('is_banned'))
-    ban_text = "آزاد کردن کاربر" if ban_state else "مسدود کردن کاربر"
-
-    text = (
-        f"👤 شناسه: {target_id}\n"
-        f"👥 نام کاربری: {info.get('username') or '-'}\n"
-        f"💰 موجودی: {int(info.get('balance', 0)):,} تومان\n"
-        f"🧪 تست: {'استفاده کرده' if info.get('has_used_trial') else 'آزاد'}\n"
-        f"🚫 وضعیت: {'مسدود' if ban_state else 'آزاد'}\n"
-        f"📋 تعداد سرویس‌ها: {len(services)}"
-    )
-    # اینجا فقط اطلاعات را نمایش می‌دهیم؛ اکشن‌ها را در صورت نیاز می‌توان به شکل اینلاین اضافه کرد
-    await em.reply_text(text, reply_markup=_user_mgmt_keyboard())
+    q = getattr(update, "callback_query", None)
+    text, ban_state = await _render_user_panel_text(target_id)
+    kb = _action_kb(target_id, ban_state)
+    if q:
+        await q.answer()
+        try:
+            await q.edit_message_text(text, reply_markup=kb)
+        except Exception:
+            await q.from_user.send_message(text, reply_markup=kb)
+    else:
+        await update.effective_message.reply_text(text, reply_markup=kb)
 
 # دریافت شناسه عددی و نمایش پنل
 async def manage_user_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -69,7 +97,6 @@ async def manage_user_id_received(update: Update, context: ContextTypes.DEFAULT_
     if not re.fullmatch(r"\d+", text):
         await em.reply_text("شناسه معتبر نیست. یک عدد مثبت وارد کنید.", reply_markup=_user_mgmt_keyboard())
         return USER_MANAGEMENT_MENU
-
     target_id = int(text)
     if target_id <= 0:
         await em.reply_text("شناسه معتبر نیست. یک عدد مثبت وارد کنید.", reply_markup=_user_mgmt_keyboard())
@@ -79,7 +106,182 @@ async def manage_user_id_received(update: Update, context: ContextTypes.DEFAULT_
     return USER_MANAGEMENT_MENU
 
 # -------------------------------
-# حذف سرویس از سمت ادمین (کالبک)
+# اکشن‌های پنل کاربر (کال‌بک‌ها)
+# -------------------------------
+async def admin_user_refresh_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    target_id = int(q.data.split('_')[-1])
+    await _send_user_panel(update, target_id)
+
+async def admin_user_services_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    target_id = int(q.data.split('_')[-1])
+
+    services = db.get_user_services(target_id) or []
+    if not services:
+        await q.edit_message_text("این کاربر سرویس فعالی ندارد.")
+        return
+    await q.edit_message_text("📋 سرویس‌های فعال کاربر:")
+    for s in services:
+        name = s.get('name') or f"سرویس {s.get('service_id')}"
+        sid = s.get('service_id')
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🗑️ حذف سرویس", callback_data=f"admin_delete_service_{sid}")]])
+        try:
+            await q.from_user.send_message(f"- {name} (ID: {sid})", reply_markup=kb)
+        except Exception:
+            pass
+
+async def admin_user_purchases_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    target_id = int(q.data.split('_')[-1])
+
+    purchases = None
+    # تلاش برای یافتن تابع مناسب در DB
+    try:
+        if hasattr(db, "get_user_purchase_history"):
+            purchases = db.get_user_purchase_history(target_id)
+        elif hasattr(db, "get_purchases_for_user"):
+            purchases = db.get_purchases_for_user(target_id)
+    except Exception as e:
+        logger.warning("Fetching purchases failed: %s", e)
+
+    if not purchases:
+        await q.edit_message_text("هیچ سابقه خریدی یافت نشد یا این قابلیت در پایگاه‌داده شما پیاده‌سازی نشده است.")
+        return
+
+    await q.edit_message_text("🧾 سوابق خرید کاربر:")
+    for p in purchases[:30]:
+        try:
+            price = int(float(p.get('price', 0)))
+        except Exception:
+            price = 0
+        ts = p.get('created_at') or p.get('timestamp', '-')
+        txt = f"- پلن: {p.get('plan_name') or '-'} | مبلغ: {price:,} تومان | تاریخ: {ts}"
+        try:
+            await q.from_user.send_message(txt)
+        except Exception:
+            pass
+
+async def admin_user_trial_reset_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    target_id = int(q.data.split('_')[-1])
+    ok = False
+    try:
+        if hasattr(db, "reset_user_trial"):
+            db.reset_user_trial(target_id); ok = True
+        elif hasattr(db, "set_user_trial_used"):
+            try:
+                db.set_user_trial_used(target_id, False); ok = True
+            except TypeError:
+                # نسخه‌ای که فقط True می‌زند؛ تلاش برای مقداردهی مستقیم اگر API ندارید
+                if hasattr(db, "clear_user_trial"):
+                    db.clear_user_trial(target_id); ok = True
+    except Exception as e:
+        logger.warning("Trial reset failed: %s", e)
+        ok = False
+
+    if ok:
+        await q.edit_message_text("✅ وضعیت تست کاربر ریست شد.")
+    else:
+        await q.edit_message_text("❌ ریست تست ناموفق بود یا در DB پشتیبانی نشده است.")
+
+async def admin_user_toggle_ban_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    target_id = int(q.data.split('_')[-1])
+    info = db.get_user(target_id)
+    if not info:
+        await q.edit_message_text("❌ کاربر یافت نشد.")
+        return
+    ban_state = bool(info.get('is_banned'))
+    ok = False
+    try:
+        if hasattr(db, "set_user_banned"):
+            db.set_user_banned(target_id, not ban_state); ok = True
+        elif ban_state and hasattr(db, "unban_user"):
+            db.unban_user(target_id); ok = True
+        elif not ban_state and hasattr(db, "ban_user"):
+            db.ban_user(target_id); ok = True
+    except Exception as e:
+        logger.warning("Toggle ban failed: %s", e)
+        ok = False
+
+    if ok:
+        await _send_user_panel(update, target_id)
+    else:
+        await q.edit_message_text("❌ تغییر وضعیت مسدودی ناموفق بود یا در DB پشتیبانی نشده است.")
+
+# افزایش/کاهش موجودی: مرحله انتخاب اکشن → دریافت مبلغ
+async def admin_user_addbal_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    target_id = int(q.data.split('_')[-1])
+    context.user_data["muid"] = target_id
+    context.user_data["mop"] = "add"
+    await q.edit_message_text(f"مبلغ افزایش موجودی برای کاربر {target_id} را وارد کنید:", reply_markup=None)
+    return MANAGE_USER_AMOUNT
+
+async def admin_user_subbal_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    target_id = int(q.data.split('_')[-1])
+    context.user_data["muid"] = target_id
+    context.user_data["mop"] = "sub"
+    await q.edit_message_text(f"مبلغ کاهش موجودی برای کاربر {target_id} را وارد کنید:", reply_markup=None)
+    return MANAGE_USER_AMOUNT
+
+async def manage_user_amount_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    em = update.effective_message
+    txt = (em.text or "").strip().replace(",", "")
+    try:
+        amount = int(abs(float(txt)))
+    except Exception:
+        await em.reply_text("❌ مبلغ نامعتبر است. یک عدد مثبت وارد کنید.", reply_markup=_user_mgmt_keyboard())
+        return MANAGE_USER_AMOUNT
+
+    target_id = context.user_data.get("muid")
+    op = context.user_data.get("mop")
+    if not target_id or op not in ("add", "sub"):
+        await em.reply_text("❌ حالت نامعتبر. دوباره تلاش کنید.", reply_markup=_user_mgmt_keyboard())
+        return USER_MANAGEMENT_MENU
+
+    delta = amount if op == "add" else -amount
+    ok = False
+    try:
+        if hasattr(db, "change_balance"):
+            db.change_balance(target_id, delta); ok = True
+        elif delta >= 0 and hasattr(db, "add_balance"):
+            db.add_balance(target_id, amount); ok = True
+        elif delta < 0 and hasattr(db, "decrease_balance"):
+            db.decrease_balance(target_id, -delta); ok = True
+        elif hasattr(db, "get_user") and hasattr(db, "set_balance"):
+            info = db.get_user(target_id)
+            new_bal = int(info.get('balance', 0)) + delta
+            if new_bal < 0:
+                new_bal = 0
+            db.set_balance(target_id, new_bal); ok = True
+    except Exception as e:
+        logger.warning("Balance update failed: %s", e)
+        ok = False
+
+    if ok:
+        await em.reply_text("✅ موجودی کاربر به‌روزرسانی شد.")
+    else:
+        await em.reply_text("❌ به‌روزرسانی موجودی ناموفق بود یا در DB پشتیبانی نشده است.")
+
+    # پاکسازی و بازگشت به پنل کاربر
+    context.user_data.pop("muid", None)
+    context.user_data.pop("mop", None)
+    # نمایش پنل خلاصه دوباره
+    await _send_user_panel(update, target_id)
+    return USER_MANAGEMENT_MENU
+
+# -------------------------------
+# حذف سرویس از سمت ادمین (کال‌بک عمومی که قبلاً داشتید)
 # -------------------------------
 async def admin_delete_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -104,36 +306,26 @@ async def admin_delete_service(update: Update, context: ContextTypes.DEFAULT_TYP
         await q.edit_message_text("❌ حذف سرویس از پنل ناموفق بود.")
 
 # -------------------------------
-# ارسال پیام (Broadcast)
+# ارسال پیام (Broadcast) - همان نسخه قبلی شما
 # -------------------------------
 def _broadcast_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup([["ارسال به همه کاربران", "ارسال به کاربر خاص"], [BTN_BACK_TO_ADMIN_MENU]], resize_keyboard=True)
 
 async def broadcast_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    em = update.effective_message
-    await em.reply_text("بخش ارسال پیام", reply_markup=_broadcast_menu_keyboard())
+    await update.effective_message.reply_text("بخش ارسال پیام", reply_markup=_broadcast_menu_keyboard())
     return BROADCAST_MENU
 
 async def broadcast_to_all_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     context.user_data["broadcast_mode"] = "all"
-    await update.effective_message.reply_text(
-        "متن/رسانه پیام همگانی را بفرستید:",
-        reply_markup=ReplyKeyboardMarkup([[BTN_BACK_TO_ADMIN_MENU]], resize_keyboard=True)
-    )
+    await update.effective_message.reply_text("متن/رسانه پیام همگانی را بفرستید:", reply_markup=ReplyKeyboardMarkup([[BTN_BACK_TO_ADMIN_MENU]], resize_keyboard=True))
     return BROADCAST_MESSAGE
 
 async def broadcast_to_all_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['broadcast_message'] = update.effective_message
     total_users = db.get_all_user_ids()
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ تایید ارسال", callback_data="broadcast_confirm_yes"),
-        InlineKeyboardButton("❌ انصراف", callback_data="broadcast_confirm_no")
-    ]])
-    await update.effective_message.reply_text(
-        f"پیش‌نمایش ثبت شد. ارسال به {len(total_users)} کاربر انجام شود؟",
-        reply_markup=keyboard
-    )
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("✅ تایید ارسال", callback_data="broadcast_confirm_yes"), InlineKeyboardButton("❌ انصراف", callback_data="broadcast_confirm_no")]])
+    await update.effective_message.reply_text(f"پیش‌نمایش ثبت شد. ارسال به {len(total_users)} کاربر انجام شود؟", reply_markup=keyboard)
     return BROADCAST_CONFIRM
 
 async def broadcast_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -146,7 +338,6 @@ async def broadcast_confirm_callback(update: Update, context: ContextTypes.DEFAU
             pass
         context.user_data.clear()
         return ConversationHandler.END
-
     msg = context.user_data.get("broadcast_message")
     if not msg:
         try:
@@ -155,63 +346,47 @@ async def broadcast_confirm_callback(update: Update, context: ContextTypes.DEFAU
             pass
         context.user_data.clear()
         return ConversationHandler.END
-
     user_ids = db.get_all_user_ids()
     ok = fail = 0
     try:
         await q.edit_message_text(f"در حال ارسال به {len(user_ids)} کاربر... ⏳", reply_markup=None)
     except Exception:
         pass
-
     for uid in user_ids:
         try:
-            await context.bot.copy_message(chat_id=uid, from_chat_id=msg.chat.id, message_id=msg.message_id)
-            ok += 1
+            await context.bot.copy_message(chat_id=uid, from_chat_id=msg.chat.id, message_id=msg.message_id); ok += 1
         except RetryAfter as e:
             await asyncio.sleep(getattr(e, "retry_after", 1) + 1)
             try:
-                await context.bot.copy_message(chat_id=uid, from_chat_id=msg.chat.id, message_id=msg.message_id)
-                ok += 1
+                await context.bot.copy_message(chat_id=uid, from_chat_id=msg.chat.id, message_id=msg.message_id); ok += 1
             except Exception:
                 fail += 1
         except (Forbidden, BadRequest, TimedOut, NetworkError):
             fail += 1
         except Exception as e:
-            logger.warning("Broadcast send failed to %s: %s", uid, e)
-            fail += 1
+            logger.warning("Broadcast send failed to %s: %s", uid, e); fail += 1
         await asyncio.sleep(0.05)
-
     summary = f"ارسال همگانی تمام شد.\nموفق: {ok}\nناموفق: {fail}\nکل: {len(user_ids)}"
     try:
         await q.edit_message_text(summary, reply_markup=None)
     except Exception:
         await q.from_user.send_message(summary)
-
     context.user_data.clear()
     return ConversationHandler.END
 
 async def broadcast_to_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.clear()
-    context.user_data["broadcast_mode"] = "single"
-    await update.effective_message.reply_text(
-        "شناسه عددی کاربر را بفرستید:",
-        reply_markup=ReplyKeyboardMarkup([[BTN_BACK_TO_ADMIN_MENU]], resize_keyboard=True)
-    )
+    context.user_data.clear(); context.user_data["broadcast_mode"] = "single"
+    await update.effective_message.reply_text("شناسه عددی کاربر را بفرستید:", reply_markup=ReplyKeyboardMarkup([[BTN_BACK_TO_ADMIN_MENU]], resize_keyboard=True))
     return BROADCAST_TO_USER_ID
 
 async def broadcast_to_user_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        uid = int((update.effective_message.text or "").strip())
-        assert uid > 0
+        uid = int((update.effective_message.text or "").strip()); assert uid > 0
     except Exception:
         await update.effective_message.reply_text("شناسه معتبر نیست. یک عدد مثبت بفرستید.")
         return BROADCAST_TO_USER_ID
-
     context.user_data["target_user_id"] = uid
-    await update.effective_message.reply_text(
-        "متن/رسانه پیام را بفرستید:",
-        reply_markup=ReplyKeyboardMarkup([[BTN_BACK_TO_ADMIN_MENU]], resize_keyboard=True)
-    )
+    await update.effective_message.reply_text("متن/رسانه پیام را بفرستید:", reply_markup=ReplyKeyboardMarkup([[BTN_BACK_TO_ADMIN_MENU]], resize_keyboard=True))
     return BROADCAST_TO_USER_MESSAGE
 
 async def broadcast_to_user_message_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -220,7 +395,6 @@ async def broadcast_to_user_message_received(update: Update, context: ContextTyp
         await update.effective_message.reply_text("شناسه کاربر مشخص نیست.")
         context.user_data.clear()
         return ConversationHandler.END
-
     msg = update.effective_message
     try:
         await context.bot.copy_message(chat_id=uid, from_chat_id=msg.chat.id, message_id=msg.message_id)
@@ -230,52 +404,25 @@ async def broadcast_to_user_message_received(update: Update, context: ContextTyp
     context.user_data.clear()
     return ConversationHandler.END
 
-# -------------------------------
-# Callbacks تایید/رد شارژ (در صورت استفاده در پروژه)
-# -------------------------------
+# تایید/رد شارژ (اگر در پروژه استفاده می‌کنید)
 async def admin_confirm_charge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """تایید شارژ کاربر (در صورت وجود این فلو در پروژه)"""
-    q = update.callback_query
-    await q.answer()
+    q = update.callback_query; await q.answer()
+    try: charge_id = int(q.data.split('_')[-1])
+    except Exception: await q.edit_message_text("❌ شناسه شارژ نامعتبر است."); return
     try:
-        charge_id = int(q.data.split('_')[-1])
-    except Exception:
-        await q.edit_message_text("❌ شناسه شارژ نامعتبر است.")
-        return
-    # تلاش برای فراخوانی توابع دیتابیس اگر موجود باشند
-    try:
-        if hasattr(db, "confirm_charge_request"):
-            ok = db.confirm_charge_request(charge_id)
-        elif hasattr(db, "admin_confirm_charge"):
-            ok = db.admin_confirm_charge(charge_id)
-        else:
-            ok = False
-    except Exception:
-        ok = False
-    if ok:
-        await q.edit_message_text("✅ شارژ تایید شد.")
-    else:
-        await q.edit_message_text("❌ تایید شارژ ناموفق بود یا قبلاً پردازش شده است.")
+        if hasattr(db, "confirm_charge_request"): ok = db.confirm_charge_request(charge_id)
+        elif hasattr(db, "admin_confirm_charge"): ok = db.admin_confirm_charge(charge_id)
+        else: ok = False
+    except Exception: ok = False
+    await q.edit_message_text("✅ شارژ تایید شد." if ok else "❌ تایید شارژ ناموفق بود یا قبلاً پردازش شده است.")
 
 async def admin_reject_charge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """رد شارژ کاربر (در صورت وجود این فلو در پروژه)"""
-    q = update.callback_query
-    await q.answer()
+    q = update.callback_query; await q.answer()
+    try: charge_id = int(q.data.split('_')[-1])
+    except Exception: await q.edit_message_text("❌ شناسه شارژ نامعتبر است."); return
     try:
-        charge_id = int(q.data.split('_')[-1])
-    except Exception:
-        await q.edit_message_text("❌ شناسه شارژ نامعتبر است.")
-        return
-    try:
-        if hasattr(db, "reject_charge_request"):
-            ok = db.reject_charge_request(charge_id)
-        elif hasattr(db, "admin_reject_charge"):
-            ok = db.admin_reject_charge(charge_id)
-        else:
-            ok = False
-    except Exception:
-        ok = False
-    if ok:
-        await q.edit_message_text("✅ شارژ رد شد.")
-    else:
-        await q.edit_message_text("❌ رد شارژ ناموفق بود یا قبلاً پردازش شده است.")
+        if hasattr(db, "reject_charge_request"): ok = db.reject_charge_request(charge_id)
+        elif hasattr(db, "admin_reject_charge"): ok = db.admin_reject_charge(charge_id)
+        else: ok = False
+    except Exception: ok = False
+    await q.edit_message_text("✅ شارژ رد شد." if ok else "❌ رد شارژ ناموفق بود یا قبلاً پردازش شده است.")
