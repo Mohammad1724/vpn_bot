@@ -74,14 +74,16 @@ def build_application():
             ]
         },
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
-        per_user=True, per_chat=True
+        per_user=True,
+        per_chat=True
     )
 
     gift_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^🎁 کد هدیه$') & user_filter, check_channel_membership(gift_h.gift_code_entry))],
         states={constants.REDEEM_GIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, gift_h.redeem_gift_code)]},
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
-        per_user=True, per_chat=True
+        per_user=True,
+        per_chat=True
     )
 
     charge_conv = ConversationHandler(
@@ -94,7 +96,8 @@ def build_application():
             constants.CHARGE_RECEIPT: [MessageHandler(filters.PHOTO, charge_h.charge_receipt_received)],
         },
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
-        per_user=True, per_chat=True
+        per_user=True,
+        per_chat=True
     )
 
     transfer_conv = ConversationHandler(
@@ -120,7 +123,8 @@ def build_application():
         entry_points=[MessageHandler(filters.Regex('^📞 پشتیبانی$') & user_filter, check_channel_membership(support_h.support_ticket_start))],
         states={constants.SUPPORT_TICKET_OPEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, support_h.forward_to_admin)]},
         fallbacks=[CommandHandler('cancel', support_h.support_ticket_cancel)],
-        per_user=True, per_chat=True
+        per_user=True,
+        per_chat=True
     )
 
     # =========================
@@ -346,6 +350,30 @@ def build_application():
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
             ],
 
+            # BACKUP_MENU
+            constants.BACKUP_MENU: [
+                # ReplyKeyboard actions
+                MessageHandler(filters.Regex(r'^📥 دریافت فایل پشتیبان$') & admin_filter, admin_backup.send_backup_file),
+                MessageHandler(filters.Regex(r'^📤 بارگذاری فایل پشتیبان$') & admin_filter, admin_backup.restore_start),
+                MessageHandler(filters.Regex(r'^⚙️ تنظیمات پشتیبان‌گیری خودکار$') & admin_filter, admin_backup.edit_auto_backup_start),
+                MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
+
+                # Inline callbacks for backup settings
+                CallbackQueryHandler(admin_backup.backup_restore_menu, pattern=r'^back_to_backup_menu$'),
+                CallbackQueryHandler(admin_backup.edit_auto_backup_start, pattern=r'^edit_auto_backup$'),
+                CallbackQueryHandler(admin_backup.edit_backup_interval_start, pattern=r'^edit_backup_interval$'),
+                CallbackQueryHandler(admin_backup.set_backup_interval, pattern=r'^set_backup_interval_\d+$'),
+                CallbackQueryHandler(admin_backup.edit_backup_target_start, pattern=r'^edit_backup_target$'),
+                CallbackQueryHandler(admin_backup.admin_confirm_restore_callback, pattern=r'^admin_confirm_restore$'),
+                CallbackQueryHandler(admin_backup.admin_cancel_restore_callback, pattern=r'^admin_cancel_restore$'),
+            ],
+
+            # RESTORE_UPLOAD (waiting for document)
+            constants.RESTORE_UPLOAD: [
+                MessageHandler(filters.Document.ALL & admin_filter, admin_backup.restore_receive_file),
+                MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
+            ],
+
             # USER_MANAGEMENT_MENU
             constants.USER_MANAGEMENT_MENU: [
                 # دریافت آیدی عددی کاربر
@@ -370,11 +398,26 @@ def build_application():
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
             ],
 
-            # حالت دریافت مبلغ برای افزایش/کاهش موجودی
+            # MANAGE_USER_AMOUNT (waiting for amount input)
             constants.MANAGE_USER_AMOUNT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_users.manage_user_amount_received),
-                # Back
+                # Allow inline actions/cancel while waiting for amount
+                CallbackQueryHandler(admin_users.admin_user_amount_cancel_cb, pattern=r'^admin_user_amount_cancel_\d+$'),
+                CallbackQueryHandler(admin_users.admin_user_addbal_cb, pattern=r'^admin_user_addbal_\d+$'),
+                CallbackQueryHandler(admin_users.admin_user_subbal_cb, pattern=r'^admin_user_subbal_\d+$'),
+                CallbackQueryHandler(admin_users.admin_user_services_cb, pattern=r'^admin_user_services_\d+$'),
+                CallbackQueryHandler(admin_users.admin_user_purchases_cb, pattern=r'^admin_user_purchases_\d+$'),
+                CallbackQueryHandler(admin_users.admin_user_trial_reset_cb, pattern=r'^admin_user_trial_reset_\d+$'),
+                CallbackQueryHandler(admin_users.admin_user_toggle_ban_cb, pattern=r'^admin_user_toggle_ban_\d+$'),
+                CallbackQueryHandler(admin_users.admin_user_refresh_cb, pattern=r'^admin_user_refresh_\d+$'),
+                CallbackQueryHandler(admin_users.admin_delete_service, pattern=r'^admin_delete_service_\d+(_\d+)?$'),
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
+            ],
+
+            # AWAIT_SETTING_VALUE (for backup target chat id)
+            constants.AWAIT_SETTING_VALUE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_backup.backup_target_received),
+                CommandHandler('cancel', admin_backup.cancel_backup_settings),
             ],
         },
         fallbacks=[
@@ -407,8 +450,6 @@ def build_application():
 
     application.add_handler(MessageHandler(filters.REPLY & admin_filter, support_h.admin_reply_handler))
     application.add_handler(CallbackQueryHandler(support_h.close_ticket, pattern="^close_ticket_"))
-
-    application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern="^check_membership$"))
 
     # =========================
     # Other (user) handlers
