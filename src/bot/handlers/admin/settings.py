@@ -1,4 +1,4 @@
-# -*- ' coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 import logging
 from telegram.ext import ContextTypes, ConversationHandler
@@ -67,9 +67,10 @@ async def payment_and_guides_submenu(update: Update, context: ContextTypes.DEFAU
     q = update.callback_query; await q.answer()
     text = "**💳 پرداخت و راهنماها**\n\nاز گزینه‌های زیر برای ویرایش استفاده کنید."
     kb = _kb([
-        [_admin_edit_btn("✍️ ویرایش اطلاعات پرداخت", "payment_info")], # یک دکمه برای همه کارت‌ها
+        [InlineKeyboardButton("✍️ ویرایش اطلاعات پرداخت", callback_data="payment_info_submenu")],
         [_admin_edit_btn("✍️ راهنمای اتصال", "guide_connection")],
         [_admin_edit_btn("✍️ راهنمای خرید", "guide_buying")],
+        [_admin_edit_btn("✍️ راهنمای شارژ", "guide_charging")],
         [_back_to_settings_btn()]
     ])
     await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
@@ -92,17 +93,26 @@ async def payment_info_submenu(update: Update, context: ContextTypes.DEFAULT_TYP
 async def service_configs_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     default_link = _get("default_sub_link_type", "sub")
-    vol_domains = _get("volume_based_sub_domains", "(خالی)")
-    unlim_domains = _get("unlimited_sub_domains", "(خالی)")
-    gen_domains = _get("sub_domains", "(خالی)")
-    text = f"**⚙️ تنظیمات سرویس**\n\n- نوع لینک پیش‌فرض: {default_link}\n- دامنه‌های حجمی: `{vol_domains}`\n- دامنه‌های نامحدود: `{unlim_domains}`\n- دامنه‌های عمومی: `{gen_domains}`"
+    text = f"**⚙️ تنظیمات سرویس**\n\n- نوع لینک پیش‌فرض: {default_link}"
     kb = _kb([
         [InlineKeyboardButton("🔗 ویرایش نوع لینک پیش‌فرض", callback_data="edit_default_link_type")],
         [InlineKeyboardButton("🧪 ویرایش تنظیمات سرویس تست", callback_data="settings_trial")],
+        [InlineKeyboardButton("🌐 ویرایش دامنه‌های ساب", callback_data="settings_subdomains")],
+        [_back_to_settings_btn()]
+    ])
+    await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    
+async def subdomains_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query; await q.answer()
+    vol = _get("volume_based_sub_domains", "(خالی)")
+    unlim = _get("unlimited_sub_domains", "(خالی)")
+    gen = _get("sub_domains", "(خالی)")
+    text = f"**🌐 دامنه‌های ساب**\n\n- حجمی: `{vol}`\n- نامحدود: `{unlim}`\n- عمومی: `{gen}`"
+    kb = _kb([
         [_admin_edit_btn("✍️ ویرایش دامنه‌های حجمی", "volume_based_sub_domains")],
         [_admin_edit_btn("✍️ ویرایش دامنه‌های نامحدود", "unlimited_sub_domains")],
         [_admin_edit_btn("✍️ ویرایش دامنه‌های عمومی", "sub_domains")],
-        [_back_to_settings_btn()]
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="settings_service_configs")]
     ])
     await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
 
@@ -126,12 +136,6 @@ async def reports_and_reminders_submenu(update: Update, context: ContextTypes.DE
 async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     key = q.data.replace("admin_edit_setting_", "").strip()
-    
-    # اگر روی دکمه ویرایش اطلاعات پرداخت کلیک شد، به منوی مخصوص آن برود
-    if key == "payment_info":
-        await payment_info_submenu(update, context)
-        return ConversationHandler.END # از گفتگو خارج می‌شویم چون این یک منو است
-
     context.user_data['editing_setting_key'] = key
     cur = _get(key, "(خالی)")
     tip = ""
