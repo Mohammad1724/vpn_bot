@@ -13,7 +13,11 @@ def _get_base_url() -> str:
     return f"https://{PANEL_DOMAIN}/{ADMIN_PATH}/api/v2/admin/"
 
 def _get_api_headers() -> dict:
-    return { "Hiddify-API-Key": API_KEY, "Content-Type": "application/json", "Accept": "application/json" }
+    return {
+        "Hiddify-API-Key": API_KEY,
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+    }
 
 async def _make_client(timeout: float = 20.0) -> httpx.AsyncClient:
     try:
@@ -23,17 +27,23 @@ async def _make_client(timeout: float = 20.0) -> httpx.AsyncClient:
         http2_support = False
     return httpx.AsyncClient(timeout=timeout, http2=http2_support)
 
-async def create_hiddify_user(plan_days: int, plan_gb: int, user_telegram_id: str, custom_name: str = "") -> dict | None:
+async def create_hiddify_user(plan_days: int, plan_gb: float, user_telegram_id: str, custom_name: str = "") -> dict | None:
     endpoint = _get_base_url() + "user/"
 
     random_suffix = uuid.uuid4().hex[:4]
     base_name = custom_name if custom_name else f"tg-{user_telegram_id.split(':')[-1]}"
     unique_user_name = f"{base_name}-{random_suffix}"
 
+    # اجازه حجم اعشاری (زیر 1GB) => float
+    try:
+        usage_limit_gb = float(plan_gb)
+    except Exception:
+        usage_limit_gb = 0.0
+
     payload = {
         "name": unique_user_name,
         "package_days": int(plan_days),
-        "usage_limit_GB": int(plan_gb),
+        "usage_limit_GB": usage_limit_gb,
         "comment": user_telegram_id
     }
 
@@ -72,18 +82,22 @@ async def get_user_info(user_uuid: str) -> dict | None:
         logger.error("get_user_info error: %s", e, exc_info=True)
         return None
 
-async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: int) -> dict | None:
+async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float) -> dict | None:
     """
     سرویس کاربر را با PATCH به endpoint کاربر تمدید می‌کند (سازگار با Hiddify API v2.2.0).
     """
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
+    try:
+        usage_limit_gb = float(plan_gb)
+    except Exception:
+        usage_limit_gb = 0.0
+
     payload = {
         "package_days": int(plan_days),
-        "usage_limit_GB": int(plan_gb),
+        "usage_limit_GB": usage_limit_gb,
     }
     try:
         async with await _make_client(timeout=30.0) as client:
-            # از متد PATCH برای ویرایش/تمدید استفاده می‌کنیم
             resp = await client.patch(endpoint, json=payload, headers=_get_api_headers())
             resp.raise_for_status()
             return resp.json()
