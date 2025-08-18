@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+# -*- ' coding: utf-8 -*-
 
 import logging
 from telegram.ext import ContextTypes, ConversationHandler
@@ -8,6 +8,7 @@ from telegram.error import BadRequest
 
 import database as db
 from bot.constants import AWAIT_SETTING_VALUE
+from bot.keyboards import get_admin_menu_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -64,27 +65,43 @@ async def maintenance_and_join_submenu(update: Update, context: ContextTypes.DEF
 
 async def payment_and_guides_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
+    text = "**💳 پرداخت و راهنماها**\n\nاز گزینه‌های زیر برای ویرایش استفاده کنید."
+    kb = _kb([
+        [_admin_edit_btn("✍️ ویرایش اطلاعات پرداخت", "payment_info")], # یک دکمه برای همه کارت‌ها
+        [_admin_edit_btn("✍️ راهنمای اتصال", "guide_connection")],
+        [_admin_edit_btn("✍️ راهنمای خرید", "guide_buying")],
+        [_back_to_settings_btn()]
+    ])
+    await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    
+async def payment_info_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query; await q.answer()
+    instr = _get("payment_instruction_text", "راهنمایی ثبت نشده است.")
     slots = [1, 2, 3]
     lines = []
     for i in slots:
         num = _get(f"payment_card_{i}_number"); name = _get(f"payment_card_{i}_name"); bank = _get(f"payment_card_{i}_bank")
-        lines.append(f"کارت {i}: {num or '(خالی)'} | {name or '(خالی)'} | {bank or '(خالی)'}")
-    text = "**💳 پرداخت و راهنماها**\n\n" + "\n".join(lines)
-    rows = [[_admin_edit_btn("✍️ راهنمای پرداخت", "payment_instruction_text")]]
+        lines.append(f"**کارت {i}:** {num or '(خالی)'} | {name or '(خالی)'} | {bank or '(خالی)'}")
+    text = f"**💳 اطلاعات پرداخت**\n\nراهنمای پرداخت:\n{instr}\n\n" + "\n".join(lines)
+    rows = [[_admin_edit_btn("✍️ ویرایش راهنمای پرداخت", "payment_instruction_text")]]
     for i in slots:
         rows.append([_admin_edit_btn(f"شماره کارت {i}", f"payment_card_{i}_number"), _admin_edit_btn(f"صاحب کارت {i}", f"payment_card_{i}_name"), _admin_edit_btn(f"بانک {i}", f"payment_card_{i}_bank")])
-    rows.append([_admin_edit_btn("✍️ راهنمای اتصال", "guide_connection"), _admin_edit_btn("✍️ راهنمای خرید", "guide_buying")])
-    rows.append([_back_to_settings_btn()])
-    await q.edit_message_text(text, reply_markup=_kb(rows))
+    rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="settings_payment_guides")])
+    await q.edit_message_text(text, reply_markup=_kb(rows), parse_mode=ParseMode.MARKDOWN)
 
 async def service_configs_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     default_link = _get("default_sub_link_type", "sub")
-    text = f"**⚙️ تنظیمات سرویس**\n\n- نوع لینک پیش‌فرض: {default_link}"
+    vol_domains = _get("volume_based_sub_domains", "(خالی)")
+    unlim_domains = _get("unlimited_sub_domains", "(خالی)")
+    gen_domains = _get("sub_domains", "(خالی)")
+    text = f"**⚙️ تنظیمات سرویس**\n\n- نوع لینک پیش‌فرض: {default_link}\n- دامنه‌های حجمی: `{vol_domains}`\n- دامنه‌های نامحدود: `{unlim_domains}`\n- دامنه‌های عمومی: `{gen_domains}`"
     kb = _kb([
         [InlineKeyboardButton("🔗 ویرایش نوع لینک پیش‌فرض", callback_data="edit_default_link_type")],
         [InlineKeyboardButton("🧪 ویرایش تنظیمات سرویس تست", callback_data="settings_trial")],
-        [InlineKeyboardButton("🌐 ویرایش دامنه‌های ساب", callback_data="settings_subdomains")],
+        [_admin_edit_btn("✍️ ویرایش دامنه‌های حجمی", "volume_based_sub_domains")],
+        [_admin_edit_btn("✍️ ویرایش دامنه‌های نامحدود", "unlimited_sub_domains")],
+        [_admin_edit_btn("✍️ ویرایش دامنه‌های عمومی", "sub_domains")],
         [_back_to_settings_btn()]
     ])
     await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
@@ -98,32 +115,32 @@ async def reports_and_reminders_submenu(update: Update, context: ContextTypes.DE
     min_gb = _get("expiry_reminder_min_remaining_gb", "0")
     text = f"**📊 گزارش‌ها و یادآورها**\n\n- گزارش روزانه: {daily_on}\n- گزارش هفتگی: {weekly_on}\n- یادآور انقضا: {expiry_on} ({expiry_days} روز قبل, حداقل {min_gb}GB)"
     kb = _kb([
-        [InlineKeyboardButton(f"تغییر گزارش روزانه", callback_data="toggle_report_report_daily_enabled")],
-        [InlineKeyboardButton(f"تغییر گزارش هفتگی", callback_data="toggle_report_report_weekly_enabled")],
+        [InlineKeyboardButton(f"تغییر گزارش روزانه", callback_data="toggle_report_report_daily_enabled"), InlineKeyboardButton(f"تغییر گزارش هفتگی", callback_data="toggle_report_report_weekly_enabled")],
         [InlineKeyboardButton(f"تغییر یادآور انقضا", callback_data="toggle_expiry_reminder")],
-        [_admin_edit_btn("✍️ ویرایش روزهای یادآور", "expiry_reminder_days")],
-        [_admin_edit_btn("✍️ ویرایش حداقل حجم یادآور", "expiry_reminder_min_remaining_gb")],
+        [_admin_edit_btn("✍️ ویرایش روزهای یادآور", "expiry_reminder_days"), _admin_edit_btn("✍️ ویرایش حداقل حجم یادآور", "expiry_reminder_min_remaining_gb")],
         [_back_to_settings_btn()]
     ])
     await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
-
-# --- Handlers for submenus that were already in app.py ---
-# These are kept for compatibility with the new menu structure
-async def expiry_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE): await reports_and_reminders_submenu(update, context)
-async def payment_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE): await payment_and_guides_submenu(update, context)
-async def subdomains_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE): await service_configs_submenu(update, context)
-async def guides_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE): await payment_and_guides_submenu(update, context)
 
 # --- Edit Logic ---
 async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     key = q.data.replace("admin_edit_setting_", "").strip()
+    
+    # اگر روی دکمه ویرایش اطلاعات پرداخت کلیک شد، به منوی مخصوص آن برود
+    if key == "payment_info":
+        await payment_info_submenu(update, context)
+        return ConversationHandler.END # از گفتگو خارج می‌شویم چون این یک منو است
+
     context.user_data['editing_setting_key'] = key
     cur = _get(key, "(خالی)")
-    tip = "\n(برای پاک کردن، یک خط تیره `-` ارسال کنید)" if key.startswith("payment_card_") else ""
-    text = f"✍️ مقدار جدید برای **{key}** را ارسال کنید.{tip}\n/cancel برای انصراف\n\n**مقدار فعلی:**\n{cur}"
+    tip = ""
+    if key.startswith("payment_card_"): tip = "\n(برای پاک کردن، یک خط تیره `-` ارسال کنید)"
+    elif "sub_domains" in key: tip = "\n(دامنه‌ها را با کاما جدا کنید)"
+    
+    text = f"✍️ مقدار جدید برای **{key}** را ارسال کنید.{tip}\n/cancel برای انصراف\n\n**مقدار فعلی:**\n`{cur}`"
     try: await q.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
-    except BadRequest: await q.edit_message_text(text) # Fallback to plain text if markdown fails
+    except BadRequest: await q.edit_message_text(text)
     return AWAIT_SETTING_VALUE
 
 async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -139,21 +156,13 @@ async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_T
 
 # --- Toggles & Other Actions ---
 async def toggle_maintenance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer()
-    _toggle("maintenance_enabled"); await maintenance_and_join_submenu(update, context)
-
+    q = update.callback_query; await q.answer(); _toggle("maintenance_enabled"); await maintenance_and_join_submenu(update, context)
 async def toggle_force_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer()
-    _toggle("force_join_enabled"); await maintenance_and_join_submenu(update, context)
-
+    q = update.callback_query; await q.answer(); _toggle("force_join_enabled"); await maintenance_and_join_submenu(update, context)
 async def toggle_expiry_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer()
-    _toggle("expiry_reminder_enabled", True); await reports_and_reminders_submenu(update, context)
-
+    q = update.callback_query; await q.answer(); _toggle("expiry_reminder_enabled", True); await reports_and_reminders_submenu(update, context)
 async def toggle_report_setting(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer()
-    key = q.data.replace("toggle_report_", "").strip()
-    _toggle(key); await reports_and_reminders_submenu(update, context)
+    q = update.callback_query; await q.answer(); key = q.data.replace("toggle_report_", "").strip(); _toggle(key); await reports_and_reminders_submenu(update, context)
 
 async def edit_default_link_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
