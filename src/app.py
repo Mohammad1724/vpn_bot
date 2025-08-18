@@ -54,7 +54,7 @@ def build_application():
     )
     application.add_error_handler(error_handler)
 
-    # فیلتر ادمین
+    # Admin filter
     try:
         admin_id_int = int(ADMIN_ID)
     except Exception:
@@ -74,14 +74,16 @@ def build_application():
             ]
         },
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
-        per_user=True, per_chat=True
+        per_user=True,
+        per_chat=True
     )
 
     gift_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^🎁 کد هدیه$') & user_filter, check_channel_membership(gift_h.gift_code_entry))],
         states={constants.REDEEM_GIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, gift_h.redeem_gift_code)]},
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
-        per_user=True, per_chat=True
+        per_user=True,
+        per_chat=True
     )
 
     charge_conv = ConversationHandler(
@@ -94,7 +96,8 @@ def build_application():
             constants.CHARGE_RECEIPT: [MessageHandler(filters.PHOTO, charge_h.charge_receipt_received)],
         },
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
-        per_user=True, per_chat=True
+        per_user=True,
+        per_chat=True
     )
 
     transfer_conv = ConversationHandler(
@@ -120,7 +123,8 @@ def build_application():
         entry_points=[MessageHandler(filters.Regex('^📞 پشتیبانی$') & user_filter, check_channel_membership(support_h.support_ticket_start))],
         states={constants.SUPPORT_TICKET_OPEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, support_h.forward_to_admin)]},
         fallbacks=[CommandHandler('cancel', support_h.support_ticket_cancel)],
-        per_user=True, per_chat=True
+        per_user=True,
+        per_chat=True
     )
 
     # -------------------------
@@ -286,7 +290,7 @@ def build_application():
         states={
             # ADMIN_MENU
             constants.ADMIN_MENU: [
-                # ReplyKeyboard منوی اصلی
+                # ReplyKeyboard main menu
                 MessageHandler(filters.Regex('^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
                 MessageHandler(filters.Regex('^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
                 MessageHandler(filters.Regex('^💾 پشتیبان‌گیری$') & admin_filter, admin_backup.backup_restore_menu),
@@ -294,14 +298,14 @@ def build_application():
                 MessageHandler(filters.Regex('^🎁 مدیریت کد هدیه$') & admin_filter, admin_gift.gift_code_management_menu),
                 MessageHandler(filters.Regex('^🛑 خاموش کردن ربات$') & admin_filter, admin_c.shutdown_bot),
 
-                # منوی کد هدیه (لیست و حذف)
+                # Gift codes actions in same state
                 MessageHandler(filters.Regex(r'^📋 لیست کدهای هدیه$') & admin_filter, admin_gift.list_gift_codes),
                 CallbackQueryHandler(admin_gift.delete_gift_code_callback, pattern=r'^delete_gift_code_'),
 
-                # بازگشت به منوی ادمین
+                # Back to admin (reply keyboard)
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
 
-                # Inline معادل منوها
+                # Inline equivalents
                 CallbackQueryHandler(admin_plans.plan_management_menu, pattern="^admin_plans$"),
                 CallbackQueryHandler(admin_reports.reports_menu, pattern="^admin_reports$"),
                 CallbackQueryHandler(admin_backup.backup_restore_menu, pattern="^admin_backup$"),
@@ -309,10 +313,10 @@ def build_application():
                 CallbackQueryHandler(admin_gift.gift_code_management_menu, pattern="^admin_gift$"),
                 CallbackQueryHandler(admin_c.shutdown_bot, pattern="^admin_shutdown$"),
 
-                # کال‌بک عمومی حذف سرویس
+                # Common admin callbacks
                 CallbackQueryHandler(admin_users.admin_delete_service, pattern=r'^admin_delete_service_\d+$'),
 
-                # کانورسیشن‌های تو در تو
+                # Nested convs
                 admin_settings_conv,
                 add_plan_conv,
                 edit_plan_conv,
@@ -361,10 +365,10 @@ def build_application():
                 # حذف سرویس از همین منو
                 CallbackQueryHandler(admin_users.admin_delete_service, pattern=r'^admin_delete_service_\d+$'),
 
-                # Broadcast (در صورت وجود دکمه در این منو)
+                # Broadcast (در صورت استفاده در این منو)
                 broadcast_conv,
 
-                # بازگشت به منوی ادمین
+                # بازگشت
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
             ],
 
