@@ -22,4 +22,6 @@ CMD_SKIP = "/skip"
     # Admin manage user's services
     MANAGE_SERVICE_ACTION
 ) = range(37)
+
 ADMIN_SETTINGS_MENU = 100
+GIFT_CODES_MENU = 101
