@@ -27,8 +27,8 @@ from bot.handlers.admin import settings as admin_settings
 from bot.handlers.admin import backup as admin_backup
 from bot.handlers.admin import users as admin_users
 from bot.handlers.admin import gift_codes as admin_gift
-from bot.handlers.admin import trial_settings as trial_cfg         # دستورات متنی (اختیاری)
-from bot.handlers.admin import trial_settings_ui as trial_ui       # منوی دکمه‌ای سرویس تست
+import bot.handlers.admin.trial_settings_ui as trial_ui
+from bot.handlers.admin import trial_settings as trial_cfg
 from bot.handlers.trial import get_trial_service as trial_get_trial_service
 from config import BOT_TOKEN, ADMIN_ID
 
@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     err = context.error
+    # Quiet transient network hiccups from Telegram long-polling
     if isinstance(err, NetworkError) and (
         "ReadError" in str(err) or
         "Server disconnected" in str(err) or
@@ -50,6 +51,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.error(f"آپدیت مربوطه: {update}")
 
 def build_application():
+    # More relaxed timeouts for long-polling stability
     request = HTTPXRequest(
         connect_timeout=15.0,
         read_timeout=180.0,
@@ -131,18 +133,28 @@ def build_application():
 
     # --- Trial settings conversation (buttoned UI) ---
     trial_settings_conv = ConversationHandler(
-        entry_points=[CommandHandler("trial_settings", trial_ui.trial_menu, filters=admin_filter)],
+        entry_points=[
+            CommandHandler("trial_settings", trial_ui.trial_menu, filters=admin_filter),
+            CallbackQueryHandler(trial_ui.trial_menu, pattern="^settings_trial$")
+        ],
         states={
             trial_ui.TRIAL_MENU: [
                 CallbackQueryHandler(trial_ui.ask_days, pattern="^trial_set_days$"),
                 CallbackQueryHandler(trial_ui.ask_gb, pattern="^trial_set_gb$"),
                 CallbackQueryHandler(admin_settings.settings_menu, pattern="^back_to_settings$"),
             ],
-            trial_ui.WAIT_DAYS: [MessageHandler(filters.TEXT & admin_filter & ~filters.COMMAND, trial_ui.days_received)],
-            trial_ui.WAIT_GB: [MessageHandler(filters.TEXT & admin_filter & ~filters.COMMAND, trial_ui.gb_received)],
+            trial_ui.WAIT_DAYS: [
+                MessageHandler(filters.TEXT & admin_filter & ~filters.COMMAND, trial_ui.days_received),
+                CommandHandler('cancel', admin_c.admin_generic_cancel),
+            ],
+            trial_ui.WAIT_GB: [
+                MessageHandler(filters.TEXT & admin_filter & ~filters.COMMAND, trial_ui.gb_received),
+                CommandHandler('cancel', admin_c.admin_generic_cancel),
+            ],
         },
         fallbacks=[CommandHandler('cancel', admin_c.admin_generic_cancel)],
-        per_user=True, per_chat=True
+        per_user=True, per_chat=True,
+        allow_reentry=True
     )
 
     # --- Admin Nested Conversations ---
@@ -224,7 +236,7 @@ def build_application():
                 MessageHandler(filters.Regex('^🎁 مدیریت کد هدیه$'), admin_gift.gift_code_management_menu),
                 MessageHandler(filters.Regex('^📋 لیست کدهای هدیه$'), admin_gift.list_gift_codes),
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.back_to_admin_menu),
-                # نِست‌ها
+                # nested convs
                 add_plan_conv,
                 edit_plan_conv,
                 settings_conv,
@@ -294,24 +306,17 @@ def build_application():
     application.add_handler(support_conv)
     application.add_handler(trial_settings_conv)
 
-    # تایید/لغو خرید سرویس
+    # Purchase confirm/cancel (match buy.py)
     application.add_handler(CallbackQueryHandler(buy_h.confirm_purchase_callback, pattern="^confirmbuy$"), group=2)
     application.add_handler(CallbackQueryHandler(buy_h.cancel_purchase_callback, pattern="^cancelbuy$"), group=2)
 
-    # دستورات ادمین اختیاری (اگر خواستی فعال بماند)
+    # Admin commands for trial (optional)
     application.add_handler(CommandHandler("set_trial_days", trial_cfg.set_trial_days), group=3)
     application.add_handler(CommandHandler("set_trial_gb", trial_cfg.set_trial_gb), group=3)
 
-    # اتصال دکمه «🧪 تنظیمات سرویس تست» داخل منوی تنظیمات
-    application.add_handler(CallbackQueryHandler(trial_ui.trial_menu, pattern="^settings_trial$"), group=1)
-
-    # Admin reply to support
+    # Admin reply to support (reply to user's message)
     application.add_handler(MessageHandler(filters.REPLY & admin_filter, support_h.admin_reply_handler))
     application.add_handler(CallbackQueryHandler(support_h.close_ticket, pattern="^close_ticket_"))
-
-    # Global callbacks
-    application.add_handler(CallbackQueryHandler(admin_users.admin_confirm_charge_callback, pattern="^admin_confirm_charge_"), group=1)
-    application.add_handler(CallbackQueryHandler(admin_users.admin_reject_charge_callback, pattern="^admin_reject_charge_"), group=1)
 
     # Settings Submenus
     application.add_handler(CallbackQueryHandler(admin_settings.maintenance_submenu, pattern="^settings_maintenance$"), group=1)
