@@ -14,7 +14,7 @@ from bot.constants import (
     BROADCAST_TO_USER_ID, BROADCAST_TO_USER_MESSAGE,
     MANAGE_USER_AMOUNT
 )
-from bot import utils  # برای فرمت تومان
+from bot import utils
 import database as db
 import hiddify_api
 
@@ -43,6 +43,9 @@ def _action_kb(target_id: int, is_banned: bool) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🔄 بروزرسانی پنل", callback_data=f"admin_user_refresh_{target_id}")]
     ]
     return InlineKeyboardMarkup(rows)
+
+def _amount_prompt_kb(target_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton("❌ انصراف", callback_data=f"admin_user_amount_cancel_{target_id}")]])
 
 def _sanitize_for_code(s: str) -> str:
     return (s or "").replace("`", "")
@@ -87,32 +90,21 @@ def _update_balance(user_id: int, delta: int) -> bool:
     """
     _ensure_user_exists(user_id)
     try:
-        # 1) change_balance(user_id, delta)
         if hasattr(db, "change_balance"):
-            db.change_balance(user_id, delta)
-            return True
-        # 2) update_balance(user_id, delta)
+            db.change_balance(user_id, delta); return True
         if hasattr(db, "update_balance"):
-            db.update_balance(user_id, delta)
-            return True
-        # 3) increase/decrease balance
+            db.update_balance(user_id, delta); return True
         if delta >= 0 and hasattr(db, "increase_balance"):
-            db.increase_balance(user_id, delta)
-            return True
+            db.increase_balance(user_id, delta); return True
         if delta < 0 and hasattr(db, "decrease_balance"):
-            db.decrease_balance(user_id, -delta)
-            return True
-        # 4) add_balance(user_id, amount)
+            db.decrease_balance(user_id, -delta); return True
         if delta >= 0 and hasattr(db, "add_balance"):
-            db.add_balance(user_id, delta)
-            return True
-        # 5) set_balance(user_id, new_balance)
+            db.add_balance(user_id, delta); return True
         if hasattr(db, "get_user") and hasattr(db, "set_balance"):
             info = db.get_user(user_id)
             cur = int(info.get("balance", 0)) if info else 0
             new_bal = max(cur + delta, 0)
-            db.set_balance(user_id, new_bal)
-            return True
+            db.set_balance(user_id, new_bal); return True
     except Exception as e:
         logger.warning("Balance update failed: %s", e, exc_info=True)
     return False
@@ -129,7 +121,7 @@ async def user_management_menu(update: Update, context: ContextTypes.DEFAULT_TYP
     )
     return USER_MANAGEMENT_MENU
 
-# نمایش پنل خلاصه کاربر (از پیام یا کال‌بک)
+# نمایش پنل خلاصه کاربر
 async def _send_user_panel(update: Update, target_id: int):
     q = getattr(update, "callback_query", None)
     text, ban_state = await _render_user_panel_text(target_id)
@@ -170,7 +162,7 @@ async def admin_user_refresh_cb(update: Update, context: ContextTypes.DEFAULT_TY
 async def admin_user_services_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     target_id = int(q.data.split('_')[-1])
-    # هیچ متن توست (ویز) نمایش نده؛ فقط لودینگ را ببند
+    # فقط answer کنیم تا لودینگ بسته شود؛ پیام پنل دست نمی‌خورد
     await q.answer()
 
     services = db.get_user_services(target_id) or []
@@ -243,7 +235,6 @@ async def admin_user_trial_reset_cb(update: Update, context: ContextTypes.DEFAUL
         ok = False
 
     if ok:
-        # نمایش هشدار توست نده؛ مستقیم پنل کاربر را رندر کن
         await _send_user_panel(update, target_id)
     else:
         try:
@@ -285,7 +276,7 @@ async def admin_user_addbal_cb(update: Update, context: ContextTypes.DEFAULT_TYP
     target_id = int(q.data.split('_')[-1])
     context.user_data["muid"] = target_id
     context.user_data["mop"] = "add"
-    await q.edit_message_text(f"مبلغ افزایش موجودی برای کاربر {target_id} را وارد کنید:", reply_markup=None)
+    await q.edit_message_text(f"مبلغ افزایش موجودی برای کاربر {target_id} را وارد کنید:", reply_markup=_amount_prompt_kb(target_id))
     return MANAGE_USER_AMOUNT
 
 async def admin_user_subbal_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -294,8 +285,21 @@ async def admin_user_subbal_cb(update: Update, context: ContextTypes.DEFAULT_TYP
     target_id = int(q.data.split('_')[-1])
     context.user_data["muid"] = target_id
     context.user_data["mop"] = "sub"
-    await q.edit_message_text(f"مبلغ کاهش موجودی برای کاربر {target_id} را وارد کنید:", reply_markup=None)
+    await q.edit_message_text(f"مبلغ کاهش موجودی برای کاربر {target_id} را وارد کنید:", reply_markup=_amount_prompt_kb(target_id))
     return MANAGE_USER_AMOUNT
+
+async def admin_user_amount_cancel_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    try:
+        target_id = int(q.data.split('_')[-1])
+    except Exception:
+        return USER_MANAGEMENT_MENU
+    # پاکسازی حالت
+    context.user_data.pop("muid", None)
+    context.user_data.pop("mop", None)
+    await _send_user_panel(update, target_id)
+    return USER_MANAGEMENT_MENU
 
 async def manage_user_amount_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     em = update.effective_message
@@ -315,7 +319,7 @@ async def manage_user_amount_received(update: Update, context: ContextTypes.DEFA
     delta = amount if op == "add" else -amount
     ok = _update_balance(target_id, delta)
 
-    # پیام به کاربر: مبلغ تغییر و موجودی فعلی
+    # پیام به کاربر
     try:
         info2 = db.get_user(target_id)
         new_bal = int(info2.get("balance", 0)) if info2 else None
@@ -324,7 +328,6 @@ async def manage_user_amount_received(update: Update, context: ContextTypes.DEFA
 
     if ok:
         await em.reply_text("✅ موجودی کاربر به‌روزرسانی شد.")
-        # اطلاع‌رسانی به خود کاربر
         try:
             op_text = "افزایش" if delta >= 0 else "کاهش"
             amount_str = utils.format_toman(abs(delta), persian_digits=True)
@@ -476,7 +479,7 @@ async def broadcast_confirm_callback(update: Update, context: ContextTypes.DEFAU
     context.user_data.clear()
     return ConversationHandler.END
 
-async def broadcast_to_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def broadcast_to_user_start(update: Update, Context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     context.user_data["broadcast_mode"] = "single"
     await update.effective_message.reply_text(
