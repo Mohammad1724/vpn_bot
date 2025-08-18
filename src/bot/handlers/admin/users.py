@@ -86,34 +86,21 @@ def _update_balance(user_id: int, delta: int) -> bool:
     """
     _ensure_user_exists(user_id)
     try:
-        # 1) change_balance(user_id, delta)
         if hasattr(db, "change_balance"):
-            db.change_balance(user_id, delta)
-            return True
-        # 2) update_balance(user_id, delta)
+            db.change_balance(user_id, delta); return True
         if hasattr(db, "update_balance"):
-            db.update_balance(user_id, delta)
-            return True
-        # 3) increase/decrease
+            db.update_balance(user_id, delta); return True
         if delta >= 0 and hasattr(db, "increase_balance"):
-            db.increase_balance(user_id, delta)
-            return True
+            db.increase_balance(user_id, delta); return True
         if delta < 0 and hasattr(db, "decrease_balance"):
-            db.decrease_balance(user_id, -delta)
-            return True
-        # 4) add_balance(user_id, amount)
+            db.decrease_balance(user_id, -delta); return True
         if delta >= 0 and hasattr(db, "add_balance"):
-            db.add_balance(user_id, delta)
-            return True
-        # 5) set_balance(user_id, new_balance) ← fallback
+            db.add_balance(user_id, delta); return True
         if hasattr(db, "get_user") and hasattr(db, "set_balance"):
             info = db.get_user(user_id)
             cur = int(info.get("balance", 0)) if info else 0
-            new_bal = cur + delta
-            if new_bal < 0:
-                new_bal = 0
-            db.set_balance(user_id, new_bal)
-            return True
+            new_bal = max(cur + delta, 0)
+            db.set_balance(user_id, new_bal); return True
     except Exception as e:
         logger.warning("Balance update failed: %s", e, exc_info=True)
     return False
@@ -171,7 +158,6 @@ async def admin_user_refresh_cb(update: Update, context: ContextTypes.DEFAULT_TY
 async def admin_user_services_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     target_id = int(q.data.split('_')[-1])
-    # پنل را دست نمی‌زنیم تا چشمک نزند؛ فقط اطلاع می‌دهیم
     try:
         await q.answer("لیست سرویس‌ها در پیام‌های جداگانه ارسال شد.", show_alert=False)
     except Exception:
