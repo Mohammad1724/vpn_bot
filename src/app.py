@@ -46,7 +46,10 @@ def build_application():
     
     # --- Admin Conversations ---
     admin_settings_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(admin_settings.settings_menu, pattern="^admin_settings_menu$")],
+        entry_points=[
+            MessageHandler(filters.Regex('^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
+            CallbackQueryHandler(admin_settings.settings_menu, pattern="^back_to_settings$")
+        ],
         states={
             constants.ADMIN_SETTINGS_MENU: [
                 CallbackQueryHandler(admin_settings.maintenance_and_join_submenu, pattern="^settings_maint_join$"),
