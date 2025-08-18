@@ -18,6 +18,34 @@ except Exception:
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------
+# قیمت و فرمت اعداد (تومان)
+# ---------------------------
+_PERSIAN_DIGIT_MAP = str.maketrans("0123456789,-", "۰۱۲۳۴۵۶۷۸۹،-")
+
+def to_persian_digits(s: str) -> str:
+    """تبدیل ارقام لاتین به فارسی (با ویرگول فارسی)."""
+    try:
+        return s.translate(_PERSIAN_DIGIT_MAP)
+    except Exception:
+        return s
+
+def format_toman(amount: Union[int, float, str], persian_digits: bool = False) -> str:
+    """
+    فرمت استاندارد قیمت به تومان با جداکننده هزار.
+    مثال: 75000 -> '75,000 تومان' یا با ارقام فارسی '۷۵،۰۰۰ تومان'
+    """
+    try:
+        amt = int(round(float(amount)))
+    except Exception:
+        amt = 0
+    s = f"{amt:,.0f} تومان"
+    # تبدیل به ویرگول و ارقام فارسی در صورت نیاز
+    if persian_digits:
+        s = to_persian_digits(s)
+    return s
+
+
 def parse_date_flexible(date_str: str) -> Union[datetime, None]:
     if not date_str:
         return None
