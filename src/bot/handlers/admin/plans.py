@@ -20,7 +20,7 @@ def _plan_menu_keyboard() -> ReplyKeyboardMarkup:
 
 
 async def plan_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # این تابع ممکن است هم با Message و هم با CallbackQuery صدا زده شود
+    # ممکن است با Message یا CallbackQuery صدا زده شود
     q = getattr(update, "callback_query", None)
     if q:
         await q.answer()
@@ -29,7 +29,7 @@ async def plan_management_menu(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def list_plans_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # این تابع ممکن است هم با Message و هم با CallbackQuery صدا زده شود
+    # ممکن است با Message یا CallbackQuery صدا زده شود
     q = getattr(update, "callback_query", None)
     if q:
         await q.answer()
@@ -56,13 +56,17 @@ async def list_plans_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton(f"{visibility_icon} تغییر وضعیت", callback_data=f"admin_toggle_plan_{plan['plan_id']}"),
             InlineKeyboardButton("🗑️ حذف", callback_data=f"admin_delete_plan_{plan['plan_id']}")
         ]]
-        await update.effective_message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+        await update.effective_message.reply_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.MARKDOWN
+        )
     return PLAN_MENU
 
 
 # ===== Add Plan Conversation =====
 async def add_plan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # این تابع ممکن است با Message یا CallbackQuery شروع شود
+    # ممکن است با Message یا CallbackQuery شروع شود
     q = getattr(update, "callback_query", None)
     if q:
         await q.answer()
@@ -240,7 +244,7 @@ async def finish_plan_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.update_plan(plan_id, new_data)
         await update.message.reply_text("✅ پلن با موفقیت به‌روزرسانی شد!", reply_markup=_plan_menu_keyboard())
     context.user_data.clear()
-    return PLAN_MENU
+    return ConversationHandler.END
 
 
 async def admin_delete_plan_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
