@@ -138,9 +138,7 @@ def build_application():
     # افزودن پلن جدید
     add_plan_conv = ConversationHandler(
         entry_points=[
-            # اگر دکمه ReplyKeyboard است:
             MessageHandler(filters.Regex(r'^➕ افزودن پلن جدید$') & admin_filter, admin_plans.add_plan_start),
-            # اگر دکمه InlineKeyboard است:
             CallbackQueryHandler(admin_plans.add_plan_start, pattern=r'^admin_add_plan$'),
         ],
         states={
@@ -151,14 +149,13 @@ def build_application():
             constants.PLAN_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_category_received)],
         },
         fallbacks=[CommandHandler('cancel', admin_plans.cancel_add_plan)],
-        # بعد از پایان افزودن، به منوی مدیریت پلن‌ها برگرد
         map_to_parent={ConversationHandler.END: constants.PLAN_MENU},
         per_user=True,
         per_chat=True,
         allow_reentry=True
     )
 
-    # ویرایش پلن (کانورسیشن جدا)
+    # ویرایش پلن
     edit_plan_conv = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(admin_plans.edit_plan_start, pattern=r'^admin_edit_plan_\d+$'),
@@ -196,7 +193,6 @@ def build_application():
     admin_settings_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex('^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
-            # اگر دکمه اینلاین دارید:
             CallbackQueryHandler(admin_settings.settings_menu, pattern="^admin_settings$")
         ],
         states={
@@ -232,7 +228,6 @@ def build_application():
     admin_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(f'^{constants.BTN_ADMIN_PANEL}$') & admin_filter, admin_c.admin_entry),
-            # اگر ورود با اینلاین باشد:
             CallbackQueryHandler(admin_c.admin_entry, pattern="^admin_panel$")
         ],
         states={
@@ -247,7 +242,7 @@ def build_application():
                 MessageHandler(filters.Regex('^📩 ارسال پیام$'), admin_users.broadcast_menu),
                 MessageHandler(filters.Regex('^🛑 خاموش کردن ربات$'), admin_c.shutdown_bot),
 
-                # InlineKeyboard دکمه‌های معادل (در صورت استفاده)
+                # InlineKeyboard دکمه‌های معادل
                 CallbackQueryHandler(admin_plans.plan_management_menu, pattern="^admin_plans$"),
                 CallbackQueryHandler(admin_reports.reports_menu, pattern="^admin_reports$"),
                 CallbackQueryHandler(admin_backup.backup_restore_menu, pattern="^admin_backup$"),
@@ -261,19 +256,30 @@ def build_application():
             ],
             # منوی مدیریت پلن‌ها
             constants.PLAN_MENU: [
-                # دکمه‌های Reply/Inline برای این منو
                 MessageHandler(filters.Regex(r'^📋 لیست پلن‌ها$'), admin_plans.list_plans_admin),
                 CallbackQueryHandler(admin_plans.list_plans_admin, pattern=r'^admin_list_plans$'),
 
-                # کال‌بک‌های اینلاین آیتم‌های لیست
                 CallbackQueryHandler(admin_plans.admin_toggle_plan_visibility_callback, pattern=r'^admin_toggle_plan_\d+$'),
                 CallbackQueryHandler(admin_plans.admin_delete_plan_callback, pattern=r'^admin_delete_plan_\d+$'),
 
-                # کانورسیشن ویرایش پلن
                 edit_plan_conv,
-
-                # کانورسیشن افزودن پلن جدید
                 add_plan_conv,
+
+                MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.admin_entry),
+            ],
+            # منوی گزارش‌ها و آمار
+            constants.REPORTS_MENU: [
+                # ReplyKeyboard دکمه‌ها
+                MessageHandler(filters.Regex(r'^📊 آمار کلی$'), admin_reports.show_stats_report),
+                MessageHandler(filters.Regex(r'^📈 گزارش فروش امروز$'), admin_reports.show_daily_report),
+                MessageHandler(filters.Regex(r'^📅 گزارش فروش ۷ روز اخیر$'), admin_reports.show_weekly_report),
+                MessageHandler(filters.Regex(r'^🏆 محبوب‌ترین پلن‌ها$'), admin_reports.show_popular_plans_report),
+
+                # اگر دکمه‌ها را اینلاین ساختی، الگوهای زیر را استفاده کن
+                CallbackQueryHandler(admin_reports.show_stats_report, pattern=r'^admin_report_stats$'),
+                CallbackQueryHandler(admin_reports.show_daily_report, pattern=r'^admin_report_daily$'),
+                CallbackQueryHandler(admin_reports.show_weekly_report, pattern=r'^admin_report_weekly$'),
+                CallbackQueryHandler(admin_reports.show_popular_plans_report, pattern=r'^admin_report_popular$'),
 
                 # بازگشت به منوی ادمین
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.admin_entry),
