@@ -24,7 +24,8 @@ from bot.handlers.admin import (
 )
 import bot.handlers.admin.trial_settings_ui as trial_ui
 from bot.handlers.trial import get_trial_service as trial_get_trial_service
-from bot.handlers.trial import trial_settings as trial_cmds
+# اصلاح import — مسیر درست فایل trial_settings
+from bot.handlers import trial_settings as trial_cmds
 from config import BOT_TOKEN, ADMIN_ID
 
 warnings.filterwarnings("ignore", category=PTBUserWarning)
@@ -128,10 +129,9 @@ def build_application():
     )
 
     # --- Admin Conversations (nested) ---
-    # افزودن پلن
+    # افزودن پلن جدید
     add_plan_conv = ConversationHandler(
         entry_points=[
-            MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),  # پوشش ورود با متن
             MessageHandler(filters.Regex(r'^➕ افزودن پلن جدید$') & admin_filter, admin_plans.add_plan_start),
             CallbackQueryHandler(admin_plans.add_plan_start, pattern=r'^admin_add_plan$'),
         ],
@@ -200,8 +200,8 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # Gift codes creation conversation (nested inside GIFT_CODES_MENU)
-    gift_codes_conv = ConversationHandler(
+    # Gift codes creation conversation (nested inside ADMIN_MENU)
+    gift_code_create_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(r'^➕ ساخت کد هدیه جدید$') & admin_filter, admin_gift.create_gift_code_start),
             CallbackQueryHandler(admin_gift.create_gift_code_start, pattern=r'^admin_gift_create$'),
@@ -211,8 +211,8 @@ def build_application():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, admin_gift.create_gift_amount_received)
             ],
         },
-        fallbacks=[CommandHandler('cancel', admin_gift.cancel_create_gift)],
-        map_to_parent={ConversationHandler.END: constants.GIFT_CODES_MENU},
+        fallbacks=[CommandHandler('cancel', admin_gift.cancel_create_gift_code)],
+        map_to_parent={ConversationHandler.END: constants.ADMIN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
     )
 
@@ -239,6 +239,7 @@ def build_application():
                 CallbackQueryHandler(admin_settings.toggle_expiry_reminder, pattern="^toggle_expiry_reminder$"),
                 CallbackQueryHandler(admin_settings.toggle_report_setting, pattern="^toggle_report_"),
 
+                # Trial settings nested conversation
                 trial_settings_conv,
 
                 CallbackQueryHandler(admin_settings.edit_setting_start, pattern="^admin_edit_setting_"),
@@ -274,6 +275,10 @@ def build_application():
                 MessageHandler(filters.Regex('^📩 ارسال پیام$'), admin_users.broadcast_menu),
                 MessageHandler(filters.Regex('^🛑 خاموش کردن ربات$'), admin_c.shutdown_bot),
 
+                # دکمه‌های کد هدیه در همین state
+                MessageHandler(filters.Regex(r'^📋 لیست کدهای هدیه$'), admin_gift.list_gift_codes),
+                CallbackQueryHandler(admin_gift.delete_gift_code_callback, pattern=r'^delete_gift_code_'),
+
                 # InlineKeyboard معادل
                 CallbackQueryHandler(admin_plans.plan_management_menu, pattern="^admin_plans$"),
                 CallbackQueryHandler(admin_reports.reports_menu, pattern="^admin_reports$"),
@@ -283,8 +288,9 @@ def build_application():
                 CallbackQueryHandler(admin_users.broadcast_menu, pattern="^admin_broadcast$"),
                 CallbackQueryHandler(admin_c.shutdown_bot, pattern="^admin_shutdown$"),
 
-                # کانورسیشن تنظیمات
+                # کانورسیشن تنظیمات + ساخت کد هدیه
                 admin_settings_conv,
+                gift_code_create_conv,
             ],
             # منوی مدیریت پلن‌ها
             constants.PLAN_MENU: [
@@ -302,22 +308,12 @@ def build_application():
                 MessageHandler(filters.Regex(r'^📈 گزارش فروش امروز$'), admin_reports.show_daily_report),
                 MessageHandler(filters.Regex(r'^📅 گزارش فروش ۷ روز اخیر$'), admin_reports.show_weekly_report),
                 MessageHandler(filters.Regex(r'^🏆 محبوب‌ترین پلن‌ها$'), admin_reports.show_popular_plans_report),
+
                 CallbackQueryHandler(admin_reports.show_stats_report, pattern=r'^admin_report_stats$'),
                 CallbackQueryHandler(admin_reports.show_daily_report, pattern=r'^admin_report_daily$'),
                 CallbackQueryHandler(admin_reports.show_weekly_report, pattern=r'^admin_report_weekly$'),
                 CallbackQueryHandler(admin_reports.show_popular_plans_report, pattern=r'^admin_report_popular$'),
-                MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.admin_entry),
-            ],
-            # منوی مدیریت کد هدیه
-            constants.GIFT_CODES_MENU: [
-                # لیست
-                MessageHandler(filters.Regex(r'^📋 لیست کدهای هدیه$'), admin_gift.list_gift_codes),
-                CallbackQueryHandler(admin_gift.list_gift_codes, pattern=r'^admin_gift_list$'),
-                # حذف
-                CallbackQueryHandler(admin_gift.delete_gift_code_callback, pattern=r'^delete_gift_code_'),
-                # ساخت (کانورسیشن)
-                gift_codes_conv,
-                # بازگشت
+
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.admin_entry),
             ],
         },
