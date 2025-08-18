@@ -51,7 +51,6 @@ async def _send_or_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, text
         try:
             await q.edit_message_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
         except Exception:
-            # اگر پیام قابل ویرایش نبود، جداگانه ارسال کن
             await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=reply_markup, parse_mode=parse_mode)
     else:
         await update.effective_message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
