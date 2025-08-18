@@ -12,15 +12,23 @@ from telegram.request import HTTPXRequest
 from telegram.error import NetworkError
 
 from bot import jobs, constants
-from bot.handlers import start as start_h, gift as gift_h, charge as charge_h, buy as buy_h, user_services as us_h, account_actions as acc_act, support as support_h
+from bot.handlers import (
+    start as start_h, gift as gift_h, charge as charge_h, buy as buy_h,
+    user_services as us_h, account_actions as acc_act, support as support_h
+)
 from bot.handlers.common_handlers import check_channel_membership
-from bot.handlers.admin import common as admin_c, plans as admin_plans, reports as admin_reports, settings as admin_settings, backup as admin_backup, users as admin_users, gift_codes as admin_gift
+from bot.handlers.admin import (
+    common as admin_c, plans as admin_plans, reports as admin_reports,
+    settings as admin_settings, backup as admin_backup, users as admin_users,
+    gift_codes as admin_gift
+)
 import bot.handlers.admin.trial_settings_ui as trial_ui
 from bot.handlers.trial import get_trial_service as trial_get_trial_service
 from config import BOT_TOKEN, ADMIN_ID
 
 warnings.filterwarnings("ignore", category=PTBUserWarning)
 logger = logging.getLogger(__name__)
+
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     err = context.error
@@ -31,8 +39,12 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     if isinstance(update, Update):
         logger.error(f"آپدیت مربوطه: {update}")
 
+
 def build_application():
-    request = HTTPXRequest(connect_timeout=15.0, read_timeout=180.0, write_timeout=30.0, pool_timeout=90.0)
+    request = HTTPXRequest(
+        connect_timeout=15.0, read_timeout=180.0, write_timeout=30.0, pool_timeout=90.0
+    )
+
     application = (
         ApplicationBuilder()
         .token(BOT_TOKEN)
@@ -41,13 +53,15 @@ def build_application():
         .post_shutdown(jobs.post_shutdown)
         .build()
     )
+
     application.add_error_handler(error_handler)
 
-    # اطمینان از اینکه ADMIN_ID عدد است (برای درست کار کردن فیلتر)
+    # اطمینان از اینکه ADMIN_ID به صورت int استفاده می‌شود
     try:
         admin_id_int = int(ADMIN_ID)
     except Exception:
-        admin_id_int = ADMIN_ID  # اگر واقعاً لیست/چند آی‌دی دارید، همان را نگه دارید
+        admin_id_int = ADMIN_ID
+
     admin_filter = filters.User(user_id=admin_id_int)
     user_filter = ~admin_filter
 
@@ -58,23 +72,23 @@ def build_application():
             constants.GET_CUSTOM_NAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, buy_h.get_custom_name),
                 CommandHandler('skip', buy_h.skip_custom_name),
-            ],
+            ]
         },
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
         per_user=True,
-        per_chat=True,
+        per_chat=True
     )
 
     gift_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^🎁 کد هدیه$') & user_filter, check_channel_membership(gift_h.gift_code_entry))],
         states={
             constants.REDEEM_GIFT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, gift_h.redeem_gift_code),
-            ],
+                MessageHandler(filters.TEXT & ~filters.COMMAND, gift_h.redeem_gift_code)
+            ]
         },
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
         per_user=True,
-        per_chat=True,
+        per_chat=True
     )
 
     charge_conv = ConversationHandler(
@@ -85,12 +99,12 @@ def build_application():
                 CallbackQueryHandler(charge_h.charge_amount_confirm_cb, pattern="^charge_amount_(confirm|cancel)$"),
             ],
             constants.CHARGE_RECEIPT: [
-                MessageHandler(filters.PHOTO, charge_h.charge_receipt_received),
-            ],
+                MessageHandler(filters.PHOTO, charge_h.charge_receipt_received)
+            ]
         },
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
         per_user=True,
-        per_chat=True,
+        per_chat=True
     )
 
     transfer_conv = ConversationHandler(
@@ -121,11 +135,13 @@ def build_application():
     )
 
     # --- Admin Conversations (Nested inside the main admin conv) ---
+    # افزودن پلن جدید
     add_plan_conv = ConversationHandler(
         entry_points=[
-            MessageHandler(filters.Regex('^➕ افزودن پلن جدید$') & admin_filter, admin_plans.add_plan_start),
-            # در صورت استفاده از اینلاین‌کیبورد:
-            CallbackQueryHandler(admin_plans.add_plan_start, pattern="^admin_add_plan$")
+            # اگر دکمه ReplyKeyboard است:
+            MessageHandler(filters.Regex(r'^➕ افزودن پلن جدید$') & admin_filter, admin_plans.add_plan_start),
+            # اگر دکمه InlineKeyboard است، callback_data آن را مطابق pattern زیر قرار دهید (یا pattern را تغییر دهید):
+            CallbackQueryHandler(admin_plans.add_plan_start, pattern=r'^admin_add_plan$'),
         ],
         states={
             constants.PLAN_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_name_received)],
@@ -135,17 +151,18 @@ def build_application():
             constants.PLAN_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_category_received)],
         },
         fallbacks=[CommandHandler('cancel', admin_plans.cancel_add_plan)],
-        # نکته مهم: PLAN_MENU در parent تعریف نشده، پس باید به ADMIN_MENU نگاشت شود
-        map_to_parent={ConversationHandler.END: constants.ADMIN_MENU},
+        # چون این کانورسیشن در منوی مدیریت پلن‌ها باز می‌شود، بعد از پایان به همان منو برگرد
+        map_to_parent={ConversationHandler.END: constants.PLAN_MENU},
         per_user=True,
         per_chat=True,
-        allow_reentry=True,
+        allow_reentry=True
     )
 
+    # تنظیمات ادمین
     admin_settings_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex('^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
-            # اگر دکمه تنظیمات اینلاین است:
+            # اگر دکمه اینلاین دارید:
             CallbackQueryHandler(admin_settings.settings_menu, pattern="^admin_settings$")
         ],
         states={
@@ -181,12 +198,13 @@ def build_application():
     admin_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(f'^{constants.BTN_ADMIN_PANEL}$') & admin_filter, admin_c.admin_entry),
-            # اگر ورود به پنل ادمین با اینلاین‌کیبورد است:
+            # اگر ورود با اینلاین باشد:
             CallbackQueryHandler(admin_c.admin_entry, pattern="^admin_panel$")
         ],
         states={
+            # منوی اصلی ادمین
             constants.ADMIN_MENU: [
-                # ReplyKeyboard دکمه‌ها (متنی)
+                # ReplyKeyboard دکمه‌ها
                 MessageHandler(filters.Regex('^➕ مدیریت پلن‌ها$'), admin_plans.plan_management_menu),
                 MessageHandler(filters.Regex('^📈 گزارش‌ها و آمار$'), admin_reports.reports_menu),
                 MessageHandler(filters.Regex('^💾 پشتیبان‌گیری$'), admin_backup.backup_restore_menu),
@@ -195,7 +213,7 @@ def build_application():
                 MessageHandler(filters.Regex('^📩 ارسال پیام$'), admin_users.broadcast_menu),
                 MessageHandler(filters.Regex('^🛑 خاموش کردن ربات$'), admin_c.shutdown_bot),
 
-                # InlineKeyboard دکمه‌ها (کالبک)
+                # InlineKeyboard دکمه‌های معادل (در صورت استفاده)
                 CallbackQueryHandler(admin_plans.plan_management_menu, pattern="^admin_plans$"),
                 CallbackQueryHandler(admin_reports.reports_menu, pattern="^admin_reports$"),
                 CallbackQueryHandler(admin_backup.backup_restore_menu, pattern="^admin_backup$"),
@@ -204,9 +222,14 @@ def build_application():
                 CallbackQueryHandler(admin_users.broadcast_menu, pattern="^admin_broadcast$"),
                 CallbackQueryHandler(admin_c.shutdown_bot, pattern="^admin_shutdown$"),
 
-                # Nested conversations
+                # کانورسیشن تنظیمات داخل منوی اصلی
                 admin_settings_conv,
+            ],
+            # منوی مدیریت پلن‌ها
+            constants.PLAN_MENU: [
+                # کانورسیشن افزودن پلن جدید داخل این منو
                 add_plan_conv,
+                # در صورت داشتن دکمه‌های دیگر (ویرایش/حذف/لیست/بازگشت) اینجا اضافه کنید
             ],
         },
         fallbacks=[
