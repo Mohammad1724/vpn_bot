@@ -54,7 +54,7 @@ def build_application():
 
     application.add_error_handler(error_handler)
 
-    # اطمینان از اینکه ADMIN_ID به صورت int استفاده می‌شود (برای درست کار کردن فیلتر ادمین)
+    # ADMIN_ID به int
     try:
         admin_id_int = int(ADMIN_ID)
     except Exception:
@@ -132,13 +132,10 @@ def build_application():
         per_chat=True
     )
 
-    # --- Admin Conversations (Nested inside admin_conv) ---
-    # افزودن پلن جدید
+    # --- Admin Conversations (nested) ---
     add_plan_conv = ConversationHandler(
         entry_points=[
-            # ReplyKeyboard
             MessageHandler(filters.Regex(r'^➕ افزودن پلن جدید$') & admin_filter, admin_plans.add_plan_start),
-            # InlineKeyboard
             CallbackQueryHandler(admin_plans.add_plan_start, pattern=r'^admin_add_plan$'),
         ],
         states={
@@ -150,12 +147,9 @@ def build_application():
         },
         fallbacks=[CommandHandler('cancel', admin_plans.cancel_add_plan)],
         map_to_parent={ConversationHandler.END: constants.PLAN_MENU},
-        per_user=True,
-        per_chat=True,
-        allow_reentry=True
+        per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # ویرایش پلن
     edit_plan_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_plans.edit_plan_start, pattern=r'^admin_edit_plan_\d+$')],
         states={
@@ -182,12 +176,39 @@ def build_application():
         },
         fallbacks=[CommandHandler('cancel', admin_plans.cancel_edit_plan)],
         map_to_parent={ConversationHandler.END: constants.PLAN_MENU},
-        per_user=True,
-        per_chat=True,
-        allow_reentry=True
+        per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # تنظیمات ادمین
+    # Trial settings conversation (nested inside settings)
+    trial_settings_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(trial_ui.trial_menu, pattern="^settings_trial$")
+        ],
+        states={
+            trial_ui.TRIAL_MENU: [
+                CallbackQueryHandler(trial_ui.ask_days, pattern="^trial_set_days$"),
+                CallbackQueryHandler(trial_ui.ask_gb, pattern="^trial_set_gb$"),
+                CallbackQueryHandler(admin_settings.settings_menu, pattern="^back_to_settings$"),
+            ],
+            trial_ui.WAIT_DAYS: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, trial_ui.days_received),
+                CommandHandler('cancel', trial_ui.cancel),
+            ],
+            trial_ui.WAIT_GB: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, trial_ui.gb_received),
+                CommandHandler('cancel', trial_ui.cancel),
+            ],
+        },
+        fallbacks=[
+            CallbackQueryHandler(admin_settings.settings_menu, pattern="^back_to_settings$")
+        ],
+        map_to_parent={
+            constants.ADMIN_SETTINGS_MENU: constants.ADMIN_SETTINGS_MENU,
+            ConversationHandler.END: constants.ADMIN_SETTINGS_MENU
+        },
+        per_user=True, per_chat=True, allow_reentry=True
+    )
+
     admin_settings_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex('^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
@@ -210,10 +231,10 @@ def build_application():
                 CallbackQueryHandler(admin_settings.toggle_expiry_reminder, pattern="^toggle_expiry_reminder$"),
                 CallbackQueryHandler(admin_settings.toggle_report_setting, pattern="^toggle_report_"),
 
-                CallbackQueryHandler(trial_ui.trial_menu, pattern="^settings_trial$"),
-                CallbackQueryHandler(admin_settings.edit_setting_start, pattern="^admin_edit_setting_"),
+                # Trial settings nested conversation
+                trial_settings_conv,
 
-                # بازگشت به پنل ادمین
+                CallbackQueryHandler(admin_settings.edit_setting_start, pattern="^admin_edit_setting_"),
                 CallbackQueryHandler(admin_settings.back_to_admin_menu_cb, pattern="^admin_back_to_menu$"),
             ],
             constants.AWAIT_SETTING_VALUE: [
@@ -225,22 +246,17 @@ def build_application():
             CallbackQueryHandler(admin_settings.settings_menu, pattern="^back_to_settings$")
         ],
         map_to_parent={constants.ADMIN_MENU: constants.ADMIN_MENU, ConversationHandler.END: constants.ADMIN_MENU},
-        per_user=True,
-        per_chat=True,
-        allow_reentry=True
+        per_user=True, per_chat=True, allow_reentry=True
     )
 
     # --- Main Admin Conversation ---
     admin_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(f'^{constants.BTN_ADMIN_PANEL}$') & admin_filter, admin_c.admin_entry),
-            # اگر ورود با اینلاین باشد:
             CallbackQueryHandler(admin_c.admin_entry, pattern="^admin_panel$")
         ],
         states={
-            # منوی اصلی ادمین
             constants.ADMIN_MENU: [
-                # ReplyKeyboard
                 MessageHandler(filters.Regex('^➕ مدیریت پلن‌ها$'), admin_plans.plan_management_menu),
                 MessageHandler(filters.Regex('^📈 گزارش‌ها و آمار$'), admin_reports.reports_menu),
                 MessageHandler(filters.Regex('^💾 پشتیبان‌گیری$'), admin_backup.backup_restore_menu),
@@ -249,7 +265,6 @@ def build_application():
                 MessageHandler(filters.Regex('^📩 ارسال پیام$'), admin_users.broadcast_menu),
                 MessageHandler(filters.Regex('^🛑 خاموش کردن ربات$'), admin_c.shutdown_bot),
 
-                # InlineKeyboard معادل
                 CallbackQueryHandler(admin_plans.plan_management_menu, pattern="^admin_plans$"),
                 CallbackQueryHandler(admin_reports.reports_menu, pattern="^admin_reports$"),
                 CallbackQueryHandler(admin_backup.backup_restore_menu, pattern="^admin_backup$"),
@@ -258,41 +273,26 @@ def build_application():
                 CallbackQueryHandler(admin_users.broadcast_menu, pattern="^admin_broadcast$"),
                 CallbackQueryHandler(admin_c.shutdown_bot, pattern="^admin_shutdown$"),
 
-                # کانورسیشن تنظیمات
                 admin_settings_conv,
             ],
-            # منوی مدیریت پلن‌ها
             constants.PLAN_MENU: [
-                # Reply/Inline
                 MessageHandler(filters.Regex(r'^📋 لیست پلن‌ها$'), admin_plans.list_plans_admin),
                 CallbackQueryHandler(admin_plans.list_plans_admin, pattern=r'^admin_list_plans$'),
-
-                # کال‌بک‌های آیتم‌های لیست
                 CallbackQueryHandler(admin_plans.admin_toggle_plan_visibility_callback, pattern=r'^admin_toggle_plan_\d+$'),
                 CallbackQueryHandler(admin_plans.admin_delete_plan_callback, pattern=r'^admin_delete_plan_\d+$'),
-
-                # کانورسیشن‌ها
                 edit_plan_conv,
                 add_plan_conv,
-
-                # بازگشت به منوی ادمین
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.admin_entry),
             ],
-            # منوی گزارش‌ها و آمار
             constants.REPORTS_MENU: [
-                # ReplyKeyboard
                 MessageHandler(filters.Regex(r'^📊 آمار کلی$'), admin_reports.show_stats_report),
                 MessageHandler(filters.Regex(r'^📈 گزارش فروش امروز$'), admin_reports.show_daily_report),
                 MessageHandler(filters.Regex(r'^📅 گزارش فروش ۷ روز اخیر$'), admin_reports.show_weekly_report),
                 MessageHandler(filters.Regex(r'^🏆 محبوب‌ترین پلن‌ها$'), admin_reports.show_popular_plans_report),
-
-                # InlineKeyboard معادل
                 CallbackQueryHandler(admin_reports.show_stats_report, pattern=r'^admin_report_stats$'),
                 CallbackQueryHandler(admin_reports.show_daily_report, pattern=r'^admin_report_daily$'),
                 CallbackQueryHandler(admin_reports.show_weekly_report, pattern=r'^admin_report_weekly$'),
                 CallbackQueryHandler(admin_reports.show_popular_plans_report, pattern=r'^admin_report_popular$'),
-
-                # بازگشت به منوی ادمین
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.admin_entry),
             ],
         },
@@ -300,12 +300,10 @@ def build_application():
             MessageHandler(filters.Regex(f'^{constants.BTN_EXIT_ADMIN_PANEL}$'), admin_c.exit_admin_panel),
             CommandHandler('cancel', admin_c.admin_generic_cancel)
         ],
-        per_user=True,
-        per_chat=True,
-        allow_reentry=True
+        per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # ثبت کانورسیشن‌ها
+    # Register
     application.add_handler(charge_conv)
     application.add_handler(gift_conv)
     application.add_handler(buy_conv)
