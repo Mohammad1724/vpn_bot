@@ -27,7 +27,8 @@ from bot.handlers.admin import settings as admin_settings
 from bot.handlers.admin import backup as admin_backup
 from bot.handlers.admin import users as admin_users
 from bot.handlers.admin import gift_codes as admin_gift
-from bot.handlers.admin import trial_settings as trial_cfg
+from bot.handlers.admin import trial_settings as trial_cfg   # دستورات /set_trial_days و /set_trial_gb (اگر خواستی نگه‌دار)
+from bot.handlers.admin import trial_settings_ui as trial_ui  # منوی دکمه‌ای جدید سرویس تست
 from bot.handlers.trial import get_trial_service as trial_get_trial_service
 from config import BOT_TOKEN, ADMIN_ID
 
@@ -128,6 +129,22 @@ def build_application():
         per_user=True, per_chat=True
     )
 
+    # --- Trial settings conversation (new) ---
+    trial_settings_conv = ConversationHandler(
+        entry_points=[CommandHandler("trial_settings", trial_ui.trial_menu, filters=admin_filter)],
+        states={
+            trial_ui.TRIAL_MENU: [
+                CallbackQueryHandler(trial_ui.ask_days, pattern="^trial_set_days$"),
+                CallbackQueryHandler(trial_ui.ask_gb, pattern="^trial_set_gb$"),
+                CallbackQueryHandler(admin_settings.settings_menu, pattern="^back_to_settings$"),
+            ],
+            trial_ui.WAIT_DAYS: [MessageHandler(filters.TEXT & admin_filter & ~filters.COMMAND, trial_ui.days_received)],
+            trial_ui.WAIT_GB: [MessageHandler(filters.TEXT & admin_filter & ~filters.COMMAND, trial_ui.gb_received)],
+        },
+        fallbacks=[CommandHandler('cancel', admin_c.admin_generic_cancel)],
+        per_user=True, per_chat=True
+    )
+
     # --- Admin Nested Conversations ---
     add_plan_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^➕ افزودن پلن جدید$') & admin_filter, admin_plans.add_plan_start)],
@@ -207,7 +224,9 @@ def build_application():
                 MessageHandler(filters.Regex('^🎁 مدیریت کد هدیه$'), admin_gift.gift_code_management_menu),
                 MessageHandler(filters.Regex('^📋 لیست کدهای هدیه$'), admin_gift.list_gift_codes),
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$'), admin_c.back_to_admin_menu),
-                create_gift_conv,
+                # زیرمجموعه‌ها
+                add_plan_conv,
+                edit_plan_conv,
                 settings_conv,
                 broadcast_conv,
                 CallbackQueryHandler(admin_settings.back_to_admin_menu_cb, pattern="^admin_back_to_menu$"),
@@ -273,12 +292,13 @@ def build_application():
     application.add_handler(transfer_conv)
     application.add_handler(gift_from_balance_conv)
     application.add_handler(support_conv)
+    application.add_handler(trial_settings_conv)
 
-    # دکمه‌های تایید/لغو خرید سرویس
+    # تایید/لغو خرید سرویس
     application.add_handler(CallbackQueryHandler(buy_h.confirm_purchase_callback, pattern="^confirmbuy$"), group=2)
     application.add_handler(CallbackQueryHandler(buy_h.cancel_purchase_callback, pattern="^cancelbuy$"), group=2)
 
-    # دستورات ادمین برای تنظیم سرویس تست
+    # دستورات ادمین (اختیاری: اگر خواستی نگه‌داری)
     application.add_handler(CommandHandler("set_trial_days", trial_cfg.set_trial_days), group=3)
     application.add_handler(CommandHandler("set_trial_gb", trial_cfg.set_trial_gb), group=3)
 
