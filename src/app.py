@@ -28,25 +28,105 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         logging.getLogger("telegram.network").warning("Transient network error ignored: %s", err)
         return
     logger.error("خطا در هنگام پردازش آپدیت:", exc_info=err)
-    if isinstance(update, Update): logger.error(f"آپدیت مربوطه: {update}")
+    if isinstance(update, Update):
+        logger.error(f"آپدیت مربوطه: {update}")
 
 def build_application():
     request = HTTPXRequest(connect_timeout=15.0, read_timeout=180.0, write_timeout=30.0, pool_timeout=90.0)
-    application = (ApplicationBuilder().token(BOT_TOKEN).request(request).post_init(jobs.post_init).post_shutdown(jobs.post_shutdown).build())
+    application = (
+        ApplicationBuilder()
+        .token(BOT_TOKEN)
+        .request(request)
+        .post_init(jobs.post_init)
+        .post_shutdown(jobs.post_shutdown)
+        .build()
+    )
     application.add_error_handler(error_handler)
-    admin_filter = filters.User(user_id=ADMIN_ID); user_filter = ~admin_filter
+
+    # اطمینان از اینکه ADMIN_ID عدد است (برای درست کار کردن فیلتر)
+    try:
+        admin_id_int = int(ADMIN_ID)
+    except Exception:
+        admin_id_int = ADMIN_ID  # اگر واقعاً لیست/چند آی‌دی دارید، همان را نگه دارید
+    admin_filter = filters.User(user_id=admin_id_int)
+    user_filter = ~admin_filter
 
     # --- Conversations ---
-    buy_conv = ConversationHandler(entry_points=[CallbackQueryHandler(check_channel_membership(buy_h.buy_start), pattern='^user_buy_')], states={constants.GET_CUSTOM_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, buy_h.get_custom_name), CommandHandler('skip', buy_h.skip_custom_name)]}, fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)], per_user=True, per_chat=True)
-    gift_conv = ConversationHandler(entry_points=[MessageHandler(filters.Regex('^🎁 کد هدیه$') & user_filter, check_channel_membership(gift_h.gift_code_entry))], states={constants.REDEEM_GIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, gift_h.redeem_gift_code)]}, fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)], per_user=True, per_chat=True)
-    charge_conv = ConversationHandler(entry_points=[CallbackQueryHandler(check_channel_membership(charge_h.charge_start), pattern='^user_start_charge$')], states={constants.CHARGE_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, charge_h.charge_amount_received), CallbackQueryHandler(charge_h.charge_amount_confirm_cb, pattern="^charge_amount_(confirm|cancel)$")], constants.CHARGE_RECEIPT: [MessageHandler(filters.PHOTO, charge_h.charge_receipt_received)]}, fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)], per_user=True, per_chat=True)
-    transfer_conv = ConversationHandler(entry_points=[CallbackQueryHandler(check_channel_membership(acc_act.transfer_start), pattern="^acc_transfer_start$")], states={constants.TRANSFER_RECIPIENT_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, acc_act.transfer_recipient_received)], constants.TRANSFER_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, acc_act.transfer_amount_received)], constants.TRANSFER_CONFIRM: [CallbackQueryHandler(acc_act.transfer_confirm, pattern="^transfer_confirm_")]}, fallbacks=[CommandHandler('cancel', acc_act.transfer_cancel)])
-    gift_from_balance_conv = ConversationHandler(entry_points=[CallbackQueryHandler(check_channel_membership(acc_act.create_gift_from_balance_start), pattern="^acc_gift_from_balance_start$")], states={constants.GIFT_FROM_BALANCE_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, acc_act.create_gift_amount_received)], constants.GIFT_FROM_BALANCE_CONFIRM: [CallbackQueryHandler(acc_act.create_gift_confirm, pattern="^gift_confirm_")]}, fallbacks=[CommandHandler('cancel', acc_act.create_gift_cancel)])
-    support_conv = ConversationHandler(entry_points=[MessageHandler(filters.Regex('^📞 پشتیبانی$') & user_filter, check_channel_membership(support_h.support_ticket_start))], states={constants.SUPPORT_TICKET_OPEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, support_h.forward_to_admin)]}, fallbacks=[CommandHandler('cancel', support_h.support_ticket_cancel)], per_user=True, per_chat=True)
-    
+    buy_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(check_channel_membership(buy_h.buy_start), pattern='^user_buy_')],
+        states={
+            constants.GET_CUSTOM_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, buy_h.get_custom_name),
+                CommandHandler('skip', buy_h.skip_custom_name),
+            ],
+        },
+        fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
+        per_user=True,
+        per_chat=True,
+    )
+
+    gift_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex('^🎁 کد هدیه$') & user_filter, check_channel_membership(gift_h.gift_code_entry))],
+        states={
+            constants.REDEEM_GIFT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, gift_h.redeem_gift_code),
+            ],
+        },
+        fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
+        per_user=True,
+        per_chat=True,
+    )
+
+    charge_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(check_channel_membership(charge_h.charge_start), pattern='^user_start_charge$')],
+        states={
+            constants.CHARGE_AMOUNT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, charge_h.charge_amount_received),
+                CallbackQueryHandler(charge_h.charge_amount_confirm_cb, pattern="^charge_amount_(confirm|cancel)$"),
+            ],
+            constants.CHARGE_RECEIPT: [
+                MessageHandler(filters.PHOTO, charge_h.charge_receipt_received),
+            ],
+        },
+        fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
+        per_user=True,
+        per_chat=True,
+    )
+
+    transfer_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(check_channel_membership(acc_act.transfer_start), pattern="^acc_transfer_start$")],
+        states={
+            constants.TRANSFER_RECIPIENT_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, acc_act.transfer_recipient_received)],
+            constants.TRANSFER_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, acc_act.transfer_amount_received)],
+            constants.TRANSFER_CONFIRM: [CallbackQueryHandler(acc_act.transfer_confirm, pattern="^transfer_confirm_")],
+        },
+        fallbacks=[CommandHandler('cancel', acc_act.transfer_cancel)]
+    )
+
+    gift_from_balance_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(check_channel_membership(acc_act.create_gift_from_balance_start), pattern="^acc_gift_from_balance_start$")],
+        states={
+            constants.GIFT_FROM_BALANCE_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, acc_act.create_gift_amount_received)],
+            constants.GIFT_FROM_BALANCE_CONFIRM: [CallbackQueryHandler(acc_act.create_gift_confirm, pattern="^gift_confirm_")],
+        },
+        fallbacks=[CommandHandler('cancel', acc_act.create_gift_cancel)]
+    )
+
+    support_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex('^📞 پشتیبانی$') & user_filter, check_channel_membership(support_h.support_ticket_start))],
+        states={constants.SUPPORT_TICKET_OPEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, support_h.forward_to_admin)]},
+        fallbacks=[CommandHandler('cancel', support_h.support_ticket_cancel)],
+        per_user=True,
+        per_chat=True
+    )
+
     # --- Admin Conversations (Nested inside the main admin conv) ---
     add_plan_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex('^➕ افزودن پلن جدید$') & admin_filter, admin_plans.add_plan_start)],
+        entry_points=[
+            MessageHandler(filters.Regex('^➕ افزودن پلن جدید$') & admin_filter, admin_plans.add_plan_start),
+            # در صورت استفاده از اینلاین‌کیبورد:
+            CallbackQueryHandler(admin_plans.add_plan_start, pattern="^admin_add_plan$")
+        ],
         states={
             constants.PLAN_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_name_received)],
             constants.PLAN_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_price_received)],
@@ -55,11 +135,19 @@ def build_application():
             constants.PLAN_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_category_received)],
         },
         fallbacks=[CommandHandler('cancel', admin_plans.cancel_add_plan)],
-        map_to_parent={ConversationHandler.END: constants.PLAN_MENU}
+        # نکته مهم: PLAN_MENU در parent تعریف نشده، پس باید به ADMIN_MENU نگاشت شود
+        map_to_parent={ConversationHandler.END: constants.ADMIN_MENU},
+        per_user=True,
+        per_chat=True,
+        allow_reentry=True,
     )
-    
+
     admin_settings_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex('^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu)],
+        entry_points=[
+            MessageHandler(filters.Regex('^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
+            # اگر دکمه تنظیمات اینلاین است:
+            CallbackQueryHandler(admin_settings.settings_menu, pattern="^admin_settings$")
+        ],
         states={
             constants.ADMIN_SETTINGS_MENU: [
                 CallbackQueryHandler(admin_settings.maintenance_and_join_submenu, pattern="^settings_maint_join$"),
@@ -79,17 +167,26 @@ def build_application():
             ],
             constants.AWAIT_SETTING_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_settings.setting_value_received)],
         },
-        fallbacks=[CommandHandler('cancel', admin_c.admin_generic_cancel), CallbackQueryHandler(admin_settings.settings_menu, pattern="^back_to_settings$")],
+        fallbacks=[
+            CommandHandler('cancel', admin_c.admin_generic_cancel),
+            CallbackQueryHandler(admin_settings.settings_menu, pattern="^back_to_settings$")
+        ],
         map_to_parent={constants.ADMIN_MENU: constants.ADMIN_MENU, ConversationHandler.END: constants.ADMIN_MENU},
-        per_user=True, per_chat=True, allow_reentry=True
+        per_user=True,
+        per_chat=True,
+        allow_reentry=True
     )
-    
+
     # --- Main Admin Conversation ---
     admin_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(f'^{constants.BTN_ADMIN_PANEL}$') & admin_filter, admin_c.admin_entry)],
+        entry_points=[
+            MessageHandler(filters.Regex(f'^{constants.BTN_ADMIN_PANEL}$') & admin_filter, admin_c.admin_entry),
+            # اگر ورود به پنل ادمین با اینلاین‌کیبورد است:
+            CallbackQueryHandler(admin_c.admin_entry, pattern="^admin_panel$")
+        ],
         states={
             constants.ADMIN_MENU: [
-                # All main admin buttons are handled here
+                # ReplyKeyboard دکمه‌ها (متنی)
                 MessageHandler(filters.Regex('^➕ مدیریت پلن‌ها$'), admin_plans.plan_management_menu),
                 MessageHandler(filters.Regex('^📈 گزارش‌ها و آمار$'), admin_reports.reports_menu),
                 MessageHandler(filters.Regex('^💾 پشتیبان‌گیری$'), admin_backup.backup_restore_menu),
@@ -97,17 +194,38 @@ def build_application():
                 MessageHandler(filters.Regex('^🎁 مدیریت کد هدیه$'), admin_gift.gift_code_management_menu),
                 MessageHandler(filters.Regex('^📩 ارسال پیام$'), admin_users.broadcast_menu),
                 MessageHandler(filters.Regex('^🛑 خاموش کردن ربات$'), admin_c.shutdown_bot),
+
+                # InlineKeyboard دکمه‌ها (کالبک)
+                CallbackQueryHandler(admin_plans.plan_management_menu, pattern="^admin_plans$"),
+                CallbackQueryHandler(admin_reports.reports_menu, pattern="^admin_reports$"),
+                CallbackQueryHandler(admin_backup.backup_restore_menu, pattern="^admin_backup$"),
+                CallbackQueryHandler(admin_users.user_management_menu, pattern="^admin_users$"),
+                CallbackQueryHandler(admin_gift.gift_code_management_menu, pattern="^admin_gift$"),
+                CallbackQueryHandler(admin_users.broadcast_menu, pattern="^admin_broadcast$"),
+                CallbackQueryHandler(admin_c.shutdown_bot, pattern="^admin_shutdown$"),
+
                 # Nested conversations
                 admin_settings_conv,
-                add_plan_conv, # Added here
+                add_plan_conv,
             ],
         },
-        fallbacks=[MessageHandler(filters.Regex(f'^{constants.BTN_EXIT_ADMIN_PANEL}$'), admin_c.exit_admin_panel), CommandHandler('cancel', admin_c.admin_generic_cancel)],
-        per_user=True, per_chat=True, allow_reentry=True
+        fallbacks=[
+            MessageHandler(filters.Regex(f'^{constants.BTN_EXIT_ADMIN_PANEL}$'), admin_c.exit_admin_panel),
+            CommandHandler('cancel', admin_c.admin_generic_cancel)
+        ],
+        per_user=True,
+        per_chat=True,
+        allow_reentry=True
     )
 
-    application.add_handler(charge_conv); application.add_handler(gift_conv); application.add_handler(buy_conv); application.add_handler(transfer_conv); application.add_handler(gift_from_balance_conv); application.add_handler(support_conv); application.add_handler(admin_conv)
-    
+    application.add_handler(charge_conv)
+    application.add_handler(gift_conv)
+    application.add_handler(buy_conv)
+    application.add_handler(transfer_conv)
+    application.add_handler(gift_from_balance_conv)
+    application.add_handler(support_conv)
+    application.add_handler(admin_conv)
+
     # --- Global Callbacks ---
     application.add_handler(CallbackQueryHandler(buy_h.confirm_purchase_callback, pattern="^confirmbuy$"), group=2)
     application.add_handler(CallbackQueryHandler(buy_h.cancel_purchase_callback, pattern="^cancelbuy$"), group=2)
@@ -116,17 +234,55 @@ def build_application():
     application.add_handler(CallbackQueryHandler(admin_users.admin_confirm_charge_callback, pattern="^admin_confirm_charge_"), group=1)
     application.add_handler(CallbackQueryHandler(admin_users.admin_reject_charge_callback, pattern="^admin_reject_charge_"), group=1)
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern="^check_membership$"))
-    
+
     # --- Other Handlers ---
-    user_services_handlers = [CallbackQueryHandler(check_channel_membership(us_h.view_service_callback), pattern="^view_service_"), CallbackQueryHandler(check_channel_membership(us_h.back_to_services_callback), pattern="^back_to_services$"), CallbackQueryHandler(check_channel_membership(us_h.get_link_callback), pattern="^getlink_"), CallbackQueryHandler(check_channel_membership(us_h.refresh_service_details), pattern="^refresh_"), CallbackQueryHandler(check_channel_membership(us_h.more_links_callback), pattern="^more_links_"), CallbackQueryHandler(check_channel_membership(us_h.renew_service_handler), pattern="^renew_"), CallbackQueryHandler(check_channel_membership(us_h.confirm_renewal_callback), pattern="^confirmrenew$"), CallbackQueryHandler(check_channel_membership(us_h.cancel_renewal_callback), pattern="^cancelrenew$"), CallbackQueryHandler(check_channel_membership(us_h.delete_service_callback), pattern="^delete_service_")]
-    for handler in user_services_handlers: application.add_handler(handler, group=2)
-    account_info_handlers = [CallbackQueryHandler(check_channel_membership(start_h.show_purchase_history_callback), pattern="^acc_purchase_history$"), CallbackQueryHandler(check_channel_membership(start_h.show_charge_history_callback), pattern="^acc_charge_history$"), CallbackQueryHandler(check_channel_membership(start_h.show_charging_guide_callback), pattern="^acc_charging_guide$"), CallbackQueryHandler(check_channel_membership(start_h.show_account_info), pattern="^acc_back_to_main$")]
-    for handler in account_info_handlers: application.add_handler(handler)
-    guide_handlers = [CallbackQueryHandler(check_channel_membership(start_h.show_guide_content), pattern="^guide_(connection|charging|buying)$"), CallbackQueryHandler(check_channel_membership(start_h.back_to_guide_menu), pattern="^guide_back_to_menu$")]
-    for handler in guide_handlers: application.add_handler(handler)
-    plan_category_handlers = [CallbackQueryHandler(check_channel_membership(buy_h.show_plans_in_category), pattern="^user_cat_"), CallbackQueryHandler(check_channel_membership(buy_h.buy_service_list), pattern="^back_to_cats$")]
-    for handler in plan_category_handlers: application.add_handler(handler)
-    main_menu_handlers = [CommandHandler("start", check_channel_membership(start_h.start)), MessageHandler(filters.Regex('^🛍️ خرید سرویس$'), check_channel_membership(buy_h.buy_service_list)), MessageHandler(filters.Regex('^📋 سرویس‌های من$'), check_channel_membership(us_h.list_my_services)), MessageHandler(filters.Regex('^👤 اطلاعات حساب کاربری$'), check_channel_membership(start_h.show_account_info)), MessageHandler(filters.Regex('^📚 راهنما$'), check_channel_membership(start_h.show_guide)), MessageHandler(filters.Regex('^🧪 دریافت سرویس تست رایگان$'), check_channel_membership(trial_get_trial_service)), MessageHandler(filters.Regex('^🎁 معرفی دوستان$'), check_channel_membership(start_h.show_referral_link))]
-    for handler in main_menu_handlers: application.add_handler(handler, group=3)
-    
+    user_services_handlers = [
+        CallbackQueryHandler(check_channel_membership(us_h.view_service_callback), pattern="^view_service_"),
+        CallbackQueryHandler(check_channel_membership(us_h.back_to_services_callback), pattern="^back_to_services$"),
+        CallbackQueryHandler(check_channel_membership(us_h.get_link_callback), pattern="^getlink_"),
+        CallbackQueryHandler(check_channel_membership(us_h.refresh_service_details), pattern="^refresh_"),
+        CallbackQueryHandler(check_channel_membership(us_h.more_links_callback), pattern="^more_links_"),
+        CallbackQueryHandler(check_channel_membership(us_h.renew_service_handler), pattern="^renew_"),
+        CallbackQueryHandler(check_channel_membership(us_h.confirm_renewal_callback), pattern="^confirmrenew$"),
+        CallbackQueryHandler(check_channel_membership(us_h.cancel_renewal_callback), pattern="^cancelrenew$"),
+        CallbackQueryHandler(check_channel_membership(us_h.delete_service_callback), pattern="^delete_service_"),
+    ]
+    for handler in user_services_handlers:
+        application.add_handler(handler, group=2)
+
+    account_info_handlers = [
+        CallbackQueryHandler(check_channel_membership(start_h.show_purchase_history_callback), pattern="^acc_purchase_history$"),
+        CallbackQueryHandler(check_channel_membership(start_h.show_charge_history_callback), pattern="^acc_charge_history$"),
+        CallbackQueryHandler(check_channel_membership(start_h.show_charging_guide_callback), pattern="^acc_charging_guide$"),
+        CallbackQueryHandler(check_channel_membership(start_h.show_account_info), pattern="^acc_back_to_main$"),
+    ]
+    for handler in account_info_handlers:
+        application.add_handler(handler)
+
+    guide_handlers = [
+        CallbackQueryHandler(check_channel_membership(start_h.show_guide_content), pattern="^guide_(connection|charging|buying)$"),
+        CallbackQueryHandler(check_channel_membership(start_h.back_to_guide_menu), pattern="^guide_back_to_menu$"),
+    ]
+    for handler in guide_handlers:
+        application.add_handler(handler)
+
+    plan_category_handlers = [
+        CallbackQueryHandler(check_channel_membership(buy_h.show_plans_in_category), pattern="^user_cat_"),
+        CallbackQueryHandler(check_channel_membership(buy_h.buy_service_list), pattern="^back_to_cats$"),
+    ]
+    for handler in plan_category_handlers:
+        application.add_handler(handler)
+
+    main_menu_handlers = [
+        CommandHandler("start", check_channel_membership(start_h.start)),
+        MessageHandler(filters.Regex('^🛍️ خرید سرویس$'), check_channel_membership(buy_h.buy_service_list)),
+        MessageHandler(filters.Regex('^📋 سرویس‌های من$'), check_channel_membership(us_h.list_my_services)),
+        MessageHandler(filters.Regex('^👤 اطلاعات حساب کاربری$'), check_channel_membership(start_h.show_account_info)),
+        MessageHandler(filters.Regex('^📚 راهنما$'), check_channel_membership(start_h.show_guide)),
+        MessageHandler(filters.Regex('^🧪 دریافت سرویس تست رایگان$'), check_channel_membership(trial_get_trial_service)),
+        MessageHandler(filters.Regex('^🎁 معرفی دوستان$'), check_channel_membership(start_h.show_referral_link)),
+    ]
+    for handler in main_menu_handlers:
+        application.add_handler(handler, group=3)
+
     return application
