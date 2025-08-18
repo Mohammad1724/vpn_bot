@@ -46,7 +46,10 @@ def build_application():
     
     # --- Admin Conversations ---
     admin_settings_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex('^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu)],
+        entry_points=[
+            MessageHandler(filters.Regex('^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
+            CallbackQueryHandler(admin_settings.settings_menu, pattern="^back_to_settings$")
+        ],
         states={
             constants.ADMIN_SETTINGS_MENU: [
                 CallbackQueryHandler(admin_settings.maintenance_and_join_submenu, pattern="^settings_maint_join$"),
@@ -63,7 +66,6 @@ def build_application():
                 CallbackQueryHandler(admin_settings.toggle_report_setting, pattern="^toggle_report_"),
                 CallbackQueryHandler(trial_ui.trial_menu, pattern="^settings_trial$"),
                 CallbackQueryHandler(admin_settings.edit_setting_start, pattern="^admin_edit_setting_"),
-                CallbackQueryHandler(admin_settings.settings_menu, pattern="^back_to_settings$"), # Back to main settings menu
             ],
             constants.AWAIT_SETTING_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_settings.setting_value_received)],
         },
