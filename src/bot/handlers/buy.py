@@ -26,7 +26,7 @@ def _short_price(price: float) -> str:
     return utils.format_toman(price, persian_digits=False)
 
 def _short_label(p: dict) -> str:
-    # کوتاه و جمع‌وجور: نام کوتاه | N روز | GB/نامحدود | قیمت کامل
+    # ترتیب درست: نام | روز | حجم | قیمت
     name = (p.get('name') or 'پلن')[:18]
     days = int(p.get('days', 0))
     gb = int(p.get('gb', 0))
