@@ -45,6 +45,10 @@ def _action_kb(target_id: int, is_banned: bool) -> InlineKeyboardMarkup:
     ]
     return InlineKeyboardMarkup(rows)
 
+def _sanitize_for_code(s: str) -> str:
+    # در صورت وجود backtick داخل نام کاربری/متن، حذف می‌کنیم تا Markdown به‌هم نریزد
+    return (s or "").replace("`", "")
+
 async def _render_user_panel_text(target_id: int) -> tuple[str, bool]:
     info = db.get_user(target_id)
     if not info:
@@ -53,10 +57,18 @@ async def _render_user_panel_text(target_id: int) -> tuple[str, bool]:
         services = db.get_user_services(target_id) or []
     except Exception:
         services = []
+
     ban_state = bool(info.get('is_banned'))
+
+    # آماده‌سازی نام کاربری و شناسه برای tap-to-copy
+    username = info.get('username') or "-"
+    if username != "-" and not username.startswith("@"):
+        username = f"@{username}"
+    username = _sanitize_for_code(username)
+
     text = (
-        f"👤 شناسه: {target_id}\n"
-        f"👥 نام کاربری: {info.get('username') or '-'}\n"
+        f"👤 شناسه: `{_sanitize_for_code(str(target_id))}`\n"
+        f"👥 نام کاربری: `{username}`\n"
         f"💰 موجودی: {int(info.get('balance', 0)):,} تومان\n"
         f"🧪 تست: {'استفاده کرده' if info.get('has_used_trial') else 'آزاد'}\n"
         f"🚫 وضعیت: {'مسدود' if ban_state else 'آزاد'}\n"
@@ -84,11 +96,11 @@ async def _send_user_panel(update: Update, target_id: int):
     if q:
         await q.answer()
         try:
-            await q.edit_message_text(text, reply_markup=kb)
+            await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
         except Exception:
-            await q.from_user.send_message(text, reply_markup=kb)
+            await q.from_user.send_message(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
     else:
-        await update.effective_message.reply_text(text, reply_markup=kb)
+        await update.effective_message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
 
 # دریافت شناسه عددی و نمایش پنل
 async def manage_user_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
