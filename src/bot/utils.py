@@ -78,35 +78,26 @@ def make_qr_bytes(data: str) -> io.BytesIO:
 
 def _format_expiry_and_days(user_data: dict) -> tuple[str, int]:
     expire_dt = None
-    # 1. اولویت با 'expire' timestamp
-    if 'expire' in user_data and str(user_data['expire']).isdigit():
+    
+    # 1. اولویت با `package_days` برای دقت بیشتر
+    start_date_str = user_data.get('created_at') or user_data.get('last_reset_time') or user_data.get('start_date')
+    if start_date_str:
+        start_dt = parse_date_flexible(start_date_str)
+        if start_dt:
+            try:
+                package_days = int(user_data.get('package_days', 0))
+                if package_days > 0:
+                    expire_dt = start_dt + timedelta(days=package_days)
+            except (ValueError, TypeError):
+                pass
+                
+    # 2. اگر `package_days` نبود، از `expire` timestamp استفاده کن
+    if expire_dt is None and 'expire' in user_data and str(user_data['expire']).isdigit():
         try:
             expire_dt = datetime.fromtimestamp(int(user_data['expire']), tz=timezone.utc).astimezone()
         except Exception:
             expire_dt = None
             
-    # 2. اگر 'expire' نبود، از 'days_left' پنل استفاده کن
-    if expire_dt is None and 'days_left' in user_data:
-        try:
-            days_left_from_panel = float(user_data['days_left'])
-            # روزها را به بالا گرد کن تا ۲۸.۵ روز، ۲۹ روز نمایش داده شود
-            expire_dt = datetime.now().astimezone() + timedelta(days=math.ceil(days_left_from_panel))
-        except (ValueError, TypeError):
-            expire_dt = None
-            
-    # 3. اگر هیچکدام نبود، از تاریخ شروع و package_days محاسبه کن
-    if expire_dt is None:
-        start_date_str = user_data.get('created_at') or user_data.get('last_reset_time') or user_data.get('start_date')
-        if start_date_str:
-            start_dt = parse_date_flexible(start_date_str)
-            if start_dt:
-                try:
-                    package_days = int(user_data.get('package_days', 0))
-                except Exception:
-                    package_days = 0
-                if package_days > 0:
-                    expire_dt = start_dt + timedelta(days=package_days)
-
     now_aware = datetime.now().astimezone()
     expire_jalali = "نامشخص"
     days_left = 0
@@ -116,7 +107,6 @@ def _format_expiry_and_days(user_data: dict) -> tuple[str, int]:
         except Exception:
             expire_jalali = expire_dt.strftime("%Y-%m-%d")
         
-        # محاسبه دقیق روزهای باقیمانده با گرد کردن به بالا
         if expire_dt > now_aware:
             time_diff = expire_dt - now_aware
             days_left = math.ceil(time_diff.total_seconds() / (24 * 3600))
