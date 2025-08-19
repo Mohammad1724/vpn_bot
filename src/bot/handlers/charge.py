@@ -9,14 +9,34 @@ from telegram.error import BadRequest
 import database as db
 from config import ADMIN_ID
 from bot import constants
+from bot.utils import format_toman
 
 logger = logging.getLogger(__name__)
+
+def _get_payment_info_text():
+    """متن راهنمای پرداخت را از دیتابیس می‌سازد."""
+    instr = db.get_setting("payment_instruction_text") or "لطفاً مبلغ را به یکی از شماره کارت‌های زیر واریز کرده و از رسید اسکرین‌شات بگیرید."
+    
+    lines = [f"**راهنمای شارژ حساب**\n\n{instr}\n"]
+    has_cards = False
+    for i in range(1, 4):
+        num = db.get_setting(f"payment_card_{i}_number")
+        name = db.get_setting(f"payment_card_{i}_name")
+        bank = db.get_setting(f"payment_card_{i}_bank")
+        if num and name:
+            has_cards = True
+            bank_info = f" ({bank})" if bank else ""
+            lines.append(f"💳 شماره کارت: `{num}`\n👤 صاحب حساب: {name}{bank_info}\n")
+
+    if not has_cards:
+        return "در حال حاضر اطلاعات پرداختی ثبت نشده است. لطفاً با پشتیبانی تماس بگیرید."
+        
+    return "\n".join(lines)
 
 # -----------------
 # شروع و دریافت مبلغ
 # -----------------
 async def charge_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # سازگار با Message و CallbackQuery
     em = update.effective_message
     q = getattr(update, "callback_query", None)
     if q:
@@ -26,12 +46,14 @@ async def charge_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except BadRequest:
             pass
 
-    # جلوگیری از ارسال پیام تکراری
-    if em:
-        await em.reply_text(
-            "مبلغ شارژ مورد نظر (تومان) را وارد کنید:",
-            reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
-        )
+    payment_info = _get_payment_info_text()
+    await em.reply_text(
+        payment_info,
+        reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    
+    await em.reply_text("مبلغ شارژ مورد نظر (تومان) را وارد کنید:")
     return constants.CHARGE_AMOUNT
 
 async def charge_amount_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -45,11 +67,12 @@ async def charge_amount_received(update: Update, context: ContextTypes.DEFAULT_T
         return constants.CHARGE_AMOUNT
 
     context.user_data['charge_amount'] = amount
+    amount_str = format_toman(amount, persian_digits=True)
 
     text = f"""
 ⚠️ تایید شارژ حساب
 
-- مبلغ: {amount:,} تومان
+- مبلغ: {amount_str}
 
 با تایید، باید تصویر رسید پرداخت را ارسال کنید.
 ادامه می‌دهید؟
@@ -109,26 +132,34 @@ async def charge_receipt_received(update: Update, context: ContextTypes.DEFAULT_
     if context.user_data.get('first_charge_promo_applied'):
         promo_code = db.get_setting('first_charge_code') or ""
 
-    # ارسال برای ادمین
+    charge_id = None
+    try:
+        if hasattr(db, "add_charge_request"):
+            charge_id = db.add_charge_request(user_id, amount, note=promo_code)
+    except Exception as e:
+        logger.error("Failed to save charge request to DB: %s", e)
+
+    if charge_id is None:
+        await update.message.reply_text("❌ خطا در ثبت درخواست. لطفاً به پشتیبانی اطلاع دهید.")
+        return ConversationHandler.END
+
     file_id = photos[-1].file_id
     caption = (
-        f"درخواست شارژ جدید:\n"
+        f"درخواست شارژ جدید (ID: {charge_id}):\n"
         f"- کاربر: `{user_id}` (@{username or '—'})\n"
         f"- مبلغ: {amount:,} تومان"
     )
     if promo_code:
         caption += f"\n- کد شارژ اول: `{promo_code}`"
 
-    # اضافه کردن کد تخفیف به callback_data
-    callback_data_confirm = f"admin_confirm_charge_{user_id}_{amount}"
+    callback_data_confirm = f"admin_confirm_charge_{charge_id}_{user_id}_{amount}"
     if promo_code:
         callback_data_confirm += f"_{promo_code}"
 
     kb_admin = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ تایید شارژ", callback_data=callback_data_confirm)],
-        [InlineKeyboardButton("❌ رد شارژ", callback_data=f"admin_reject_charge_{user_id}")]
+        [InlineKeyboardButton("❌ رد شارژ", callback_data=f"admin_reject_charge_{charge_id}_{user_id}")]
     ])
-
     try:
         await context.bot.send_photo(
             chat_id=ADMIN_ID,
@@ -140,13 +171,11 @@ async def charge_receipt_received(update: Update, context: ContextTypes.DEFAULT_
     except Exception as e:
         logger.error("Failed to send charge request to admin: %s", e)
 
-    # پیام به کاربر
     from bot.keyboards import get_main_menu_keyboard
     await update.message.reply_text(
         "✅ رسید شما دریافت شد. پس از بررسی ادمین نتیجه اعلام می‌شود.",
         reply_markup=get_main_menu_keyboard(user_id)
     )
 
-    # پاکسازی
     context.user_data.clear()
     return ConversationHandler.END
