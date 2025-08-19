@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
 
 import logging
+from datetime import datetime
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
 
 import database as db
+from bot import utils
 from bot.constants import ADMIN_MENU, AWAIT_SETTING_VALUE, ADMIN_SETTINGS_MENU
 from bot.keyboards import get_admin_menu_keyboard
 
@@ -29,21 +31,6 @@ def _kb(rows): return InlineKeyboardMarkup(rows)
 def _admin_edit_btn(title: str, key: str): return InlineKeyboardButton(title, callback_data=f"admin_edit_setting_{key}")
 def _back_to_settings_btn(): return InlineKeyboardButton("🔙 بازگشت به تنظیمات", callback_data="back_to_settings")
 
-def _infer_return_target(key: str) -> str:
-    # تعیین زیرمنویی که بعد از ذخیره مقدار باید به آن برگردیم
-    if key == "payment_instruction_text" or key.startswith("payment_card_"):
-        return "payment_info"
-    if key.startswith("guide_"):
-        return "payment_guides"
-    if key in ("volume_based_sub_domains", "unlimited_sub_domains", "sub_domains"):
-        return "subdomains"
-    if key in ("maintenance_message", "force_join_channel"):
-        return "maintenance_join"
-    if key in ("expiry_reminder_days", "expiry_reminder_min_remaining_gb"):
-        return "reports_reminders"
-    # پیش‌فرض: بازگشت به منوی اصلی تنظیمات
-    return "settings_root"
-
 async def _send_or_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup=None, parse_mode=ParseMode.MARKDOWN):
     q = getattr(update, "callback_query", None)
     if q:
@@ -55,7 +42,7 @@ async def _send_or_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, text
     else:
         await update.effective_message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
 
-# --- Main Settings Menu (Entry Point) ---
+# --- Main Settings Menu ---
 async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "⚙️ **تنظیمات ربات**\n\nلطفاً بخش مورد نظر را انتخاب کنید:"
     keyboard = _kb([
@@ -87,10 +74,36 @@ async def payment_and_guides_submenu(update: Update, context: ContextTypes.DEFAU
     text = "**💳 پرداخت و راهنماها**\n\nاز گزینه‌های زیر برای ویرایش استفاده کنید."
     kb = _kb([
         [InlineKeyboardButton("✍️ ویرایش اطلاعات پرداخت", callback_data="payment_info_submenu")],
+        [InlineKeyboardButton("🎁 مدیریت کد شارژ اول", callback_data="first_charge_promo_submenu")],
         [_admin_edit_btn("✍️ راهنمای اتصال", "guide_connection")],
         [_admin_edit_btn("✍️ راهنمای خرید", "guide_buying")],
         [_admin_edit_btn("✍️ راهنمای شارژ", "guide_charging")],
         [_back_to_settings_btn()]
+    ])
+    await _send_or_edit(update, context, text, kb); return ADMIN_SETTINGS_MENU
+
+async def first_charge_promo_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    code = _get("first_charge_code", "ثبت نشده")
+    percent = _get("first_charge_bonus_percent", "0")
+    expires_raw = _get("first_charge_expires_at", "ثبت نشده")
+    expires_at = "همیشگی"
+    if expires_raw and expires_raw != "ثبت نشده":
+        try:
+            dt = utils.parse_date_flexible(expires_raw)
+            if dt: expires_at = dt.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            expires_at = expires_raw
+    text = (
+        f"🎁 **مدیریت کد شارژ اول**\n\n"
+        f"- کد: `{code}`\n"
+        f"- درصد پاداش: {percent}%\n"
+        f"- تاریخ انقضا: {expires_at}"
+    )
+    kb = _kb([
+        [_admin_edit_btn("✍️ ویرایش کد", "first_charge_code")],
+        [_admin_edit_btn("✍️ ویرایش درصد", "first_charge_bonus_percent")],
+        [_admin_edit_btn("✍️ ویرایش تاریخ انقضا", "first_charge_expires_at")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="settings_payment_guides")]
     ])
     await _send_or_edit(update, context, text, kb); return ADMIN_SETTINGS_MENU
 
@@ -100,7 +113,9 @@ async def payment_info_submenu(update: Update, context: ContextTypes.DEFAULT_TYP
     lines = []
     for i in slots:
         num = _get(f"payment_card_{i}_number"); name = _get(f"payment_card_{i}_name"); bank = _get(f"payment_card_{i}_bank")
-        lines.append(f"**کارت {i}:** {num or '(خالی)'} | {name or '(خالی)'} | {bank or '(خالی)'}")
+        if num and name:
+            lines.append(f"**کارت {i}:** `{num}` | {name} | {bank or '-'}")
+    
     text = f"**💳 اطلاعات پرداخت**\n\nراهنمای پرداخت:\n{instr}\n\n" + "\n".join(lines)
     rows = [[_admin_edit_btn("✍️ ویرایش راهنمای پرداخت", "payment_instruction_text")]]
     for i in slots:
@@ -152,11 +167,25 @@ async def reports_and_reminders_submenu(update: Update, context: ContextTypes.DE
     await _send_or_edit(update, context, text, kb); return ADMIN_SETTINGS_MENU
 
 # --- Edit Logic ---
+def _infer_return_target(key: str) -> str:
+    if key == "payment_instruction_text" or key.startswith("payment_card_"):
+        return "payment_info"
+    if key in ("first_charge_code", "first_charge_bonus_percent", "first_charge_expires_at"):
+        return "first_charge_promo"
+    if key.startswith("guide_"):
+        return "payment_guides"
+    if key in ("volume_based_sub_domains", "unlimited_sub_domains", "sub_domains"):
+        return "subdomains"
+    if key in ("maintenance_message", "force_join_channel"):
+        return "maintenance_join"
+    if key in ("expiry_reminder_days", "expiry_reminder_min_remaining_gb"):
+        return "reports_reminders"
+    return "settings_root"
+
 async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = getattr(update, "callback_query", None)
     key = (q.data if q else "").replace("admin_edit_setting_", "").strip()
     context.user_data['editing_setting_key'] = key
-    # مقصد بازگشت بعد از ذخیره
     context.user_data['settings_return_to'] = _infer_return_target(key)
 
     cur = _get(key, "(خالی)")
@@ -165,6 +194,8 @@ async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
         tip = "\n(برای پاک کردن، یک خط تیره `-` ارسال کنید)"
     elif "sub_domains" in key:
         tip = "\n(دامنه‌ها را با کاما جدا کنید)"
+    elif key == "first_charge_expires_at":
+        tip = "\n(فرمت: 2025-12-31T23:59:59+03:30)"
 
     text = f"✍️ مقدار جدید برای **{key}** را ارسال کنید.{tip}\n/cancel برای انصراف\n\n**مقدار فعلی:**\n`{cur}`"
 
@@ -187,16 +218,16 @@ async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_T
 
     val = (update.message.text or "").strip()
     if val == "-":
-        val = ""  # پاک کردن مقدار
+        val = ""
 
     db.set_setting(key, val)
     await update.message.reply_text(f"✅ مقدار «{key}» ذخیره شد.")
 
-    # تعیین زیرمنوی بازگشت
     dest = context.user_data.pop('settings_return_to', None) or _infer_return_target(key)
     context.user_data.pop('editing_setting_key', None)
 
-    # بازگشت به همان زیرمنو تا بتوانی سریع مورد بعدی را ویرایش کنی
+    if dest == "first_charge_promo":
+        return await first_charge_promo_submenu(update, context)
     if dest == "payment_info":
         return await payment_info_submenu(update, context)
     if dest == "payment_guides":
@@ -208,7 +239,6 @@ async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_T
     if dest == "reports_reminders":
         return await reports_and_reminders_submenu(update, context)
 
-    # پیش‌فرض: برگشت به ریشه تنظیمات
     return await settings_menu(update, context)
 
 # --- Toggles & Other Actions ---
