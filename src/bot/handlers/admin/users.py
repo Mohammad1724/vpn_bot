@@ -3,6 +3,7 @@
 import re
 import logging
 import asyncio
+from datetime import datetime
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import Forbidden, BadRequest, RetryAfter, TimedOut, NetworkError
@@ -84,10 +85,6 @@ def _ensure_user_exists(user_id: int):
         pass
 
 def _update_balance(user_id: int, delta: int) -> bool:
-    """
-    تلاش برای اعمال تغییر موجودی با نام‌های متداول توابع دیتابیس.
-    delta می‌تواند مثبت یا منفی باشد.
-    """
     _ensure_user_exists(user_id)
     try:
         if hasattr(db, "change_balance"):
@@ -162,7 +159,7 @@ async def admin_user_refresh_cb(update: Update, context: ContextTypes.DEFAULT_TY
 async def admin_user_services_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     target_id = int(q.data.split('_')[-1])
-    # فقط answer کنیم تا لودینگ بسته شود؛ پیام پنل دست نمی‌خورد
+    # فقط لودینگ را ببند، پیام پنل را دست نزن
     await q.answer()
 
     services = db.get_user_services(target_id) or []
@@ -173,7 +170,6 @@ async def admin_user_services_cb(update: Update, context: ContextTypes.DEFAULT_T
             pass
         return
 
-    # لیست سرویس‌ها در پیام‌های جداگانه
     for s in services:
         name = s.get('name') or f"سرویس {s.get('service_id')}"
         sid = s.get('service_id')
@@ -295,7 +291,6 @@ async def admin_user_amount_cancel_cb(update: Update, context: ContextTypes.DEFA
         target_id = int(q.data.split('_')[-1])
     except Exception:
         return USER_MANAGEMENT_MENU
-    # پاکسازی حالت
     context.user_data.pop("muid", None)
     context.user_data.pop("mop", None)
     await _send_user_panel(update, target_id)
@@ -328,6 +323,7 @@ async def manage_user_amount_received(update: Update, context: ContextTypes.DEFA
 
     if ok:
         await em.reply_text("✅ موجودی کاربر به‌روزرسانی شد.")
+        # اطلاع‌رسانی به خود کاربر
         try:
             op_text = "افزایش" if delta >= 0 else "کاهش"
             amount_str = utils.format_toman(abs(delta), persian_digits=True)
@@ -355,8 +351,6 @@ async def manage_user_amount_received(update: Update, context: ContextTypes.DEFA
 
 # -------------------------------
 # حذف سرویس از سمت ادمین (پشتیبانی از الگوی جدید و قدیم)
-# new: admin_delete_service_{serviceId}_{userId}
-# old: admin_delete_service_{serviceId}
 # -------------------------------
 async def admin_delete_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -479,7 +473,7 @@ async def broadcast_confirm_callback(update: Update, context: ContextTypes.DEFAU
     context.user_data.clear()
     return ConversationHandler.END
 
-async def broadcast_to_user_start(update: Update, Context: ContextTypes.DEFAULT_TYPE):
+async def broadcast_to_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     context.user_data["broadcast_mode"] = "single"
     await update.effective_message.reply_text(
