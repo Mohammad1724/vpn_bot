@@ -46,14 +46,11 @@ async def charge_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except BadRequest:
             pass
 
-    payment_info = _get_payment_info_text()
-    await em.reply_text(
-        payment_info,
-        reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True),
-        parse_mode=ParseMode.MARKDOWN
-    )
-    
-    await em.reply_text("مبلغ شارژ مورد نظر (تومان) را وارد کنید:")
+    if em:
+        await em.reply_text(
+            "مبلغ شارژ مورد نظر (تومان) را وارد کنید:",
+            reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
+        )
     return constants.CHARGE_AMOUNT
 
 async def charge_amount_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -74,7 +71,7 @@ async def charge_amount_received(update: Update, context: ContextTypes.DEFAULT_T
 
 - مبلغ: {amount_str}
 
-با تایید، باید تصویر رسید پرداخت را ارسال کنید.
+با تایید، اطلاعات پرداخت به شما نمایش داده می‌شود.
 ادامه می‌دهید؟
     """.strip()
 
@@ -87,7 +84,7 @@ async def charge_amount_received(update: Update, context: ContextTypes.DEFAULT_T
     return constants.CHARGE_AMOUNT
 
 # -----------------
-# دریافت رسید و ثبت
+# نمایش اطلاعات پرداخت و درخواست رسید
 # -----------------
 async def charge_amount_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -102,16 +99,24 @@ async def charge_amount_confirm_cb(update: Update, context: ContextTypes.DEFAULT
             pass
         return ConversationHandler.END
 
+    payment_info = _get_payment_info_text()
     try:
         await q.edit_message_text(
-            "لطفاً تصویر رسید پرداخت را ارسال کنید.",
-            reply_markup=ReplyKeyboardMarkup([['/cancel']], resize_keyboard=True)
+            payment_info,
+            reply_markup=ReplyKeyboardMarkup([['/cancel']], resize_keyboard=True),
+            parse_mode=ParseMode.MARKDOWN
         )
+        await q.message.reply_text("لطفاً تصویر رسید پرداخت را ارسال کنید.")
     except BadRequest:
         await context.bot.send_message(
             chat_id=q.from_user.id,
-            text="لطفاً تصویر رسید پرداخت را ارسال کنید.",
-            reply_markup=ReplyKeyboardMarkup([['/cancel']], resize_keyboard=True)
+            text=payment_info,
+            reply_markup=ReplyKeyboardMarkup([['/cancel']], resize_keyboard=True),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        await context.bot.send_message(
+            chat_id=q.from_user.id,
+            text="لطفاً تصویر رسید پرداخت را ارسال کنید."
         )
     return constants.CHARGE_RECEIPT
 
