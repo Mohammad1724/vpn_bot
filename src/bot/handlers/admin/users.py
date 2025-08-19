@@ -159,7 +159,6 @@ async def admin_user_refresh_cb(update: Update, context: ContextTypes.DEFAULT_TY
 async def admin_user_services_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     target_id = int(q.data.split('_')[-1])
-    # فقط لودینگ را ببند، پیام پنل را دست نزن
     await q.answer()
 
     services = db.get_user_services(target_id) or []
@@ -506,50 +505,4 @@ async def broadcast_to_user_message_received(update: Update, context: ContextTyp
 
     msg = update.effective_message
     try:
-        await context.bot.copy_message(chat_id=uid, from_chat_id=msg.chat.id, message_id=msg.message_id)
-        await update.effective_message.reply_text("✅ پیام برای کاربر ارسال شد.")
-    except Exception:
-        await update.effective_message.reply_text("❌ ارسال ناموفق بود. احتمالاً کاربر بات را مسدود کرده یا آیدی اشتباه است.")
-    context.user_data.clear()
-    return ConversationHandler.END
-
-# -------------------------------
-# تایید/رد شارژ (در صورت استفاده)
-# -------------------------------
-async def admin_confirm_charge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    try:
-        charge_id = int(q.data.split('_')[-1])
-    except Exception:
-        await q.edit_message_text("❌ شناسه شارژ نامعتبر است.")
-        return
-    try:
-        if hasattr(db, "confirm_charge_request"):
-            ok = db.confirm_charge_request(charge_id)
-        elif hasattr(db, "admin_confirm_charge"):
-            ok = db.admin_confirm_charge(charge_id)
-        else:
-            ok = False
-    except Exception:
-        ok = False
-    await q.edit_message_text("✅ شارژ تایید شد." if ok else "❌ تایید شارژ ناموفق بود یا قبلاً پردازش شده است.")
-
-async def admin_reject_charge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    try:
-        charge_id = int(q.data.split('_')[-1])
-    except Exception:
-        await q.edit_message_text("❌ شناسه شارژ نامعتبر است.")
-        return
-    try:
-        if hasattr(db, "reject_charge_request"):
-            ok = db.reject_charge_request(charge_id)
-        elif hasattr(db, "admin_reject_charge"):
-            ok = db.admin_reject_charge(charge_id)
-        else:
-            ok = False
-    except Exception:
-        ok = False
-    await q.edit_message_text("✅ شارژ رد شد." if ok else "❌ رد شارژ ناموفق بود یا قبلاً پردازش شده است.")
+        await context.bot.copy_message(chat_id=uid, 
