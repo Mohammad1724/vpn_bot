@@ -10,7 +10,6 @@ from telegram.constants import ParseMode
 import database as db
 from bot.keyboards import get_main_menu_keyboard, get_admin_menu_keyboard
 from bot.constants import ADMIN_MENU
-from bot.handlers.charge import _get_payment_info_text # ایمپورت تابع کمکی
 from config import SUPPORT_USERNAME, REFERRAL_BONUS_AMOUNT
 
 try:
@@ -123,13 +122,38 @@ async def show_purchase_history_callback(update: Update, context: ContextTypes.D
         await q.answer("شما تاکنون خریدی نداشته‌اید.", show_alert=True)
         return
 
-    msg = "🛍️ **سوابق خرید شما:**\n\n"
-    for sale in history:
-        sale_date = datetime.strptime(sale['sale_date'], '%Y-%m-%d %H:%M:%S').strftime('%Y/%m/%d')
-        msg += f"🔹 {sale['plan_name'] or 'پلن حذف شده'} | {sale['price']:.0f} تومان | {sale_date}\n"
+    # حذف پیام قبلی (پنل اطلاعات حساب)
+    try:
+        await q.message.delete()
+    except Exception:
+        pass
 
-    kb = [[InlineKeyboardButton("🔙 بازگشت", callback_data="acc_back_to_main")]]
-    await q.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+    header = "🛍️ **سوابق خرید شما:**\n\n"
+    
+    # ارسال سوابق در چند پیام
+    message_parts = [header]
+    current_part = ""
+    for sale in history:
+        try:
+            sale_date = datetime.strptime(sale['sale_date'], '%Y-%m-%d %H:%M:%S').strftime('%Y/%m/%d')
+        except (ValueError, TypeError):
+            sale_date = sale['sale_date']
+
+        line = f"🔹 {sale['plan_name'] or 'پلن حذف شده'} | {sale['price']:.0f} تومان | {sale_date}\n"
+        
+        if len(current_part) + len(line) > 4000:
+            message_parts.append(current_part)
+            current_part = ""
+        current_part += line
+    
+    if current_part:
+        message_parts.append(current_part)
+
+    for part in message_parts:
+        await q.from_user.send_message(part, parse_mode="Markdown")
+    
+    # ارسال مجدد پنل اطلاعات حساب با دکمه بازگشت
+    await show_account_info(update, context)
 
 
 async def show_charge_history_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -139,14 +163,35 @@ async def show_charge_history_callback(update: Update, context: ContextTypes.DEF
     if not history:
         await q.answer("شما تاکنون سابقه شارژ موفقی نداشته‌اید.", show_alert=True)
         return
-
-    msg = "💸 **سوابق شارژ موفق شما:**\n\n"
+    
+    try:
+        await q.message.delete()
+    except Exception:
+        pass
+    
+    header = "💸 **سوابق شارژ موفق شما:**\n\n"
+    
+    message_parts = [header]
+    current_part = ""
     for ch in history:
-        charge_date = datetime.strptime(ch['created_at'], '%Y-%m-%d %H:%M:%S').strftime('%Y/%m/%d')
-        msg += f"🔹 {ch['amount']:.0f} تومان | {charge_date}\n"
-
-    kb = [[InlineKeyboardButton("🔙 بازگشت", callback_data="acc_back_to_main")]]
-    await q.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+        try:
+            charge_date = datetime.strptime(ch['created_at'], '%Y-%m-%d %H:%M:%S').strftime('%Y/%m/%d')
+        except (ValueError, TypeError):
+            charge_date = ch['created_at']
+            
+        line = f"🔹 {ch['amount']:.0f} تومان | {charge_date}\n"
+        if len(current_part) + len(line) > 4000:
+            message_parts.append(current_part)
+            current_part = ""
+        current_part += line
+        
+    if current_part:
+        message_parts.append(current_part)
+        
+    for part in message_parts:
+        await q.from_user.send_message(part, parse_mode="Markdown")
+        
+    await show_account_info(update, context)
 
 
 async def show_charging_guide_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
