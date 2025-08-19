@@ -81,7 +81,7 @@ async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
                 await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=InlineKeyboardMarkup(kb))
             return
 
-        caption = create_service_info_message(info)
+        caption = create_service_info_message(info, service_db_record=service)
         keyboard_rows = []
         if not minimal:
             keyboard_rows.append([
@@ -257,18 +257,14 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
     try:
         service_id = int(data.split('_')[-1])
     except Exception:
-        try:
-            await q.edit_message_text("❌ ورودی نامعتبر.")
-        except Exception:
-            pass
+        try: await q.edit_message_text("❌ ورودی نامعتبر.")
+        except Exception: pass
         return
 
     service = db.get_service(service_id)
     if not service or service['user_id'] != q.from_user.id:
-        try:
-            await q.edit_message_text("❌ سرویس یافت نشد یا متعلق به شما نیست.")
-        except Exception:
-            pass
+        try: await q.edit_message_text("❌ سرویس یافت نشد یا متعلق به شما نیست.")
+        except Exception: pass
         return
 
     if data.startswith("delete_service_confirm_"):
@@ -306,9 +302,6 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
     ])
     await q.edit_message_text("آیا از حذف این سرویس مطمئن هستید؟ این عمل سرویس را از پنل اصلی نیز حذف می‌کند و قابل بازگشت نیست.", reply_markup=confirm_kb)
 
-# ============================
-#   تمدید: هشدار + تایید کاربر
-# ============================
 async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
     await q.answer()
@@ -341,7 +334,6 @@ async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TY
         await context.bot.send_message(chat_id=user_id, text="❌ امکان دریافت اطلاعات سرویس از پنل وجود ندارد. لطفاً بعداً تلاش کنید.")
         return
 
-    # محاسبه حجم باقی‌مانده فعلی
     try:
         current_usage = float(info.get('current_usage_GB', 0))
         usage_limit = float(info.get('usage_limit_GB', 0))
@@ -349,10 +341,8 @@ async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TY
         current_usage, usage_limit = 0.0, 0.0
     remaining_gb = max(usage_limit - current_usage, 0.0)
 
-    # تاریخ انقضا فعلی به شمسی
     _, jalali_exp, _ = get_service_status(info)
 
-    # ذخیره مشخصات برای تایید بعدی
     context.user_data['renewal_service_id'] = service_id
     context.user_data['renewal_plan_id'] = plan['plan_id']
 
