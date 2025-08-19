@@ -20,12 +20,13 @@ def get_main_menu_keyboard(user_id: int) -> ReplyKeyboardMarkup:
 
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-def get_admin_menu_keyboard() -> ReplyKeyboardMarkup:
-    keyboard = [
-        ["➕ مدیریت پلن‌ها", "📈 گزارش‌ها و آمار"],
-        ["⚙️ تنظیمات", "🎁 مدیریت کد هدیه"],
-        ["📩 ارسال پیام", "💾 پشتیبان‌گیری"],
-        ["👥 مدیریت کاربران"],
-        ["🛑 خاموش کردن ربات", "↩️ خروج از پنل"]
+from telegram import ReplyKeyboardMarkup
+
+def get_main_menu_keyboard(user_id: int) -> ReplyKeyboardMarkup:
+    rows = [
+        ["🛍️ خرید سرویس", "📋 سرویس‌های من"],
+        ["👤 اطلاعات حساب کاربری", "📚 راهنما"],
+        ["🧪 دریافت سرویس تست رایگان", "🎁 معرفی دوستان"],
+        ["💳 شارژ حساب"],  # دکمه جدید
     ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True)
