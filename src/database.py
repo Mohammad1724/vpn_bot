@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+
 import sqlite3
 import logging
 from datetime import datetime, timedelta
@@ -668,13 +669,13 @@ def add_charge_transaction(user_id: int, amount: float, type_: str = "charge"):
     """, (user_id, type_, amount, now_str, now_str))
     conn.commit()
 
+# --- Promo Codes ---
 def add_promo_code(code, percent, max_uses, expires_at, first_purchase_only):
     with _connect_db() as conn:
         conn.execute(
             "INSERT INTO promo_codes (code, percent, max_uses, used_count, expires_at, first_purchase_only, is_active) VALUES (?, ?, ?, 0, ?, ?, 1)",
             (code.upper(), percent, max_uses, expires_at, 1 if first_purchase_only else 0)
         )
-        conn.commit()
 
 def get_promo_code(code):
     with _connect_db() as conn:
@@ -684,9 +685,16 @@ def get_all_promo_codes():
     with _connect_db() as conn:
         return conn.execute("SELECT * FROM promo_codes ORDER BY is_active DESC, expires_at DESC").fetchall()
 
+def delete_promo_code(code: str) -> bool:
+    """تابع حذف کد تخفیف."""
+    with _connect_db() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM promo_codes WHERE code = ?", (code,))
+        conn.commit()
+        return cur.rowcount > 0
+
 def get_user_purchase_count(user_id):
     with _connect_db() as conn:
-        # Assuming you have a 'sales_log' table
         return conn.execute("SELECT COUNT(*) FROM sales_log WHERE user_id = ?", (user_id,)).fetchone()[0]
 
 def did_user_use_promo_code(user_id, code):
