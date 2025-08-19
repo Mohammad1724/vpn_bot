@@ -12,14 +12,9 @@ from bot import utils
 
 logger = logging.getLogger(__name__)
 
-def _maint_on() -> bool:
-    return str(db.get_setting("maintenance_enabled")).lower() in ("1", "true", "on", "yes")
-
-def _maint_msg() -> str:
-    return db.get_setting("maintenance_message") or "⛔️ ربات در حال بروزرسانی است. لطفاً کمی بعد مراجعه کنید."
-
-def _build_note_for_user(user_id: int, username: str | None) -> str:
-    return f"tg:@{username.lstrip('@')}|id:{user_id}" if username else f"tg:id:{user_id}"
+def _maint_on(): return str(db.get_setting("maintenance_enabled")).lower() in ("1", "true", "on", "yes")
+def _maint_msg(): return db.get_setting("maintenance_message") or "⛔️ ربات در حال بروزرسانی است. لطفاً کمی بعد مراجعه کنید."
+def _build_note_for_user(user_id: int, username: str | None): return f"tg:@{username.lstrip('@')}|id:{user_id}" if username else f"tg:id:{user_id}"
 
 async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
     em = update.effective_message
@@ -36,7 +31,6 @@ async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await em.reply_text("🧪 شما قبلاً از سرویس تست استفاده کرده‌اید.")
         return
 
-    # خواندن تنظیمات با تحمل اعشار و ویرگول
     raw_days = str(db.get_setting("trial_days") or "1").strip().replace(",", ".")
     raw_gb = str(db.get_setting("trial_gb") or "1").strip().replace(",", ".")
     try:
@@ -56,7 +50,6 @@ async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         note = _build_note_for_user(user_id, username)
 
-        # plan_gb به صورت float ارسال می‌شود تا مقدارهای اعشاری (مثل 0.5) معتبر باشند
         provision = await hiddify_api.create_hiddify_user(
             plan_days=trial_days,
             plan_gb=trial_gb,
@@ -69,22 +62,25 @@ async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
         new_uuid = provision["uuid"]
         sub_link = provision.get('full_link', '')
 
-        # ثبت سرویس و علامت‌گذاری استفاده از تست
         db.add_active_service(user_id, name, new_uuid, sub_link, plan_id=None)
         db.set_user_trial_used(user_id)
 
-        # حذف پیام لودینگ
         try:
             await loading_message.delete()
         except BadRequest:
             pass
 
-        # نمایش اطلاعات سرویس
+        new_service_record = db.get_service_by_uuid(new_uuid)
+
         user_data = await hiddify_api.get_user_info(new_uuid)
         if user_data:
             sub_url = utils.build_subscription_url(new_uuid)
             qr_bio = utils.make_qr_bytes(sub_url)
-            caption = utils.create_service_info_caption(user_data, title="🎉 سرویس تست شما با موفقیت ساخته شد!")
+            caption = utils.create_service_info_caption(
+                user_data,
+                service_db_record=new_service_record,
+                title="🎉 سرویس تست شما با موفقیت ساخته شد!"
+            )
 
             inline_kb = InlineKeyboardMarkup([
                 [
@@ -101,7 +97,6 @@ async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=inline_kb
             )
 
-            # جایگزینی کیبورد /cancel با منوی اصلی
             from bot.keyboards import get_main_menu_keyboard
             await context.bot.send_message(
                 chat_id=user_id,
@@ -114,7 +109,6 @@ async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "✅ سرویس تست ساخته شد، اما دریافت اطلاعات سرویس با خطا مواجه شد. از «📋 سرویس‌های من» استفاده کنید.",
                 reply_markup=get_main_menu_keyboard(user_id)
             )
-
     except Exception as e:
         logger.error("Trial provision failed for user %s: %s", user_id, e, exc_info=True)
         try:
