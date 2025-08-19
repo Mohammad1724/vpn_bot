@@ -12,17 +12,22 @@ from bot import constants
 
 logger = logging.getLogger(__name__)
 
+# -----------------
+# شروع و دریافت مبلغ
+# -----------------
 async def charge_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    try:
-        await q.message.delete()
-    except BadRequest:
-        pass
+    # سازگار با Message و CallbackQuery
+    em = update.effective_message
+    q = getattr(update, "callback_query", None)
+    if q:
+        await q.answer()
+        try:
+            await q.message.delete()
+        except BadRequest:
+            pass
 
-    await context.bot.send_message(
-        chat_id=q.from_user.id,
-        text="مبلغ شارژ مورد نظر (تومان) را وارد کنید:",
+    await em.reply_text(
+        "مبلغ شارژ مورد نظر (تومان) را وارد کنید:",
         reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
     )
     return constants.CHARGE_AMOUNT
@@ -44,7 +49,7 @@ async def charge_amount_received(update: Update, context: ContextTypes.DEFAULT_T
 
 - مبلغ: {amount:,} تومان
 
-با تایید، باید تصویر رسید پرداخت را ارسال کنید.
+با تایید، باید کد شارژ اول (در صورت وجود) و تصویر رسید پرداخت را ارسال کنید.
 ادامه می‌دهید؟
     """.strip()
 
@@ -57,6 +62,9 @@ async def charge_amount_received(update: Update, context: ContextTypes.DEFAULT_T
     # در همین state منتظر تایید می‌مانیم
     return constants.CHARGE_AMOUNT
 
+# -----------------
+# دریافت کد شارژ اول (اختیاری)
+# -----------------
 async def charge_amount_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -70,31 +78,78 @@ async def charge_amount_confirm_cb(update: Update, context: ContextTypes.DEFAULT
             pass
         return ConversationHandler.END
 
-    # تایید شد -> درخواست رسید
+    # تایید شد -> درخواست کد شارژ اول
     try:
-        await q.edit_message_text("لطفاً تصویر رسید پرداخت را ارسال کنید.", parse_mode=ParseMode.MARKDOWN)
+        await q.edit_message_text(
+            "اگر کد «شارژ اول» دارید ارسال کنید (مثلاً FIRST30). در غیر اینصورت /skip را بزنید.",
+            reply_markup=ReplyKeyboardMarkup([['/skip']], resize_keyboard=True)
+        )
     except BadRequest:
-        await context.bot.send_message(chat_id=q.from_user.id, text="لطفاً تصویر رسید پرداخت را ارسال کنید.")
+        await context.bot.send_message(
+            chat_id=q.from_user.id,
+            text="اگر کد «شارژ اول» دارید ارسال کنید (مثلاً FIRST30). در غیر اینصورت /skip را بزنید.",
+            reply_markup=ReplyKeyboardMarkup([['/skip']], resize_keyboard=True)
+        )
+    return constants.CHARGE_PROMO_CODE
+
+async def first_charge_code_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # اگر کاربر /skip زد، مقدار خالی ذخیره می‌شود
+    code = (update.message.text or "").strip()
+    if code.lower() == "/skip":
+        code = ""
+    context.user_data['first_charge_code'] = code
+
+    await update.message.reply_text(
+        "لطفاً تصویر رسید پرداخت را ارسال کنید.",
+        reply_markup=ReplyKeyboardMarkup([['/cancel']], resize_keyboard=True)
+    )
     return constants.CHARGE_RECEIPT
 
+# -----------------
+# دریافت رسید و ثبت
+# -----------------
 async def charge_receipt_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    username = update.effective_user.username
     photos = update.message.photo or []
     if not photos:
         await update.message.reply_text("❌ لطفاً تصویر رسید را ارسال کنید.")
         return constants.CHARGE_RECEIPT
 
     amount = context.user_data.get('charge_amount', 0)
+    promo_code = context.user_data.get('first_charge_code', "")
     if amount <= 0:
         await update.message.reply_text("❌ مبلغ شارژ مشخص نیست. لطفاً از ابتدا شروع کنید: /cancel")
         return ConversationHandler.END
 
-    # ارسال برای ادمین جهت تایید
+    # ثبت درخواست شارژ با کد (در DB)
+    charge_id = None
+    try:
+        # تابع DB خود را اینجا فراخوانی کن (با promo_code)
+        if hasattr(db, "create_charge_request"):
+            charge_id = db.create_charge_request(user_id, amount, promo_code=promo_code)
+        else:
+            # Fallback (بدون کد)
+            if hasattr(db, "add_charge_request"):
+                charge_id = db.add_charge_request(user_id, amount)
+    except Exception as e:
+        logger.error("Failed to save charge request to DB: %s", e)
+
+    if charge_id is None:
+        await update.message.reply_text("❌ خطا در ثبت درخواست. لطفاً به پشتیبانی اطلاع دهید.")
+        return ConversationHandler.END
+
+    # ارسال برای ادمین
     file_id = photos[-1].file_id
-    caption = f"درخواست شارژ جدید:\n- کاربر: `{user_id}`\n- مبلغ: {amount:,} تومان"
+    caption = (
+        f"درخواست شارژ جدید (ID: {charge_id}):\n"
+        f"- کاربر: `{user_id}` (@{username or '—'})\n"
+        f"- مبلغ: {amount:,} تومان\n"
+        f"- کد شارژ: `{promo_code}`" if promo_code else ""
+    )
     kb_admin = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ تایید شارژ", callback_data=f"admin_confirm_charge_{user_id}_{amount}")],
-        [InlineKeyboardButton("❌ رد شارژ", callback_data=f"admin_reject_charge_{user_id}")]
+        [InlineKeyboardButton("✅ تایید شارژ", callback_data=f"admin_confirm_charge_{charge_id}")],
+        [InlineKeyboardButton("❌ رد شارژ", callback_data=f"admin_reject_charge_{charge_id}")]
     ])
     try:
         await context.bot.send_photo(
@@ -105,14 +160,15 @@ async def charge_receipt_received(update: Update, context: ContextTypes.DEFAULT_
             parse_mode=ParseMode.MARKDOWN
         )
     except Exception as e:
-        logger.error("Failed to send charge request to admin: %s", e, exc_info=True)
+        logger.error("Failed to send charge request to admin: %s", e)
 
-    # پیام به کاربر + دکمه بازگشتِ صحیح به منوی اصلی
+    # پیام به کاربر
+    from bot.keyboards import get_main_menu_keyboard
     await update.message.reply_text(
         "✅ رسید شما دریافت شد. پس از بررسی ادمین نتیجه اعلام می‌شود.",
-        reply_markup=ReplyKeyboardMarkup([["/start"]], resize_keyboard=True)
+        reply_markup=get_main_menu_keyboard(user_id)
     )
 
     # پاکسازی
-    context.user_data.pop('charge_amount', None)
+    context.user_data.clear()
     return ConversationHandler.END
