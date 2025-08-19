@@ -234,6 +234,15 @@ def build_application():
         map_to_parent={ConversationHandler.END: constants.ADMIN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
     )
+    
+    referral_bonus_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex(r'^💰 تنظیم هدیه دعوت$') & admin_filter, admin_gift.ask_referral_bonus)],
+        states={
+            constants.AWAIT_REFERRAL_BONUS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_gift.referral_bonus_received)]
+        },
+        fallbacks=[CommandHandler('cancel', admin_gift.cancel_referral_bonus)],
+        map_to_parent={ConversationHandler.END: constants.GIFT_CODES_MENU},
+    )
 
     admin_settings_conv = ConversationHandler(
         entry_points=[
@@ -353,15 +362,6 @@ def build_application():
             constants.MANAGE_USER_AMOUNT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_users.manage_user_amount_received),
                 CallbackQueryHandler(admin_users.admin_user_amount_cancel_cb, pattern=r'^admin_user_amount_cancel_\d+$'),
-                CallbackQueryHandler(admin_users.admin_user_addbal_cb, pattern=r'^admin_user_addbal_\d+$'),
-                CallbackQueryHandler(admin_users.admin_user_subbal_cb, pattern=r'^admin_user_subbal_\d+$'),
-                CallbackQueryHandler(admin_users.admin_user_services_cb, pattern=r'^admin_user_services_\d+$'),
-                CallbackQueryHandler(admin_users.admin_user_purchases_cb, pattern=r'^admin_user_purchases_\d+$'),
-                CallbackQueryHandler(admin_users.admin_user_trial_reset_cb, pattern=r'^admin_user_trial_reset_\d+$'),
-                CallbackQueryHandler(admin_users.admin_user_toggle_ban_cb, pattern=r'^admin_user_toggle_ban_\d+$'),
-                CallbackQueryHandler(admin_users.admin_user_refresh_cb, pattern=r'^admin_user_refresh_\d+$'),
-                CallbackQueryHandler(admin_users.admin_delete_service, pattern=r'^admin_delete_service_\d+(_\d+)?$'),
-                MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
             ],
             
             constants.GIFT_CODES_MENU: [
@@ -376,6 +376,7 @@ def build_application():
 
                 gift_code_create_conv,
                 promo_create_conv,
+                referral_bonus_conv,
             ],
 
             constants.AWAIT_SETTING_VALUE: [
@@ -406,7 +407,7 @@ def build_application():
     application.add_handler(CommandHandler("set_trial_gb", set_trial_gb, filters=admin_filter))
 
     # =========================
-    # Global Callbacks
+    # Global Callbacks & Handlers
     # =========================
     application.add_handler(CallbackQueryHandler(buy_h.confirm_purchase_callback, pattern="^confirmbuy$"), group=2)
     application.add_handler(CallbackQueryHandler(buy_h.cancel_purchase_callback, pattern="^cancelbuy$"), group=2)
@@ -414,9 +415,6 @@ def build_application():
     application.add_handler(CallbackQueryHandler(support_h.close_ticket, pattern="^close_ticket_"))
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern="^check_membership$"))
 
-    # =========================
-    # Other (user) handlers
-    # =========================
     user_services_handlers = [
         CallbackQueryHandler(check_channel_membership(us_h.view_service_callback), pattern="^view_service_"),
         CallbackQueryHandler(check_channel_membership(us_h.back_to_services_callback), pattern="^back_to_services$"),
@@ -462,7 +460,7 @@ def build_application():
         MessageHandler(filters.Regex('^📚 راهنما$'), check_channel_membership(start_h.show_guide)),
         MessageHandler(filters.Regex('^🧪 دریافت سرویس تست رایگان$'), check_channel_membership(trial_get_trial_service)),
         MessageHandler(filters.Regex('^🎁 معرفی دوستان$'), check_channel_membership(start_h.show_referral_link)),
-        MessageHandler(filters.Regex('^💳 شارژ حساب$'), check_channel_membership(charge_h.charge_start)),  # دکمه جدید
+        MessageHandler(filters.Regex('^💳 شارژ حساب$'), check_channel_membership(charge_h.charge_start)),
     ]
     for h in main_menu_handlers:
         application.add_handler(h, group=3)
