@@ -5,6 +5,8 @@ from datetime import datetime
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest
+from telegram.constants import ParseMode
+
 import database as db
 from bot.keyboards import get_main_menu_keyboard, get_admin_menu_keyboard
 from bot.constants import ADMIN_MENU
@@ -39,6 +41,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = "👋 به ربات خوش آمدید!"
 
+    # get_main_menu_keyboard خودش دکمه ادمین را در صورت نیاز اضافه می‌کند
+    reply_markup = get_main_menu_keyboard(user.id)
+
     if update.callback_query:
         q = update.callback_query
         await q.answer("عضویت شما تایید شد. خوش آمدید!")
@@ -46,9 +51,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.message.delete()
         except Exception:
             pass
-        await q.from_user.send_message(text, reply_markup=get_main_menu_keyboard(user.id))
+        await q.from_user.send_message(text, reply_markup=reply_markup)
     else:
-        await update.message.reply_text(text, reply_markup=get_main_menu_keyboard(user.id))
+        await update.message.reply_text(text, reply_markup=reply_markup)
 
     return ConversationHandler.END
 
@@ -98,7 +103,6 @@ async def show_account_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
          InlineKeyboardButton("💸 سوابق شارژ", callback_data="acc_charge_history")],
         [InlineKeyboardButton("🤝 انتقال موجودی", callback_data="acc_transfer_start"),
          InlineKeyboardButton("🎁 ساخت کد هدیه", callback_data="acc_gift_from_balance_start")],
-        # راهنما به صورت منو
         [InlineKeyboardButton("📚 منوی راهنما", callback_data="guide_back_to_menu")],
     ]
 
@@ -164,7 +168,7 @@ async def show_guide(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_guide_content(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    guide_key = q.data  # "guide_connection" | "guide_charging" | "guide_buying"
+    guide_key = q.data
 
     guide_text = db.get_setting(guide_key)
     if not guide_text:
@@ -172,7 +176,6 @@ async def show_guide_content(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     kb = [[InlineKeyboardButton("🔙 بازگشت به منوی راهنما", callback_data="guide_back_to_menu")]]
 
-    # اگر دکمه روی پیام عکس (QR) زده شد، پیام را پاک کن و متن را به صورت پیام جدید بفرست
     if q.message and q.message.photo:
         try:
             await q.message.delete()
@@ -186,7 +189,6 @@ async def show_guide_content(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         return
 
-    # در غیر این صورت، تلاش برای ویرایش متن همان پیام
     try:
         await q.edit_message_text(
             guide_text,
@@ -194,7 +196,6 @@ async def show_guide_content(update: Update, context: ContextTypes.DEFAULT_TYPE)
             disable_web_page_preview=True
         )
     except BadRequest as e:
-        # اگر پیام قابل ویرایش نبود (مثلاً اصلاً متن نداشت یا محدودیت دیگری)، یک پیام جدید ارسال کن
         if "message is not modified" in str(e):
             return
         await context.bot.send_message(
