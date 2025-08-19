@@ -409,7 +409,14 @@ def build_application():
     application.add_handler(MessageHandler(filters.REPLY & admin_filter, support_h.admin_reply_handler))
     application.add_handler(CallbackQueryHandler(support_h.close_ticket, pattern="^close_ticket_"))
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern="^check_membership$"))
+    
+    # Global Admin Callbacks
+    application.add_handler(CallbackQueryHandler(admin_users.admin_confirm_charge_callback, pattern=r'^admin_confirm_charge_'), group=1)
+    application.add_handler(CallbackQueryHandler(admin_users.admin_reject_charge_callback, pattern=r'^admin_reject_charge_'), group=1)
 
+    # =========================
+    # Other (user) handlers
+    # =========================
     user_services_handlers = [
         CallbackQueryHandler(check_channel_membership(us_h.view_service_callback), pattern="^view_service_"),
         CallbackQueryHandler(check_channel_membership(us_h.back_to_services_callback), pattern="^back_to_services$"),
@@ -455,7 +462,6 @@ def build_application():
         MessageHandler(filters.Regex('^📚 راهنما$'), check_channel_membership(start_h.show_guide)),
         MessageHandler(filters.Regex('^🧪 دریافت سرویس تست رایگان$'), check_channel_membership(trial_get_trial_service)),
         MessageHandler(filters.Regex('^🎁 معرفی دوستان$'), check_channel_membership(start_h.show_referral_link)),
-        # MessageHandler(filters.Regex('^💳 شارژ حساب$'), check_channel_membership(charge_h.charge_start)),  # این تکراری است و باعث دوبار اجرا می‌شود
     ]
     for h in main_menu_handlers:
         application.add_handler(h, group=3)
