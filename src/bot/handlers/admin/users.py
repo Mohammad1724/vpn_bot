@@ -505,4 +505,102 @@ async def broadcast_to_user_message_received(update: Update, context: ContextTyp
 
     msg = update.effective_message
     try:
-        await context.bot.copy_message(chat_id=uid, 
+        await context.bot.copy_message(chat_id=uid, from_chat_id=msg.chat.id, message_id=msg.message_id)
+        await update.effective_message.reply_text("✅ پیام برای کاربر ارسال شد.")
+    except Exception:
+        await update.effective_message.reply_text("❌ ارسال ناموفق بود. احتمالاً کاربر بات را مسدود کرده یا آیدی اشتباه است.")
+    context.user_data.clear()
+    return ConversationHandler.END
+
+# -------------------------------
+# تایید/رد شارژ
+# -------------------------------
+async def admin_confirm_charge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    try:
+        charge_id = int(q.data.split('_')[-1])
+    except Exception:
+        await q.edit_message_text("❌ شناسه شارژ نامعتبر است.")
+        return
+
+    ok = False
+    user_id = None
+    amount = 0
+    promo_code_in = None
+    try:
+        # درخواست شارژ را از DB بخوان (باید در DB خودت پیاده باشد)
+        if hasattr(db, "get_charge_request"):
+            req = db.get_charge_request(charge_id)
+        else:
+            req = None
+
+        if not req:
+            await q.edit_message_text("❌ درخواست شارژ یافت نشد.")
+            return
+
+        user_id = int(req['user_id'])
+        amount = int(float(req['amount']))
+        promo_code_in = (req.get('promo_code') or req.get('note') or '').strip().upper()
+
+        # تایید شارژ طبق روال پروژه شما
+        if hasattr(db, "confirm_charge_request"):
+            ok = db.confirm_charge_request(charge_id)
+        elif hasattr(db, "admin_confirm_charge"):
+            ok = db.admin_confirm_charge(charge_id)
+        else:
+            if hasattr(db, "update_balance"):
+                db.update_balance(user_id, amount)
+                ok = True
+    except Exception as e:
+        ok = False
+
+    if not ok:
+        await q.edit_message_text("❌ تایید شارژ ناموفق بود یا قبلاً پردازش شده است.")
+        return
+
+    # پاداش شارژ اول با کد (FIRST30 و ... مطابق تنظیمات)
+    try:
+        pc = (db.get_setting('first_charge_code') or '').upper()
+        pct = int(db.get_setting('first_charge_bonus_percent') or 0)
+        exp_raw = db.get_setting('first_charge_expires_at') or ''
+        exp_dt = utils.parse_date_flexible(exp_raw) if exp_raw else None
+        now = datetime.now().astimezone()
+
+        used_flag = str(db.get_setting(f"fc_used_{user_id}") or '').lower() in ('1', 'true', 'yes')
+
+        if promo_code_in and promo_code_in == pc and pct > 0 and not used_flag and (not exp_dt or now <= exp_dt):
+            bonus = int(amount * (pct / 100.0))
+            if bonus > 0:
+                _update_balance(user_id, bonus)
+                db.set_setting(f"fc_used_{user_id}", "1")
+                try:
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=f"🎁 هدیه شارژ اول فعال شد: +{utils.format_toman(bonus, persian_digits=True)}"
+                    )
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    await q.edit_message_text("✅ شارژ تایید شد.")
+
+async def admin_reject_charge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    try:
+        charge_id = int(q.data.split('_')[-1])
+    except Exception:
+        await q.edit_message_text("❌ شناسه شارژ نامعتبر است.")
+        return
+    try:
+        if hasattr(db, "reject_charge_request"):
+            ok = db.reject_charge_request(charge_id)
+        elif hasattr(db, "admin_reject_charge"):
+            ok = db.admin_reject_charge(charge_id)
+        else:
+            ok = False
+    except Exception:
+        ok = False
+    await q.edit_message_text("✅ شارژ رد شد." if ok else "❌ رد شارژ ناموفق بود یا قبلاً پردازش شده است.")
