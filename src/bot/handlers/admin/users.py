@@ -206,9 +206,28 @@ async def admin_user_purchases_cb(update: Update, context: ContextTypes.DEFAULT_
 async def admin_user_trial_reset_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     target_id = int(q.data.split('_')[-1])
-    db.reset_user_trial(target_id)
-    await q.answer("✅ وضعیت تست کاربر ریست شد.", show_alert=False)
-    await _send_user_panel(update, target_id)
+    ok = False
+    try:
+        await q.answer()
+        if hasattr(db, "reset_user_trial"):
+            db.reset_user_trial(target_id); ok = True
+        elif hasattr(db, "set_user_trial_used"):
+            try:
+                db.set_user_trial_used(target_id, False); ok = True
+            except TypeError:
+                if hasattr(db, "clear_user_trial"):
+                    db.clear_user_trial(target_id); ok = True
+    except Exception as e:
+        logger.warning("Trial reset failed: %s", e)
+        ok = False
+
+    if ok:
+        await _send_user_panel(update, target_id)
+    else:
+        try:
+            await q.answer("❌ ریست تست ناموفق بود یا در DB پشتیبانی نشده است.", show_alert=True)
+        except Exception:
+            pass
 
 async def admin_user_toggle_ban_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -471,12 +490,12 @@ async def admin_confirm_charge_callback(update: Update, context: ContextTypes.DE
         amount = int(parts[4])
         promo_code_in = parts[5].upper() if len(parts) > 5 else ""
     except (IndexError, ValueError):
-        await q.edit_message_text("❌ اطلاعات دکمه نامعتبر است.")
+        await q.edit_message_caption("❌ اطلاعات دکمه نامعتبر است.")
         return
 
     ok = _update_balance(user_id, amount)
     if not ok:
-        await q.edit_message_text("❌ اعمال شارژ اصلی ناموفق بود.")
+        await q.edit_message_caption("❌ اعمال شارژ اصلی ناموفق بود.")
         return
 
     bonus_applied = 0
@@ -500,7 +519,7 @@ async def admin_confirm_charge_callback(update: Update, context: ContextTypes.DE
     if bonus_applied > 0:
         final_text += f"\n🎁 پاداش شارژ اول به مبلغ {bonus_applied:,} تومان نیز اعمال شد."
     
-    await q.edit_message_text(final_text, parse_mode=ParseMode.MARKDOWN)
+    await q.edit_message_caption(final_text, parse_mode=ParseMode.MARKDOWN)
 
     try:
         user_info = db.get_user(user_id)
@@ -518,7 +537,7 @@ async def admin_reject_charge_callback(update: Update, context: ContextTypes.DEF
     await q.answer()
     try:
         user_id = int(q.data.split('_')[-1])
-        await q.edit_message_text(f"❌ درخواست شارژ کاربر `{user_id}` رد شد.")
+        await q.edit_message_caption(f"❌ درخواست شارژ کاربر `{user_id}` رد شد.")
         await context.bot.send_message(chat_id=user_id, text="❌ متاسفانه درخواست شارژ شما توسط ادمین رد شد.")
     except Exception:
-        await q.edit_message_text("❌ عملیات ناموفق بود.")
+        await q.edit_message_caption("❌ عملیات ناموفق بود.")
