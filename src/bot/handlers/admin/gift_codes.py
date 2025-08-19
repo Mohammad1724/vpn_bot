@@ -8,7 +8,8 @@ from telegram.constants import ParseMode
 
 from bot.constants import (
     ADMIN_MENU, BTN_BACK_TO_ADMIN_MENU, CMD_CANCEL, GIFT_CODES_MENU,
-    PROMO_GET_CODE, PROMO_GET_PERCENT, PROMO_GET_MAX_USES, PROMO_GET_EXPIRES, PROMO_GET_FIRST_PURCHASE
+    PROMO_GET_CODE, PROMO_GET_PERCENT, PROMO_GET_MAX_USES, PROMO_GET_EXPIRES, PROMO_GET_FIRST_PURCHASE,
+    AWAIT_REFERRAL_BONUS
 )
 from bot import utils
 import database as db
@@ -17,9 +18,18 @@ CREATE_GIFT_AMOUNT = 201
 
 # --- Helpers ---
 def _gift_root_menu_keyboard() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup([["🎁 مدیریت کدهای هدیه", "💳 مدیریت کدهای تخفیف"], [BTN_BACK_TO_ADMIN_MENU]], resize_keyboard=True)
+    """منوی اصلی بخش کد هدیه"""
+    return ReplyKeyboardMarkup(
+        [
+            ["🎁 مدیریت کدهای هدیه", "💳 مدیریت کدهای تخفیف"],
+            ["💰 تنظیم هدیه دعوت"], # دکمه جدید
+            [BTN_BACK_TO_ADMIN_MENU]
+        ],
+        resize_keyboard=True
+    )
 
 def _gift_codes_menu_keyboard() -> ReplyKeyboardMarkup:
+    """منوی داخلی مدیریت کدهای هدیه"""
     return ReplyKeyboardMarkup([["➕ ساخت کد هدیه جدید", "📋 لیست کدهای هدیه"], ["بازگشت به منوی کدها"]], resize_keyboard=True)
 
 def _promo_codes_menu_keyboard() -> ReplyKeyboardMarkup:
@@ -194,4 +204,35 @@ async def promo_first_purchase_received(update: Update, context: ContextTypes.DE
 async def cancel_promo_create(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await update.message.reply_text("❌ عملیات لغو شد.", reply_markup=_promo_codes_menu_keyboard())
+    return ConversationHandler.END
+
+# --- کانورسیشن تنظیم هدیه دعوت ---
+async def ask_referral_bonus(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    em = update.effective_message
+    current_bonus = db.get_setting('referral_bonus_amount') or "5000"
+    await em.reply_text(
+        f"مبلغ فعلی هدیه دعوت: {int(current_bonus):,} تومان\n\n"
+        "مبلغ جدید را به تومان وارد کنید:",
+        reply_markup=ReplyKeyboardMarkup([[CMD_CANCEL]], resize_keyboard=True)
+    )
+    return AWAIT_REFERRAL_BONUS
+
+async def referral_bonus_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    txt = (update.effective_message.text or "").strip().replace(",", "")
+    try:
+        amount = int(float(txt))
+        if amount < 0: raise ValueError
+    except Exception:
+        await update.effective_message.reply_text("❌ مبلغ نامعتبر است. یک عدد صحیح وارد کنید.")
+        return AWAIT_REFERRAL_BONUS
+
+    db.set_setting('referral_bonus_amount', str(amount))
+    await update.effective_message.reply_text(
+        f"✅ مبلغ هدیه دعوت به {amount:,} تومان تغییر کرد.",
+        reply_markup=_gift_root_menu_keyboard()
+    )
+    return ConversationHandler.END
+
+async def cancel_referral_bonus(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text("❌ عملیات لغو شد.", reply_markup=_gift_root_menu_keyboard())
     return ConversationHandler.END
