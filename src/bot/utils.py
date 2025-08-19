@@ -6,6 +6,7 @@ import random
 import logging
 from typing import Union
 from datetime import datetime, timedelta, timezone
+import math
 
 import qrcode
 import database as db
@@ -24,33 +25,25 @@ logger = logging.getLogger(__name__)
 _PERSIAN_DIGIT_MAP = str.maketrans("0123456789,-", "۰۱۲۳۴۵۶۷۸۹،-")
 
 def to_persian_digits(s: str) -> str:
-    """تبدیل ارقام لاتین به فارسی (با ویرگول فارسی)."""
     try:
         return s.translate(_PERSIAN_DIGIT_MAP)
     except Exception:
         return s
 
 def format_toman(amount: Union[int, float, str], persian_digits: bool = False) -> str:
-    """
-    فرمت استاندارد قیمت به تومان با جداکننده هزار.
-    مثال: 75000 -> '75,000 تومان' یا با ارقام فارسی '۷۵،۰۰۰ تومان'
-    """
     try:
         amt = int(round(float(amount)))
     except Exception:
         amt = 0
     s = f"{amt:,.0f} تومان"
-    # تبدیل به ویرگول و ارقام فارسی در صورت نیاز
     if persian_digits:
         s = to_persian_digits(s)
     return s
-
 
 def parse_date_flexible(date_str: str) -> Union[datetime, None]:
     if not date_str:
         return None
     s = str(date_str).strip().replace("Z", "+00:00")
-    # ISO
     try:
         dt = datetime.fromisoformat(s)
         if dt.tzinfo is None:
@@ -59,7 +52,6 @@ def parse_date_flexible(date_str: str) -> Union[datetime, None]:
         return dt.astimezone()
     except Exception:
         pass
-    # Common formats
     fmts = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d")
     for fmt in fmts:
         try:
@@ -86,23 +78,34 @@ def make_qr_bytes(data: str) -> io.BytesIO:
 
 def _format_expiry_and_days(user_data: dict) -> tuple[str, int]:
     expire_dt = None
-    start_date_str = user_data.get('created_at') or user_data.get('last_reset_time') or user_data.get('start_date')
-    # expire timestamp (preferred if valid)
+    # 1. اولویت با 'expire' timestamp
     if 'expire' in user_data and str(user_data['expire']).isdigit():
         try:
             expire_dt = datetime.fromtimestamp(int(user_data['expire']), tz=timezone.utc).astimezone()
         except Exception:
             expire_dt = None
-    # fallback from start + package_days
-    if expire_dt is None and start_date_str:
-        start_dt = parse_date_flexible(start_date_str)
-        if start_dt:
-            try:
-                package_days = int(user_data.get('package_days', 0))
-            except Exception:
-                package_days = 0
-            if package_days > 0:
-                expire_dt = start_dt + timedelta(days=package_days)
+            
+    # 2. اگر 'expire' نبود، از 'days_left' پنل استفاده کن
+    if expire_dt is None and 'days_left' in user_data:
+        try:
+            days_left_from_panel = float(user_data['days_left'])
+            # روزها را به بالا گرد کن تا ۲۸.۵ روز، ۲۹ روز نمایش داده شود
+            expire_dt = datetime.now().astimezone() + timedelta(days=math.ceil(days_left_from_panel))
+        except (ValueError, TypeError):
+            expire_dt = None
+            
+    # 3. اگر هیچکدام نبود، از تاریخ شروع و package_days محاسبه کن
+    if expire_dt is None:
+        start_date_str = user_data.get('created_at') or user_data.get('last_reset_time') or user_data.get('start_date')
+        if start_date_str:
+            start_dt = parse_date_flexible(start_date_str)
+            if start_dt:
+                try:
+                    package_days = int(user_data.get('package_days', 0))
+                except Exception:
+                    package_days = 0
+                if package_days > 0:
+                    expire_dt = start_dt + timedelta(days=package_days)
 
     now_aware = datetime.now().astimezone()
     expire_jalali = "نامشخص"
@@ -112,44 +115,39 @@ def _format_expiry_and_days(user_data: dict) -> tuple[str, int]:
             expire_jalali = jdatetime.date.fromgregorian(date=expire_dt.date()).strftime('%Y-%m-%d') if jdatetime else expire_dt.strftime("%Y-%m-%d")
         except Exception:
             expire_jalali = expire_dt.strftime("%Y-%m-%d")
-        # روز آخر = 0
-        if expire_dt.date() > now_aware.date():
-            days_left = (expire_dt.date() - now_aware.date()).days
+        
+        # محاسبه دقیق روزهای باقیمانده با گرد کردن به بالا
+        if expire_dt > now_aware:
+            time_diff = expire_dt - now_aware
+            days_left = math.ceil(time_diff.total_seconds() / (24 * 3600))
         else:
             days_left = 0
+            
     return expire_jalali, days_left
 
 def create_service_info_caption(user_data: dict, title: str = "🎉 سرویس شما!") -> str:
-    """
-    کپشن کوتاه و جمع‌وجور. لینک داخل backtick تا با یک ضربه کپی شود.
-    اگر نامحدود باشد، فقط مصرف تا این لحظه را نشان می‌دهد.
-    """
-    # ترافیک
     used_gb = round(float(user_data.get('current_usage_GB', 0.0)), 2)
     total_gb = round(float(user_data.get('usage_limit_GB', 0.0)), 2)
     unlimited = (total_gb <= 0.0)
 
-    # انقضا
     expire_jalali, days_left = _format_expiry_and_days(user_data)
 
-    # وضعیت
     is_active = True
     if user_data.get('status') in ('disabled', 'limited'):
+        is_active = False
+    elif days_left <= 0:
         is_active = False
     elif (not unlimited) and total_gb > 0 and used_gb >= total_gb:
         is_active = False
     status_text = "✅ فعال" if is_active else "❌ غیرفعال"
 
-    # نام
     service_name = user_data.get('name') or user_data.get('uuid', 'N/A')
     if unlimited and isinstance(service_name, str) and "0 گیگ" in service_name:
         service_name = service_name.replace("0 گیگ", "نامحدود")
 
-    # لینک
     sub_url = build_subscription_url(user_data['uuid'])
-    sub_url_line = f"`{sub_url}`"  # برای tap-to-copy
+    sub_url_line = f"`{sub_url}`"
 
-    # بخش حجم کوتاه
     if unlimited:
         traffic_line = f"حجم: نامحدود | مصرف: {used_gb}GB"
     else:
@@ -166,11 +164,7 @@ def create_service_info_caption(user_data: dict, title: str = "🎉 سرویس �
     )
     return caption
 
-# سازگاری عقب‌رو: بعضی فایل‌ها هنوز این نام را import می‌کنند.
 def create_service_info_message(user_data: dict, title: str = "🎉 سرویس شما!") -> str:
-    """
-    Wrapper برای سازگاری با کد قدیمی. متن کوتاه (Caption) را برمی‌گرداند.
-    """
     return create_service_info_caption(user_data, title=title)
 
 def get_domain_for_plan(plan: dict | None) -> str:
@@ -200,7 +194,6 @@ def get_service_status(hiddify_info: dict) -> tuple[str, str, bool]:
     if usage_limit > 0 and current_usage >= usage_limit:
         is_expired = True
 
-    # انقضا
     expire_ts = hiddify_info.get('expire')
     if isinstance(expire_ts, (int, float)) and expire_ts > 0:
         expiry_dt_utc = datetime.fromtimestamp(expire_ts, tz=timezone.utc)
