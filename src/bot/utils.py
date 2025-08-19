@@ -82,20 +82,26 @@ def make_qr_bytes(data: str) -> io.BytesIO:
 def _format_expiry_and_days(user_data: dict, service_db_record: Optional[dict] = None) -> tuple[str, int]:
     expire_dt = None
     
-    # 1. اولویت اصلی: محاسبه بر اساس پلن و تاریخ ایجاد در دیتابیس ربات
     if service_db_record:
         plan_id = service_db_record.get('plan_id')
-        if plan_id:
-            plan = db.get_plan(plan_id)
-            if plan:
-                start_date_str = service_db_record.get('created_at')
-                start_dt = parse_date_flexible(start_date_str)
-                if start_dt:
+        start_date_str = service_db_record.get('created_at')
+        start_dt = parse_date_flexible(start_date_str)
+        
+        if start_dt:
+            package_days = 0
+            if plan_id:
+                plan = db.get_plan(plan_id)
+                if plan:
                     package_days = int(plan.get('days', 0))
-                    if package_days > 0:
-                        expire_dt = start_dt + timedelta(days=package_days)
+            else: # سرویس تست رایگان
+                try:
+                    package_days = int(db.get_setting("trial_days") or 1)
+                except (ValueError, TypeError):
+                    package_days = 1
+            
+            if package_days > 0:
+                expire_dt = start_dt + timedelta(days=package_days)
 
-    # 2. فال‌بک: استفاده از 'expire' timestamp پنل
     if expire_dt is None and 'expire' in user_data and str(user_data['expire']).isdigit():
         try:
             expire_dt = datetime.fromtimestamp(int(user_data['expire']), tz=timezone.utc).astimezone()
