@@ -455,7 +455,7 @@ def build_application():
         MessageHandler(filters.Regex('^📚 راهنما$'), check_channel_membership(start_h.show_guide)),
         MessageHandler(filters.Regex('^🧪 دریافت سرویس تست رایگان$'), check_channel_membership(trial_get_trial_service)),
         MessageHandler(filters.Regex('^🎁 معرفی دوستان$'), check_channel_membership(start_h.show_referral_link)),
-        MessageHandler(filters.Regex('^💳 شارژ حساب$'), check_channel_membership(charge_h.charge_start)),
+        # MessageHandler(filters.Regex('^💳 شارژ حساب$'), check_channel_membership(charge_h.charge_start)),  # این تکراری است و باعث دوبار اجرا می‌شود
     ]
     for h in main_menu_handlers:
         application.add_handler(h, group=3)
