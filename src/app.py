@@ -253,17 +253,13 @@ def build_application():
                 CallbackQueryHandler(admin_settings.service_configs_submenu, pattern="^settings_service_configs$"),
                 CallbackQueryHandler(admin_settings.subdomains_submenu, pattern="^settings_subdomains$"),
                 CallbackQueryHandler(admin_settings.reports_and_reminders_submenu, pattern="^settings_reports_reminders$"),
-
                 CallbackQueryHandler(admin_settings.edit_default_link_start, pattern="^edit_default_link_type$"),
                 CallbackQueryHandler(admin_settings.set_default_link_type, pattern="^set_default_link_"),
-
                 CallbackQueryHandler(admin_settings.toggle_maintenance, pattern="^toggle_maintenance$"),
                 CallbackQueryHandler(admin_settings.toggle_force_join, pattern="^toggle_force_join$"),
                 CallbackQueryHandler(admin_settings.toggle_expiry_reminder, pattern="^toggle_expiry_reminder$"),
                 CallbackQueryHandler(admin_settings.toggle_report_setting, pattern="^toggle_report_"),
-
                 trial_settings_conv,
-
                 CallbackQueryHandler(admin_settings.edit_setting_start, pattern="^admin_edit_setting_"),
                 CallbackQueryHandler(admin_settings.back_to_admin_menu_cb, pattern="^admin_back_to_menu$"),
             ],
@@ -410,7 +406,6 @@ def build_application():
     application.add_handler(CallbackQueryHandler(support_h.close_ticket, pattern="^close_ticket_"))
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern="^check_membership$"))
     
-    # Global Admin Callbacks
     application.add_handler(CallbackQueryHandler(admin_users.admin_confirm_charge_callback, pattern=r'^admin_confirm_charge_'), group=1)
     application.add_handler(CallbackQueryHandler(admin_users.admin_reject_charge_callback, pattern=r'^admin_reject_charge_'), group=1)
 
@@ -464,6 +459,6 @@ def build_application():
         MessageHandler(filters.Regex('^🎁 معرفی دوستان$'), check_channel_membership(start_h.show_referral_link)),
     ]
     for h in main_menu_handlers:
-        application.add_handler(h, group=3)
+        application.add_handler(h)
 
     return application
