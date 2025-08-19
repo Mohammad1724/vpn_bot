@@ -4,7 +4,7 @@ import io
 import sqlite3
 import random
 import logging
-from typing import Union
+from typing import Union, Optional
 from datetime import datetime, timedelta, timezone
 import math
 
@@ -14,13 +14,13 @@ from config import PANEL_DOMAIN, ADMIN_PATH, SUB_PATH, SUB_DOMAINS
 
 try:
     import jdatetime
-except Exception:
+except ImportError:
     jdatetime = None
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------
-# قیمت و فرمت اعداد (تومان)
+# Helpers for Formatting
 # ---------------------------
 _PERSIAN_DIGIT_MAP = str.maketrans("0123456789,-", "۰۱۲۳۴۵۶۷۸۹،-")
 
@@ -63,6 +63,9 @@ def parse_date_flexible(date_str: str) -> Union[datetime, None]:
     logger.error(f"Date parse failed for '{date_str}'.")
     return None
 
+# ---------------------------
+# Subscription and Service Info
+# ---------------------------
 def build_subscription_url(user_uuid: str) -> str:
     sub_path = SUB_PATH or ADMIN_PATH
     sub_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
@@ -76,22 +79,23 @@ def make_qr_bytes(data: str) -> io.BytesIO:
     bio.seek(0)
     return bio
 
-def _format_expiry_and_days(user_data: dict) -> tuple[str, int]:
+def _format_expiry_and_days(user_data: dict, service_db_record: Optional[dict] = None) -> tuple[str, int]:
     expire_dt = None
     
-    # 1. اولویت با `package_days` برای دقت بیشتر
-    start_date_str = user_data.get('created_at') or user_data.get('last_reset_time') or user_data.get('start_date')
-    if start_date_str:
-        start_dt = parse_date_flexible(start_date_str)
-        if start_dt:
-            try:
-                package_days = int(user_data.get('package_days', 0))
-                if package_days > 0:
-                    expire_dt = start_dt + timedelta(days=package_days)
-            except (ValueError, TypeError):
-                pass
-                
-    # 2. اگر `package_days` نبود، از `expire` timestamp استفاده کن
+    # 1. اولویت اصلی: محاسبه بر اساس پلن و تاریخ ایجاد در دیتابیس ربات
+    if service_db_record:
+        plan_id = service_db_record.get('plan_id')
+        if plan_id:
+            plan = db.get_plan(plan_id)
+            if plan:
+                start_date_str = service_db_record.get('created_at')
+                start_dt = parse_date_flexible(start_date_str)
+                if start_dt:
+                    package_days = int(plan.get('days', 0))
+                    if package_days > 0:
+                        expire_dt = start_dt + timedelta(days=package_days)
+
+    # 2. فال‌بک: استفاده از 'expire' timestamp پنل
     if expire_dt is None and 'expire' in user_data and str(user_data['expire']).isdigit():
         try:
             expire_dt = datetime.fromtimestamp(int(user_data['expire']), tz=timezone.utc).astimezone()
@@ -115,12 +119,12 @@ def _format_expiry_and_days(user_data: dict) -> tuple[str, int]:
             
     return expire_jalali, days_left
 
-def create_service_info_caption(user_data: dict, title: str = "🎉 سرویس شما!") -> str:
+def create_service_info_caption(user_data: dict, service_db_record: Optional[dict] = None, title: str = "🎉 سرویس شما!") -> str:
     used_gb = round(float(user_data.get('current_usage_GB', 0.0)), 2)
     total_gb = round(float(user_data.get('usage_limit_GB', 0.0)), 2)
     unlimited = (total_gb <= 0.0)
 
-    expire_jalali, days_left = _format_expiry_and_days(user_data)
+    expire_jalali, days_left = _format_expiry_and_days(user_data, service_db_record)
 
     is_active = True
     if user_data.get('status') in ('disabled', 'limited'):
@@ -154,8 +158,8 @@ def create_service_info_caption(user_data: dict, title: str = "🎉 سرویس �
     )
     return caption
 
-def create_service_info_message(user_data: dict, title: str = "🎉 سرویس شما!") -> str:
-    return create_service_info_caption(user_data, title=title)
+def create_service_info_message(user_data: dict, service_db_record: Optional[dict] = None, title: str = "🎉 سرویس شما!") -> str:
+    return create_service_info_caption(user_data, service_db_record=service_db_record, title=title)
 
 def get_domain_for_plan(plan: dict | None) -> str:
     is_unlimited = plan and plan.get('gb', 1) == 0
