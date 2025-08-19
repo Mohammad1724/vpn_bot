@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram.constants import ParseMode
@@ -117,7 +117,17 @@ async def list_promo_codes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         exp = utils.parse_date_flexible(p['expires_at']).strftime('%Y-%m-%d') if p['expires_at'] else "همیشگی"
         uses = f"{p['used_count']}/{p['max_uses']}" if p['max_uses'] > 0 else f"{p['used_count']}"
         text = f"`{p['code']}` | {p['percent']}% | استفاده: {uses} | انقضا: {exp} | فقط خرید اول: {'بله' if p['first_purchase_only'] else 'خیر'} | {status}"
-        await em.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🗑️ حذف", callback_data=f"delete_promo_code_{p['code']}")]])
+        await em.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=kb)
+    return GIFT_CODES_MENU
+
+async def delete_promo_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query; await q.answer()
+    code_to_delete = q.data.split('delete_promo_code_')[-1]
+    if db.delete_promo_code(code_to_delete):
+        await q.edit_message_text(f"✅ کد تخفیف `{code_to_delete}` با موفقیت حذف شد.", parse_mode=ParseMode.MARKDOWN)
+    else:
+        await q.edit_message_text(f"❌ خطا: کد `{code_to_delete}` یافت نشد.", parse_mode=ParseMode.MARKDOWN)
     return GIFT_CODES_MENU
 
 # کانورسیشن ساخت کد تخفیف
@@ -153,14 +163,16 @@ async def promo_max_uses_received(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text("لطفاً یک عدد صحیح و مثبت (یا 0) وارد کنید.")
         return PROMO_GET_MAX_USES
     context.user_data['promo']['max_uses'] = max_uses
-    await update.message.reply_text("تاریخ انقضا را وارد کنید (فرمت: 2025-12-31). برای نامحدود /skip بزنید.")
+    await update.message.reply_text("تعداد روز اعتبار کد را وارد کنید (مثلاً 5). برای نامحدود /skip بزنید.")
     return PROMO_GET_EXPIRES
 
-async def promo_expires_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def promo_days_valid_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        expires_at = datetime.strptime(update.message.text, '%Y-%m-%d').isoformat()
+        days = int(update.message.text)
+        if days <= 0: raise ValueError
+        expires_at = (datetime.now() + timedelta(days=days)).isoformat()
     except Exception:
-        await update.message.reply_text("فرمت تاریخ نامعتبر است. لطفاً به شکل YYYY-MM-DD وارد کنید.")
+        await update.message.reply_text("لطفاً یک عدد مثبت وارد کنید (مثلاً 5).")
         return PROMO_GET_EXPIRES
     context.user_data['promo']['expires_at'] = expires_at
     await update.message.reply_text("آیا این کد فقط برای خرید اول باشد؟", reply_markup=ReplyKeyboardMarkup([['بله'], ['خیر']], resize_keyboard=True))
