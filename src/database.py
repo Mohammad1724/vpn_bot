@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-
 import sqlite3
 import logging
 from datetime import datetime, timedelta
@@ -159,6 +158,25 @@ def init_db():
             PRIMARY KEY(service_id, date, type)
         )
     ''')
+
+    # Promo codes
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS promo_codes (
+        code TEXT PRIMARY KEY,
+        percent INTEGER NOT NULL,
+        max_uses INTEGER DEFAULT 1,
+        used_count INTEGER DEFAULT 0,
+        expires_at TEXT,
+        first_purchase_only INTEGER DEFAULT 1,
+        is_active INTEGER DEFAULT 1
+    )""")
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS promo_code_usages (
+        code TEXT NOT NULL,
+        user_id INTEGER NOT NULL,
+        used_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (code, user_id)
+    )""")
 
     # Default settings
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_number', '0000-0000-0000-0000'))
@@ -411,18 +429,17 @@ def delete_service(service_id: int):
     conn.execute("DELETE FROM active_services WHERE service_id = ?", (service_id,))
     conn.commit()
 
-def initiate_purchase_transaction(user_id: int, plan_id: int) -> int | None:
+def initiate_purchase_transaction(user_id: int, plan_id: int, final_price: float) -> int | None:
     conn = _connect_db()
     cur = conn.cursor()
     try:
-        plan = get_plan(plan_id)
         user = get_user(user_id)
-        if not plan or not user or user['balance'] < plan['price']:
+        if not user or user['balance'] < final_price:
             return None
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cur.execute(
             "INSERT INTO transactions (user_id, plan_id, type, amount, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (user_id, plan_id, 'purchase', plan['price'], 'pending', now_str, now_str)
+            (user_id, plan_id, 'purchase', final_price, 'pending', now_str, now_str)
         )
         txn_id = cur.lastrowid
         conn.commit()
@@ -608,7 +625,7 @@ def get_popular_plans(limit=5) -> list:
 def get_user_sales_history(user_id: int) -> list:
     query = """
         SELECT s.sale_date, s.price, p.name as plan_name
-        FROM sales_log s LEFT JOIN plans p ON s.plan_id = p.plan_id
+        FROM sales_log s LEFT JOIN plans p ON s.plan_id = s.plan_id
         WHERE s.user_id = ? ORDER BY s.sale_id DESC
     """
     conn = _connect_db()
@@ -650,3 +667,34 @@ def add_charge_transaction(user_id: int, amount: float, type_: str = "charge"):
         VALUES (?, NULL, NULL, ?, ?, 'completed', ?, ?)
     """, (user_id, type_, amount, now_str, now_str))
     conn.commit()
+
+def add_promo_code(code, percent, max_uses, expires_at, first_purchase_only):
+    with _connect_db() as conn:
+        conn.execute(
+            "INSERT INTO promo_codes (code, percent, max_uses, used_count, expires_at, first_purchase_only, is_active) VALUES (?, ?, ?, 0, ?, ?, 1)",
+            (code.upper(), percent, max_uses, expires_at, 1 if first_purchase_only else 0)
+        )
+        conn.commit()
+
+def get_promo_code(code):
+    with _connect_db() as conn:
+        return conn.execute("SELECT * FROM promo_codes WHERE code = ?", (code.upper(),)).fetchone()
+
+def get_all_promo_codes():
+    with _connect_db() as conn:
+        return conn.execute("SELECT * FROM promo_codes ORDER BY is_active DESC, expires_at DESC").fetchall()
+
+def get_user_purchase_count(user_id):
+    with _connect_db() as conn:
+        # Assuming you have a 'sales_log' table
+        return conn.execute("SELECT COUNT(*) FROM sales_log WHERE user_id = ?", (user_id,)).fetchone()[0]
+
+def did_user_use_promo_code(user_id, code):
+    with _connect_db() as conn:
+        return conn.execute("SELECT 1 FROM promo_code_usages WHERE user_id = ? AND code = ?", (user_id, code.upper())).fetchone() is not None
+
+def mark_promo_code_as_used(user_id, code):
+    with _connect_db() as conn:
+        conn.execute("UPDATE promo_codes SET used_count = used_count + 1 WHERE code = ?", (code.upper(),))
+        conn.execute("INSERT INTO promo_code_usages (code, user_id) VALUES (?, ?)", (code.upper(), user_id))
+        conn.commit()
