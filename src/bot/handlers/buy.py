@@ -301,11 +301,17 @@ async def _do_purchase_confirmed(q, context: ContextTypes.DEFAULT_TYPE, custom_n
         if promo_code:
             db.mark_promo_code_as_used(user_id, promo_code)
 
+        new_service_record = db.get_service_by_uuid(new_uuid)
+
         user_data = await hiddify_api.get_user_info(new_uuid)
         if user_data:
             sub_url = utils.build_subscription_url(new_uuid)
             qr_bio = utils.make_qr_bytes(sub_url)
-            caption = utils.create_service_info_caption(user_data, title="🎉 سرویس شما با موفقیت ساخته شد!")
+            caption = utils.create_service_info_caption(
+                user_data,
+                service_db_record=new_service_record,
+                title="🎉 سرویس شما با موفقیت ساخته شد!"
+            )
 
             inline_kb = InlineKeyboardMarkup([
                 [
