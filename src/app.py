@@ -98,10 +98,6 @@ def build_application():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, charge_h.charge_amount_received),
                 CallbackQueryHandler(charge_h.charge_amount_confirm_cb, pattern="^charge_amount_(confirm|cancel)$"),
             ],
-            constants.CHARGE_PROMO_CODE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, charge_h.first_charge_code_received),
-                CommandHandler('skip', charge_h.first_charge_code_received),
-            ],
             constants.CHARGE_RECEIPT: [MessageHandler(filters.PHOTO, charge_h.charge_receipt_received)],
         },
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
