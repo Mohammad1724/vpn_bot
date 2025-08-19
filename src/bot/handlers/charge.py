@@ -26,10 +26,12 @@ async def charge_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except BadRequest:
             pass
 
-    await em.reply_text(
-        "مبلغ شارژ مورد نظر (تومان) را وارد کنید:",
-        reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
-    )
+    # جلوگیری از ارسال پیام تکراری
+    if em:
+        await em.reply_text(
+            "مبلغ شارژ مورد نظر (تومان) را وارد کنید:",
+            reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
+        )
     return constants.CHARGE_AMOUNT
 
 async def charge_amount_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -59,7 +61,6 @@ async def charge_amount_received(update: Update, context: ContextTypes.DEFAULT_T
     ])
     await update.message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
 
-    # در همین state منتظر تایید می‌مانیم
     return constants.CHARGE_AMOUNT
 
 # -----------------
@@ -78,9 +79,11 @@ async def charge_amount_confirm_cb(update: Update, context: ContextTypes.DEFAULT
             pass
         return ConversationHandler.END
 
-    # تایید شد -> درخواست رسید
     try:
-        await q.edit_message_text("لطفاً تصویر رسید پرداخت را ارسال کنید.", reply_markup=ReplyKeyboardMarkup([['/cancel']], resize_keyboard=True))
+        await q.edit_message_text(
+            "لطفاً تصویر رسید پرداخت را ارسال کنید.",
+            reply_markup=ReplyKeyboardMarkup([['/cancel']], resize_keyboard=True)
+        )
     except BadRequest:
         await context.bot.send_message(
             chat_id=q.from_user.id,
@@ -106,39 +109,26 @@ async def charge_receipt_received(update: Update, context: ContextTypes.DEFAULT_
     if context.user_data.get('first_charge_promo_applied'):
         promo_code = db.get_setting('first_charge_code') or ""
 
-    # ثبت درخواست شارژ با کد (در DB)
-    charge_id = None
-    try:
-        # تابع DB خود را اینجا فراخوانی کن
-        if hasattr(db, "create_charge_request"):
-            charge_id = db.create_charge_request(user_id, amount, promo_code=promo_code)
-        elif hasattr(db, "add_charge_request"):
-            # اگر تابع شما فقط یوزر و مبلغ می‌گیرد، کد را در note ذخیره کنید
-            charge_id = db.add_charge_request(user_id, amount, note=promo_code)
-        else:
-            # Fallback (بدون ذخیره کد)
-            logger.warning("No suitable DB function found to save charge request with promo code.")
-    except Exception as e:
-        logger.error("Failed to save charge request to DB: %s", e)
-
-    if charge_id is None:
-        await update.message.reply_text("❌ خطا در ثبت درخواست. لطفاً به پشتیبانی اطلاع دهید.")
-        return ConversationHandler.END
-
     # ارسال برای ادمین
     file_id = photos[-1].file_id
     caption = (
-        f"درخواست شارژ جدید (ID: {charge_id}):\n"
+        f"درخواست شارژ جدید:\n"
         f"- کاربر: `{user_id}` (@{username or '—'})\n"
         f"- مبلغ: {amount:,} تومان"
     )
     if promo_code:
         caption += f"\n- کد شارژ اول: `{promo_code}`"
 
+    # اضافه کردن کد تخفیف به callback_data
+    callback_data_confirm = f"admin_confirm_charge_{user_id}_{amount}"
+    if promo_code:
+        callback_data_confirm += f"_{promo_code}"
+
     kb_admin = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ تایید شارژ", callback_data=f"admin_confirm_charge_{charge_id}")],
-        [InlineKeyboardButton("❌ رد شارژ", callback_data=f"admin_reject_charge_{charge_id}")]
+        [InlineKeyboardButton("✅ تایید شارژ", callback_data=callback_data_confirm)],
+        [InlineKeyboardButton("❌ رد شارژ", callback_data=f"admin_reject_charge_{user_id}")]
     ])
+
     try:
         await context.bot.send_photo(
             chat_id=ADMIN_ID,
