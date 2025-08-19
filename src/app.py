@@ -201,7 +201,7 @@ def build_application():
             constants.PROMO_GET_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_gift.promo_code_received)],
             constants.PROMO_GET_PERCENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_gift.promo_percent_received)],
             constants.PROMO_GET_MAX_USES: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_gift.promo_max_uses_received)],
-            constants.PROMO_GET_EXPIRES: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_gift.promo_expires_received), CommandHandler('skip', admin_gift.promo_skip_expires)],
+            constants.PROMO_GET_EXPIRES: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_gift.promo_days_valid_received), CommandHandler('skip', admin_gift.promo_skip_expires)],
             constants.PROMO_GET_FIRST_PURCHASE: [MessageHandler(filters.Regex(r'^(بله|خیر)$'), admin_gift.promo_first_purchase_received)],
         },
         fallbacks=[CommandHandler('cancel', admin_gift.cancel_promo_create)],
@@ -282,26 +282,20 @@ def build_application():
         ],
         states={
             constants.ADMIN_MENU: [
-                # ReplyKeyboard main menu
                 MessageHandler(filters.Regex('^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
                 MessageHandler(filters.Regex('^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
                 MessageHandler(filters.Regex('^💾 پشتیبان‌گیری$') & admin_filter, admin_backup.backup_restore_menu),
                 MessageHandler(filters.Regex('^👥 مدیریت کاربران$') & admin_filter, admin_users.user_management_menu),
                 MessageHandler(filters.Regex('^🎁 مدیریت کد هدیه$') & admin_filter, admin_gift.gift_code_management_menu),
                 MessageHandler(filters.Regex('^🛑 خاموش کردن ربات$') & admin_filter, admin_c.shutdown_bot),
-
-                # Inline equivalents
                 CallbackQueryHandler(admin_plans.plan_management_menu, pattern="^admin_plans$"),
                 CallbackQueryHandler(admin_reports.reports_menu, pattern="^admin_reports$"),
                 CallbackQueryHandler(admin_backup.backup_restore_menu, pattern="^admin_backup$"),
                 CallbackQueryHandler(admin_users.user_management_menu, pattern="^admin_users$"),
                 CallbackQueryHandler(admin_gift.gift_code_management_menu, pattern="^admin_gift$"),
                 CallbackQueryHandler(admin_c.shutdown_bot, pattern="^admin_shutdown$"),
-
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
                 CallbackQueryHandler(admin_users.admin_delete_service, pattern=r'^admin_delete_service_\d+(_\d+)?$'),
-
-                # Nested convs
                 admin_settings_conv,
                 broadcast_conv,
             ],
@@ -321,10 +315,6 @@ def build_application():
                 MessageHandler(filters.Regex(r'^📈 گزارش فروش امروز$') & admin_filter, admin_reports.show_daily_report),
                 MessageHandler(filters.Regex(r'^📅 گزارش فروش ۷ روز اخیر$') & admin_filter, admin_reports.show_weekly_report),
                 MessageHandler(filters.Regex(r'^🏆 محبوب‌ترین پلن‌ها$') & admin_filter, admin_reports.show_popular_plans_report),
-                CallbackQueryHandler(admin_reports.show_stats_report, pattern=r'^admin_report_stats$'),
-                CallbackQueryHandler(admin_reports.show_daily_report, pattern=r'^admin_report_daily$'),
-                CallbackQueryHandler(admin_reports.show_weekly_report, pattern=r'^admin_report_weekly$'),
-                CallbackQueryHandler(admin_reports.show_popular_plans_report, pattern=r'^admin_report_popular$'),
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
             ],
 
@@ -333,7 +323,6 @@ def build_application():
                 MessageHandler(filters.Regex(r'^📤 بارگذاری فایل پشتیبان$') & admin_filter, admin_backup.restore_start),
                 MessageHandler(filters.Regex(r'^⚙️ تنظیمات پشتیبان‌گیری خودکار$') & admin_filter, admin_backup.edit_auto_backup_start),
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
-
                 CallbackQueryHandler(admin_backup.backup_restore_menu, pattern=r'^back_to_backup_menu$'),
                 CallbackQueryHandler(admin_backup.edit_auto_backup_start, pattern=r'^edit_auto_backup$'),
                 CallbackQueryHandler(admin_backup.edit_backup_interval_start, pattern=r'^edit_backup_interval$'),
@@ -381,6 +370,7 @@ def build_application():
                 MessageHandler(filters.Regex(r'^📋 لیست کدهای هدیه$'), admin_gift.list_gift_codes),
                 CallbackQueryHandler(admin_gift.delete_gift_code_callback, pattern=r'^delete_gift_code_'),
                 MessageHandler(filters.Regex(r'^📋 لیست کدهای تخفیف$'), admin_gift.list_promo_codes),
+                CallbackQueryHandler(admin_gift.delete_promo_code_callback, pattern=r'^delete_promo_code_'),
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
                 MessageHandler(filters.Regex(r'^بازگشت به منوی کدها$') & admin_filter, admin_gift.gift_code_management_menu),
 
@@ -420,10 +410,8 @@ def build_application():
     # =========================
     application.add_handler(CallbackQueryHandler(buy_h.confirm_purchase_callback, pattern="^confirmbuy$"), group=2)
     application.add_handler(CallbackQueryHandler(buy_h.cancel_purchase_callback, pattern="^cancelbuy$"), group=2)
-
     application.add_handler(MessageHandler(filters.REPLY & admin_filter, support_h.admin_reply_handler))
     application.add_handler(CallbackQueryHandler(support_h.close_ticket, pattern="^close_ticket_"))
-
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern="^check_membership$"))
 
     # =========================
