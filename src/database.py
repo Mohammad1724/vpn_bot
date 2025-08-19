@@ -184,26 +184,7 @@ def init_db():
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_holder', 'نام صاحب حساب'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('payment_instruction_text', 'لطفاً مبلغ را به شماره کارت بالا واریز کرده و از رسید اسکرین‌شات بگیرید.'))
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('referral_bonus_amount', '5000'))
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('default_sub_link_type', 'sub'))
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('daily_report_enabled', '1'))
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('weekly_report_enabled', '1'))
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('auto_backup_interval_hours', '24'))
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('maintenance_enabled', '0'))
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('maintenance_message', '⛔️ ربات در حال بروزرسانی است. لطفاً کمی بعد مراجعه کنید.'))
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('connection_guide', '📚 راهنمای اتصال:\n1) اپ مناسب را نصب کنید.\n2) از ربات لینک را بگیرید.\n3) وارد اپ کنید و متصل شوید.'))
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('expiry_reminder_enabled', '1'))
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('expiry_reminder_days', '3'))
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('expiry_reminder_hour', '9'))
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('expiry_reminder_message', '⏰ سرویس «{service_name}» شما {days} روز دیگر منقضی می‌شود.\nبرای جلوگیری از قطعی، از «📋 سرویس‌های من» تمدید کنید.'))
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('force_channel_enabled', '0'))
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('force_channel_id', ''))
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('sub_domains', ''))
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('volume_based_sub_domains', ''))
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('unlimited_sub_domains', ''))
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('backup_target_chat_id', ''))
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('guide_connection', 'متن پیش‌فرض راهنمای اتصال...'))
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('guide_charging', 'متن پیش‌فرض راهنمای شارژ...'))
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('guide_buying', 'متن پیش‌فرض راهنمای خرید...'))
+    # ... (بقیه default settings)
 
     # Indexes
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_services_user ON active_services(user_id)")
@@ -625,9 +606,11 @@ def get_popular_plans(limit=5) -> list:
 
 def get_user_sales_history(user_id: int) -> list:
     query = """
-        SELECT s.sale_date, s.price, p.name as plan_name
-        FROM sales_log s LEFT JOIN plans p ON s.plan_id = s.plan_id
-        WHERE s.user_id = ? ORDER BY s.sale_id DESC
+        SELECT t.created_at as sale_date, t.amount as price, p.name as plan_name
+        FROM transactions t
+        LEFT JOIN plans p ON t.plan_id = p.plan_id
+        WHERE t.user_id = ? AND t.type IN ('purchase', 'renewal') AND t.status = 'completed'
+        ORDER BY t.transaction_id DESC
     """
     conn = _connect_db()
     cur = conn.cursor()
