@@ -74,30 +74,36 @@ def build_application():
             ]
         },
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
-        per_user=True,
-        per_chat=True
+        per_user=True, per_chat=True
     )
 
     gift_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^🎁 کد هدیه$') & user_filter, check_channel_membership(gift_h.gift_code_entry))],
         states={constants.REDEEM_GIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, gift_h.redeem_gift_code)]},
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
-        per_user=True,
-        per_chat=True
+        per_user=True, per_chat=True
     )
 
+    # Charge: اضافه شدن entry point متنی برای دکمه «💳 شارژ حساب»
     charge_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(check_channel_membership(charge_h.charge_start), pattern='^user_start_charge$')],
+        entry_points=[
+            CallbackQueryHandler(check_channel_membership(charge_h.charge_start), pattern='^user_start_charge$'),
+            MessageHandler(filters.Regex(r'^💳 شارژ حساب$') & user_filter, check_channel_membership(charge_h.charge_start)),
+        ],
         states={
             constants.CHARGE_AMOUNT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, charge_h.charge_amount_received),
                 CallbackQueryHandler(charge_h.charge_amount_confirm_cb, pattern="^charge_amount_(confirm|cancel)$"),
             ],
+            # اگر مرحله دریافت کد را اضافه کرده‌ای:
+            # constants.CHARGE_PROMO_CODE: [
+            #     MessageHandler(filters.TEXT & ~filters.COMMAND, charge_h.first_charge_code_received),
+            #     CommandHandler('skip', charge_h.first_charge_code_received),
+            # ],
             constants.CHARGE_RECEIPT: [MessageHandler(filters.PHOTO, charge_h.charge_receipt_received)],
         },
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
-        per_user=True,
-        per_chat=True
+        per_user=True, per_chat=True
     )
 
     transfer_conv = ConversationHandler(
@@ -123,8 +129,7 @@ def build_application():
         entry_points=[MessageHandler(filters.Regex('^📞 پشتیبانی$') & user_filter, check_channel_membership(support_h.support_ticket_start))],
         states={constants.SUPPORT_TICKET_OPEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, support_h.forward_to_admin)]},
         fallbacks=[CommandHandler('cancel', support_h.support_ticket_cancel)],
-        per_user=True,
-        per_chat=True
+        per_user=True, per_chat=True
     )
 
     # =========================
@@ -330,7 +335,6 @@ def build_application():
                 CallbackQueryHandler(admin_plans.list_plans_admin, pattern=r'^admin_list_plans$'),
                 CallbackQueryHandler(admin_plans.admin_toggle_plan_visibility_callback, pattern=r'^admin_toggle_plan_\d+$'),
                 CallbackQueryHandler(admin_plans.admin_delete_plan_callback, pattern=r'^admin_delete_plan_\d+$'),
-                # Back
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
                 add_plan_conv,
                 edit_plan_conv,
@@ -346,7 +350,6 @@ def build_application():
                 CallbackQueryHandler(admin_reports.show_daily_report, pattern=r'^admin_report_daily$'),
                 CallbackQueryHandler(admin_reports.show_weekly_report, pattern=r'^admin_report_weekly$'),
                 CallbackQueryHandler(admin_reports.show_popular_plans_report, pattern=r'^admin_report_popular$'),
-                # Back
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
             ],
 
@@ -499,6 +502,7 @@ def build_application():
         MessageHandler(filters.Regex('^📚 راهنما$'), check_channel_membership(start_h.show_guide)),
         MessageHandler(filters.Regex('^🧪 دریافت سرویس تست رایگان$'), check_channel_membership(trial_get_trial_service)),
         MessageHandler(filters.Regex('^🎁 معرفی دوستان$'), check_channel_membership(start_h.show_referral_link)),
+        MessageHandler(filters.Regex('^💳 شارژ حساب$'), check_channel_membership(charge_h.charge_start)),  # دکمه جدید
     ]
     for h in main_menu_handlers:
         application.add_handler(h, group=3)
