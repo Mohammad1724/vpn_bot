@@ -208,6 +208,15 @@ def build_application():
         map_to_parent={ConversationHandler.END: constants.GIFT_CODES_MENU},
     )
 
+    referral_bonus_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex(r'^💰 تنظیم هدیه دعوت$') & admin_filter, admin_gift.ask_referral_bonus)],
+        states={
+            constants.AWAIT_REFERRAL_BONUS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_gift.referral_bonus_received)]
+        },
+        fallbacks=[CommandHandler('cancel', admin_gift.cancel_referral_bonus)],
+        map_to_parent={ConversationHandler.END: constants.GIFT_CODES_MENU},
+    )
+
     broadcast_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(r'^📩 ارسال پیام$') & admin_filter, admin_users.broadcast_menu)],
         states={
@@ -233,15 +242,6 @@ def build_application():
         fallbacks=[CommandHandler('cancel', admin_c.admin_generic_cancel)],
         map_to_parent={ConversationHandler.END: constants.ADMIN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
-    )
-    
-    referral_bonus_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(r'^💰 تنظیم هدیه دعوت$') & admin_filter, admin_gift.ask_referral_bonus)],
-        states={
-            constants.AWAIT_REFERRAL_BONUS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_gift.referral_bonus_received)]
-        },
-        fallbacks=[CommandHandler('cancel', admin_gift.cancel_referral_bonus)],
-        map_to_parent={ConversationHandler.END: constants.GIFT_CODES_MENU},
     )
 
     admin_settings_conv = ConversationHandler(
@@ -373,7 +373,6 @@ def build_application():
                 CallbackQueryHandler(admin_gift.delete_promo_code_callback, pattern=r'^delete_promo_code_'),
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
                 MessageHandler(filters.Regex(r'^بازگشت به منوی کدها$') & admin_filter, admin_gift.gift_code_management_menu),
-
                 gift_code_create_conv,
                 promo_create_conv,
                 referral_bonus_conv,
