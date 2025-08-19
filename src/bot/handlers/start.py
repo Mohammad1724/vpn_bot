@@ -10,6 +10,7 @@ from telegram.constants import ParseMode
 import database as db
 from bot.keyboards import get_main_menu_keyboard, get_admin_menu_keyboard
 from bot.constants import ADMIN_MENU
+from bot.handlers.charge import _get_payment_info_text # ایمپورت تابع کمکی
 from config import SUPPORT_USERNAME, REFERRAL_BONUS_AMOUNT
 
 try:
@@ -40,8 +41,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     text = "👋 به ربات خوش آمدید!"
-
-    # get_main_menu_keyboard خودش دکمه ادمین را در صورت نیاز اضافه می‌کند
     reply_markup = get_main_menu_keyboard(user.id)
 
     if update.callback_query:
@@ -153,9 +152,10 @@ async def show_charge_history_callback(update: Update, context: ContextTypes.DEF
 async def show_charging_guide_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    guide = db.get_setting("payment_instruction_text") or "راهنمایی ثبت نشده است."
+    guide = _get_payment_info_text()
     kb = [[InlineKeyboardButton("🔙 بازگشت", callback_data="acc_back_to_main")]]
-    await q.edit_message_text(guide, reply_markup=InlineKeyboardMarkup(kb))
+    await q.edit_message_text(guide, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
 
 async def show_guide(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
