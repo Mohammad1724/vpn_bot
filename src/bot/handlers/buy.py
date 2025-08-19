@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import logging
+from datetime import datetime
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, InputFile
 from telegram.constants import ParseMode
@@ -9,7 +10,7 @@ from telegram.error import BadRequest
 import database as db
 import hiddify_api
 from bot import utils
-from bot.constants import GET_CUSTOM_NAME, CMD_CANCEL, CMD_SKIP
+from bot.constants import GET_CUSTOM_NAME, CMD_CANCEL, CMD_SKIP, PROMO_CODE_ENTRY
 from bot.keyboards import get_main_menu_keyboard
 
 logger = logging.getLogger(__name__)
@@ -22,16 +23,13 @@ def _maint_msg() -> str:
     return db.get_setting("maintenance_message") or "⛔️ ربات در حال بروزرسانی است. لطفاً کمی بعد مراجعه کنید."
 
 def _short_price(price: float) -> str:
-    # قیمت با جداکننده هزار و ارقام فارسی
     return utils.format_toman(price, persian_digits=True)
 
 def _vol_label(gb: int) -> str:
-    # حجم با ارقام فارسی و واژه «گیگ» برای کوتاهی و ثبات RTL
     g = int(gb)
     return "نامحدود" if g == 0 else f"{utils.to_persian_digits(str(g))} گیگ"
 
 def _short_label(p: dict) -> str:
-    # ترتیب ثابت: نام | روز | حجم | قیمت (همه با ارقام فارسی)
     name = (p.get('name') or 'پلن')[:18]
     days = int(p.get('days', 0))
     gb = int(p.get('gb', 0))
@@ -39,12 +37,34 @@ def _short_label(p: dict) -> str:
     price_str = _short_price(p.get('price', 0))
     days_fa = utils.to_persian_digits(str(days))
     label = f"{name} | {days_fa} روز | {vol} | {price_str}"
-    # در صورت طولانی بودن، کوتاه‌ترش کن
     return label[:62] + "…" if len(label) > 63 else label
 
-# --------------------------
-# لیست دسته‌بندی و پلن‌ها
-# --------------------------
+def _calc_promo_discount(user_id: int, plan_price: float, promo_code_in: str | None) -> tuple[int, str]:
+    if not promo_code_in:
+        return 0, ""
+
+    code_data = db.get_promo_code(promo_code_in)
+    if not code_data or not code_data['is_active']:
+        return 0, "کد تخفیف نامعتبر است."
+
+    if code_data['max_uses'] > 0 and code_data['used_count'] >= code_data['max_uses']:
+        return 0, "ظرفیت استفاده از این کد به پایان رسیده است."
+
+    if db.did_user_use_promo_code(user_id, promo_code_in):
+        return 0, "شما قبلاً از این کد تخفیف استفاده کرده‌اید."
+
+    if code_data['expires_at']:
+        exp_dt = utils.parse_date_flexible(code_data['expires_at'])
+        if exp_dt and datetime.now().astimezone() > exp_dt:
+            return 0, "این کد تخفیف منقضی شده است."
+
+    if code_data['first_purchase_only'] and db.get_user_purchase_count(user_id) > 0:
+        return 0, "این کد تخفیف فقط برای خرید اول است."
+
+    discount = int(float(plan_price) * (int(code_data['percent']) / 100.0))
+    return discount, ""
+
+# --- لیست دسته‌بندی و پلن‌ها ---
 async def buy_service_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     if q:
@@ -92,9 +112,7 @@ async def show_plans_in_category(update: Update, context: ContextTypes.DEFAULT_T
     kb.append([InlineKeyboardButton("🔙 بازگشت به دسته‌بندی‌ها", callback_data="back_to_cats")])
     await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
-# --------------------------
-# شروع خرید → گرفتن نام
-# --------------------------
+# --- شروع خرید → نام → کد تخفیف ---
 async def buy_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -135,14 +153,28 @@ async def get_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ شما قبلاً سرویسی با این نام داشته‌اید. لطفاً نام دیگری انتخاب کنید.")
         return GET_CUSTOM_NAME
 
-    return await _ask_purchase_confirm(update, context, custom_name=name)
+    context.user_data['buy_custom_name'] = name
+    return await _ask_promo_code(update, context)
 
 async def skip_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await _ask_purchase_confirm(update, context, custom_name="")
+    context.user_data['buy_custom_name'] = ""
+    return await _ask_promo_code(update, context)
 
-# --------------------------
-# مرحله تأیید خرید
-# --------------------------
+async def _ask_promo_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "اگر کدتخفیف دارید وارد کنید؛ وگرنه /skip را بزنید.",
+        reply_markup=ReplyKeyboardMarkup([['/skip', CMD_CANCEL]], resize_keyboard=True)
+    )
+    return PROMO_CODE_ENTRY
+
+async def promo_code_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    code = (update.message.text or "").strip()
+    if code.lower() == "/skip":
+        code = ""
+    context.user_data['buy_promo_code'] = code
+    return await _ask_purchase_confirm(update, context, custom_name=context.user_data.get('buy_custom_name', ''))
+
+# --- مرحله تأیید خرید ---
 async def _ask_purchase_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, custom_name: str):
     user_id = update.effective_user.id
     plan_id = context.user_data.get('buy_plan_id')
@@ -152,22 +184,35 @@ async def _ask_purchase_confirm(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text("❌ پلن انتخاب‌شده نامعتبر است.", reply_markup=get_main_menu_keyboard(user_id))
         return ConversationHandler.END
 
+    promo_code = context.user_data.get('buy_promo_code')
+    discount, error_msg = _calc_promo_discount(user_id, plan['price'], promo_code)
+    final_price = max(0, int(plan['price']) - discount)
+
     context.user_data['pending_buy'] = {
         'plan_id': plan_id,
-        'custom_name': custom_name
+        'custom_name': custom_name,
+        'promo_code': promo_code,
+        'final_price': final_price
     }
 
     volume_text = _vol_label(int(plan['gb']))
     price_text = utils.format_toman(plan['price'], persian_digits=True)
-    days_fa = utils.to_persian_digits(str(plan['days']))
+    if discount > 0:
+        discount_text = utils.format_toman(discount, persian_digits=True)
+        final_price_text = utils.format_toman(final_price, persian_digits=True)
+        price_line = f"قیمت: {price_text}\nتخفیف: {discount_text}\nقیمت نهایی: {final_price_text}"
+    else:
+        price_line = f"قیمت: {price_text}"
+        if promo_code and error_msg:
+            price_line += f"\n(کد تخفیف نامعتبر: {error_msg})"
 
     text = f"""
 🛒 تایید خرید سرویس
 
 نام سرویس: {custom_name or '(بدون نام)'}
-مدت: {days_fa} روز
+مدت: {utils.to_persian_digits(str(plan['days']))} روز
 حجم: {volume_text}
-قیمت: {price_text}
+{price_line}
 
 با تایید، مبلغ از کیف‌پول شما کسر شده و سرویس بلافاصله ساخته می‌شود.
 ادامه می‌دهید؟
@@ -196,6 +241,9 @@ async def confirm_purchase_callback(update: Update, context: ContextTypes.DEFAUL
     custom_name = data.get('custom_name', '')
     await _do_purchase_confirmed(q, context, custom_name)
     context.user_data.pop('pending_buy', None)
+    context.user_data.pop('buy_plan_id', None)
+    context.user_data.pop('buy_custom_name', None)
+    context.user_data.pop('buy_promo_code', None)
 
 async def cancel_purchase_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -206,26 +254,23 @@ async def cancel_purchase_callback(update: Update, context: ContextTypes.DEFAULT
     except BadRequest:
         await context.bot.send_message(chat_id=q.from_user.id, text="❌ خرید لغو شد.")
 
-# --------------------------
-# ساخت سرویس پس از تایید
-# --------------------------
+# --- ساخت سرویس پس از تایید ---
 async def _do_purchase_confirmed(q, context: ContextTypes.DEFAULT_TYPE, custom_name: str):
     user_id = q.from_user.id
     username = q.from_user.username
-    plan_id = context.user_data.get('buy_plan_id')
+    data = context.user_data.get('pending_buy')
+    plan_id = data.get('plan_id')
+    final_price = data.get('final_price')
+    promo_code = data.get('promo_code')
     plan = db.get_plan(plan_id) if plan_id else None
 
     if not plan:
         await context.bot.send_message(chat_id=user_id, text="❌ پلن انتخاب‌شده نامعتبر است.", reply_markup=get_main_menu_keyboard(user_id))
         return
 
-    txn_id = db.initiate_purchase_transaction(user_id, plan_id)
+    txn_id = db.initiate_purchase_transaction(user_id, plan_id, final_price)
     if not txn_id:
-        await context.bot.send_message(
-            chat_id=user_id,
-            text="❌ موجودی کافی نیست. لطفاً ابتدا حسابتان را شارژ کنید.",
-            reply_markup=ReplyKeyboardMarkup([["💰 موجودی و شارژ حساب"]], resize_keyboard=True)
-        )
+        await q.edit_message_text(f"❌ موجودی کافی نیست. لطفاً ابتدا حسابتان را شارژ کنید.")
         return
 
     try:
@@ -234,7 +279,6 @@ async def _do_purchase_confirmed(q, context: ContextTypes.DEFAULT_TYPE, custom_n
         except BadRequest:
             await context.bot.send_message(chat_id=user_id, text="⏳ در حال ایجاد سرویس شما...")
 
-        # نام پیشفرض برای نامحدود
         gb_i = int(plan['gb'])
         default_name = "سرویس نامحدود" if gb_i == 0 else f"سرویس {utils.to_persian_digits(str(gb_i))} گیگ"
         final_name = custom_name or default_name
@@ -253,6 +297,9 @@ async def _do_purchase_confirmed(q, context: ContextTypes.DEFAULT_TYPE, custom_n
         new_uuid = provision["uuid"]
         sub_link = provision.get('full_link', '')
         db.finalize_purchase_transaction(txn_id, new_uuid, sub_link, final_name)
+
+        if promo_code:
+            db.mark_promo_code_as_used(user_id, promo_code)
 
         user_data = await hiddify_api.get_user_info(new_uuid)
         if user_data:
