@@ -49,7 +49,7 @@ async def charge_amount_received(update: Update, context: ContextTypes.DEFAULT_T
 
 - مبلغ: {amount:,} تومان
 
-با تایید، باید کد شارژ اول (در صورت وجود) و تصویر رسید پرداخت را ارسال کنید.
+با تایید، باید تصویر رسید پرداخت را ارسال کنید.
 ادامه می‌دهید؟
     """.strip()
 
@@ -63,7 +63,7 @@ async def charge_amount_received(update: Update, context: ContextTypes.DEFAULT_T
     return constants.CHARGE_AMOUNT
 
 # -----------------
-# دریافت کد شارژ اول (اختیاری)
+# دریافت رسید و ثبت
 # -----------------
 async def charge_amount_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -71,43 +71,24 @@ async def charge_amount_confirm_cb(update: Update, context: ContextTypes.DEFAULT
     data = q.data
 
     if data.endswith("cancel"):
-        context.user_data.pop('charge_amount', None)
+        context.user_data.clear()
         try:
             await q.edit_message_text("❌ عملیات شارژ لغو شد.")
         except BadRequest:
             pass
         return ConversationHandler.END
 
-    # تایید شد -> درخواست کد شارژ اول
+    # تایید شد -> درخواست رسید
     try:
-        await q.edit_message_text(
-            "اگر کد «شارژ اول» دارید ارسال کنید (مثلاً FIRST30). در غیر اینصورت /skip را بزنید.",
-            reply_markup=ReplyKeyboardMarkup([['/skip']], resize_keyboard=True)
-        )
+        await q.edit_message_text("لطفاً تصویر رسید پرداخت را ارسال کنید.", reply_markup=ReplyKeyboardMarkup([['/cancel']], resize_keyboard=True))
     except BadRequest:
         await context.bot.send_message(
             chat_id=q.from_user.id,
-            text="اگر کد «شارژ اول» دارید ارسال کنید (مثلاً FIRST30). در غیر اینصورت /skip را بزنید.",
-            reply_markup=ReplyKeyboardMarkup([['/skip']], resize_keyboard=True)
+            text="لطفاً تصویر رسید پرداخت را ارسال کنید.",
+            reply_markup=ReplyKeyboardMarkup([['/cancel']], resize_keyboard=True)
         )
-    return constants.CHARGE_PROMO_CODE
-
-async def first_charge_code_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # اگر کاربر /skip زد، مقدار خالی ذخیره می‌شود
-    code = (update.message.text or "").strip()
-    if code.lower() == "/skip":
-        code = ""
-    context.user_data['first_charge_code'] = code
-
-    await update.message.reply_text(
-        "لطفاً تصویر رسید پرداخت را ارسال کنید.",
-        reply_markup=ReplyKeyboardMarkup([['/cancel']], resize_keyboard=True)
-    )
     return constants.CHARGE_RECEIPT
 
-# -----------------
-# دریافت رسید و ثبت
-# -----------------
 async def charge_receipt_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     username = update.effective_user.username
@@ -117,21 +98,26 @@ async def charge_receipt_received(update: Update, context: ContextTypes.DEFAULT_
         return constants.CHARGE_RECEIPT
 
     amount = context.user_data.get('charge_amount', 0)
-    promo_code = context.user_data.get('first_charge_code', "")
     if amount <= 0:
         await update.message.reply_text("❌ مبلغ شارژ مشخص نیست. لطفاً از ابتدا شروع کنید: /cancel")
         return ConversationHandler.END
 
+    promo_code = ""
+    if context.user_data.get('first_charge_promo_applied'):
+        promo_code = db.get_setting('first_charge_code') or ""
+
     # ثبت درخواست شارژ با کد (در DB)
     charge_id = None
     try:
-        # تابع DB خود را اینجا فراخوانی کن (با promo_code)
+        # تابع DB خود را اینجا فراخوانی کن
         if hasattr(db, "create_charge_request"):
             charge_id = db.create_charge_request(user_id, amount, promo_code=promo_code)
+        elif hasattr(db, "add_charge_request"):
+            # اگر تابع شما فقط یوزر و مبلغ می‌گیرد، کد را در note ذخیره کنید
+            charge_id = db.add_charge_request(user_id, amount, note=promo_code)
         else:
-            # Fallback (بدون کد)
-            if hasattr(db, "add_charge_request"):
-                charge_id = db.add_charge_request(user_id, amount)
+            # Fallback (بدون ذخیره کد)
+            logger.warning("No suitable DB function found to save charge request with promo code.")
     except Exception as e:
         logger.error("Failed to save charge request to DB: %s", e)
 
@@ -144,9 +130,11 @@ async def charge_receipt_received(update: Update, context: ContextTypes.DEFAULT_
     caption = (
         f"درخواست شارژ جدید (ID: {charge_id}):\n"
         f"- کاربر: `{user_id}` (@{username or '—'})\n"
-        f"- مبلغ: {amount:,} تومان\n"
-        f"- کد شارژ: `{promo_code}`" if promo_code else ""
+        f"- مبلغ: {amount:,} تومان"
     )
+    if promo_code:
+        caption += f"\n- کد شارژ اول: `{promo_code}`"
+
     kb_admin = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ تایید شارژ", callback_data=f"admin_confirm_charge_{charge_id}")],
         [InlineKeyboardButton("❌ رد شارژ", callback_data=f"admin_reject_charge_{charge_id}")]
