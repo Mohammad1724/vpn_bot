@@ -32,6 +32,14 @@ def close_db():
         _db_connection = None
         logger.info("Database connection closed.")
 
+def _add_column_if_not_exists(conn, table_name, column_name, column_type):
+    cursor = conn.cursor()
+    cursor.execute(f"PRAGMA table_info({table_name})")
+    columns = [row['name'] for row in cursor.fetchall()]
+    if column_name not in columns:
+        cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
+        logger.info(f"Added column '{column_name}' to table '{table_name}'.")
+
 def _remove_device_limit_alert_column_if_exists(conn: sqlite3.Connection):
     cur = conn.cursor()
     try:
@@ -146,9 +154,11 @@ def init_db():
         CREATE TABLE IF NOT EXISTS transactions (
             transaction_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, plan_id INTEGER,
             service_id INTEGER, type TEXT NOT NULL, amount REAL NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
-            created_at TEXT NOT NULL, updated_at TEXT NOT NULL, FOREIGN KEY(user_id) REFERENCES users(user_id)
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL, note TEXT,
+            FOREIGN KEY(user_id) REFERENCES users(user_id)
         )
     ''')
+    _add_column_if_not_exists(conn, "transactions", "note", "TEXT")
 
     # reminder_log
     cursor.execute('''
@@ -181,9 +191,6 @@ def init_db():
 
     # Default settings
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_number', '0000-0000-0000-0000'))
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_holder', 'نام صاحب حساب'))
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('payment_instruction_text', 'لطفاً مبلغ را به شماره کارت بالا واریز کرده و از رسید اسکرین‌شات بگیرید.'))
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('referral_bonus_amount', '5000'))
     # ... (بقیه default settings)
 
     # Indexes
@@ -403,9 +410,6 @@ def set_low_usage_alert_sent(service_id: int, status=True):
     conn.execute("UPDATE active_services SET low_usage_alert_sent = ? WHERE service_id = ?", (1 if status else 0, service_id))
     conn.commit()
 
-def set_device_limit_alert_sent(service_id: int, status: bool = True):
-    logger.debug("set_device_limit_alert_sent() ignored (device limit removed).")
-
 def delete_service(service_id: int):
     conn = _connect_db()
     conn.execute("DELETE FROM active_services WHERE service_id = ?", (service_id,))
@@ -440,252 +444,4 @@ def finalize_purchase_transaction(transaction_id: int, sub_uuid: str, sub_link: 
         txn = cur.fetchone()
         if not txn:
             raise ValueError("Transaction not found or not pending.")
-        cur.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (txn['amount'], txn['user_id']))
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        cur.execute(
-            "INSERT INTO active_services (user_id, name, sub_uuid, sub_link, plan_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (txn['user_id'], custom_name, sub_uuid, sub_link, txn['plan_id'], now_str)
-        )
-        cur.execute(
-            "INSERT INTO sales_log (user_id, plan_id, price, sale_date) VALUES (?, ?, ?, ?)",
-            (txn['user_id'], txn['plan_id'], txn['amount'], now_str)
-        )
-        cur.execute("UPDATE transactions SET status = 'completed', updated_at = ? WHERE transaction_id = ?", (now_str, transaction_id))
-        conn.commit()
-    except Exception as e:
-        logger.error(f"Error finalizing purchase {transaction_id}: {e}")
-        conn.rollback()
-
-def cancel_purchase_transaction(transaction_id: int):
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    conn = _connect_db()
-    conn.execute("UPDATE transactions SET status = 'failed', updated_at = ? WHERE transaction_id = ?", (now_str, transaction_id))
-    conn.commit()
-
-def initiate_renewal_transaction(user_id: int, service_id: int, plan_id: int) -> int | None:
-    conn = _connect_db()
-    cur = conn.cursor()
-    try:
-        plan = get_plan(plan_id)
-        user = get_user(user_id)
-        if not plan or not user or user['balance'] < plan['price']:
-            return None
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        cur.execute(
-            "INSERT INTO transactions (user_id, plan_id, service_id, type, amount, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (user_id, plan_id, service_id, 'renewal', plan['price'], 'pending', now_str, now_str)
-        )
-        txn_id = cur.lastrowid
-        conn.commit()
-        return txn_id
-    except sqlite3.Error as e:
-        logger.error(f"Error initiating renewal: {e}")
-        conn.rollback()
-        return None
-
-def finalize_renewal_transaction(transaction_id: int, new_plan_id: int):
-    conn = _connect_db()
-    cur = conn.cursor()
-    try:
-        conn.execute("BEGIN")
-        cur.execute("SELECT * FROM transactions WHERE transaction_id = ? AND status = 'pending'", (transaction_id,))
-        txn = cur.fetchone()
-        if not txn:
-            raise ValueError("Renewal transaction not found or not pending.")
-        cur.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (txn['amount'], txn['user_id']))
-        cur.execute("UPDATE active_services SET plan_id = ?, low_usage_alert_sent = 0 WHERE service_id = ?", (new_plan_id, txn['service_id']))
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        cur.execute("INSERT INTO sales_log (user_id, plan_id, price, sale_date) VALUES (?, ?, ?, ?)", (txn['user_id'], txn['plan_id'], txn['amount'], now_str))
-        cur.execute("UPDATE transactions SET status = 'completed', updated_at = ? WHERE transaction_id = ?", (now_str, transaction_id))
-        conn.commit()
-    except Exception as e:
-        logger.error(f"Error finalizing renewal {transaction_id}: {e}")
-        conn.rollback()
-
-def cancel_renewal_transaction(transaction_id: int):
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    conn = _connect_db()
-    conn.execute("UPDATE transactions SET status = 'failed', updated_at = ? WHERE transaction_id = ?", (now_str, transaction_id))
-    conn.commit()
-
-def use_gift_code(code: str, user_id: int) -> float | None:
-    conn = _connect_db()
-    cur = conn.cursor()
-    try:
-        conn.execute("BEGIN")
-        cur.execute("SELECT * FROM gift_codes WHERE code = ? AND is_used = 0", (code,))
-        gift = cur.fetchone()
-        if not gift:
-            conn.rollback()
-            return None
-        amount = gift['amount']
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        cur.execute("UPDATE gift_codes SET is_used = 1, used_by = ?, used_date = ? WHERE code = ?", (user_id, now_str, code))
-        cur.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
-        conn.commit()
-        return amount
-    except sqlite3.Error as e:
-        logger.error(f"Error using gift code {code}: {e}")
-        conn.rollback()
-        return None
-
-def create_gift_code(code: str, amount: float):
-    conn = _connect_db()
-    try:
-        conn.execute("INSERT INTO gift_codes (code, amount) VALUES (?, ?)", (code.upper(), amount))
-        conn.commit()
-        return True
-    except sqlite3.IntegrityError:
-        return False
-
-def get_all_gift_codes() -> list:
-    conn = _connect_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM gift_codes ORDER BY is_used ASC, code ASC")
-    return [dict(row) for row in cursor.fetchall()]
-
-def delete_gift_code(code: str) -> bool:
-    conn = _connect_db()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM gift_codes WHERE code = ?", (code,))
-    conn.commit()
-    return cursor.rowcount > 0
-
-def get_setting(key: str) -> str | None:
-    conn = _connect_db()
-    cur = conn.execute("SELECT value FROM settings WHERE key = ?", (key,))
-    row = cur.fetchone()
-    return row['value'] if row else None
-
-def set_setting(key: str, value: str):
-    conn = _connect_db()
-    conn.execute("REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
-    conn.commit()
-
-def was_reminder_sent(service_id: int, type_: str, date: str) -> bool:
-    conn = _connect_db()
-    cur = conn.cursor()
-    cur.execute("SELECT 1 FROM reminder_log WHERE service_id = ? AND date = ? AND type = ?", (service_id, date, type_))
-    return cur.fetchone() is not None
-
-def mark_reminder_sent(service_id: int, type_: str, date: str):
-    conn = _connect_db()
-    conn.execute("INSERT OR IGNORE INTO reminder_log (service_id, date, type) VALUES (?, ?, ?)", (service_id, date, type_))
-    conn.commit()
-
-def get_stats() -> dict:
-    conn = _connect_db()
-    total_users = conn.execute("SELECT COUNT(user_id) FROM users").fetchone()[0]
-    banned_users = conn.execute("SELECT COUNT(user_id) FROM users WHERE is_banned = 1").fetchone()[0]
-    active_services = conn.execute("SELECT COUNT(service_id) FROM active_services").fetchone()[0]
-    total_revenue = conn.execute("SELECT SUM(price) FROM sales_log").fetchone()[0]
-    return {
-        'total_users': total_users or 0,
-        'banned_users': banned_users or 0,
-        'active_services': active_services or 0,
-        'total_revenue': total_revenue or 0.0
-    }
-
-def get_sales_report(days=1) -> list:
-    start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d 00:00:00")
-    conn = _connect_db()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM sales_log WHERE sale_date >= ?", (start_date,))
-    return [dict(r) for r in cur.fetchall()]
-
-def get_popular_plans(limit=5) -> list:
-    query = """
-        SELECT p.name, COUNT(s.sale_id) as sales_count
-        FROM plans p JOIN sales_log s ON p.plan_id = s.plan_id
-        GROUP BY p.plan_id ORDER BY sales_count DESC LIMIT ?
-    """
-    conn = _connect_db()
-    cur = conn.cursor()
-    cur.execute(query, (limit,))
-    return [dict(r) for r in cur.fetchall()]
-
-def get_user_sales_history(user_id: int) -> list:
-    query = """
-        SELECT t.created_at as sale_date, t.amount as price, p.name as plan_name
-        FROM transactions t
-        LEFT JOIN plans p ON t.plan_id = p.plan_id
-        WHERE t.user_id = ? AND t.type IN ('purchase', 'renewal') AND t.status = 'completed'
-        ORDER BY t.transaction_id DESC
-    """
-    conn = _connect_db()
-    cur = conn.cursor()
-    cur.execute(query, (user_id,))
-    return [dict(r) for r in cur.fetchall()]
-
-def get_service_by_name(user_id: int, name: str) -> dict | None:
-    conn = _connect_db()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM active_services WHERE user_id = ? AND name = ?", (user_id, name))
-    row = cur.fetchone()
-    return dict(row) if row else None
-
-def get_user_referral_count(user_id: int) -> int:
-    conn = _connect_db()
-    cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM users WHERE referred_by = ?", (user_id,))
-    row = cur.fetchone()
-    return row[0] if row else 0
-
-def get_user_charge_history(user_id: int) -> list:
-    conn = _connect_db()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT created_at, amount, type FROM transactions
-        WHERE user_id = ?
-          AND type LIKE '%charge%'
-          AND status = 'completed'
-        ORDER BY transaction_id DESC
-    """, (user_id,))
-    return [dict(r) for r in cur.fetchall()]
-
-def add_charge_transaction(user_id: int, amount: float, type_: str = "charge"):
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    conn = _connect_db()
-    conn.execute("""
-        INSERT INTO transactions (user_id, plan_id, service_id, type, amount, status, created_at, updated_at)
-        VALUES (?, NULL, NULL, ?, ?, 'completed', ?, ?)
-    """, (user_id, type_, amount, now_str, now_str))
-    conn.commit()
-
-# --- Promo Codes ---
-def add_promo_code(code, percent, max_uses, expires_at, first_purchase_only):
-    with _connect_db() as conn:
-        conn.execute(
-            "INSERT INTO promo_codes (code, percent, max_uses, used_count, expires_at, first_purchase_only, is_active) VALUES (?, ?, ?, 0, ?, ?, 1)",
-            (code.upper(), percent, max_uses, expires_at, 1 if first_purchase_only else 0)
-        )
-
-def get_promo_code(code):
-    with _connect_db() as conn:
-        return conn.execute("SELECT * FROM promo_codes WHERE code = ?", (code.upper(),)).fetchone()
-
-def get_all_promo_codes():
-    with _connect_db() as conn:
-        return conn.execute("SELECT * FROM promo_codes ORDER BY is_active DESC, expires_at DESC").fetchall()
-
-def delete_promo_code(code: str) -> bool:
-    """تابع حذف کد تخفیف."""
-    with _connect_db() as conn:
-        cur = conn.cursor()
-        cur.execute("DELETE FROM promo_codes WHERE code = ?", (code,))
-        conn.commit()
-        return cur.rowcount > 0
-
-def get_user_purchase_count(user_id):
-    with _connect_db() as conn:
-        return conn.execute("SELECT COUNT(*) FROM sales_log WHERE user_id = ?", (user_id,)).fetchone()[0]
-
-def did_user_use_promo_code(user_id, code):
-    with _connect_db() as conn:
-        return conn.execute("SELECT 1 FROM promo_code_usages WHERE user_id = ? AND code = ?", (user_id, code.upper())).fetchone() is not None
-
-def mark_promo_code_as_used(user_id, code):
-    with _connect_db() as conn:
-        conn.execute("UPDATE promo_codes SET used_count = used_count + 1 WHERE code = ?", (code.upper(),))
-        conn.execute("INSERT INTO promo_code_usages (code, user_id) VALUES (?, ?)", (code.upper(), user_id))
-        conn.commit()
+        cur.execute("UPDATE users SET balance = balance 
