@@ -139,8 +139,8 @@ async def charge_receipt_received(update: Update, context: ContextTypes.DEFAULT_
 
     charge_id = None
     try:
-        if hasattr(db, "add_charge_request"):
-            charge_id = db.add_charge_request(user_id, amount, note=promo_code)
+        if hasattr(db, "create_charge_request"):
+            charge_id = db.create_charge_request(user_id, amount, note=promo_code)
     except Exception as e:
         logger.error("Failed to save charge request to DB: %s", e)
 
@@ -157,13 +157,12 @@ async def charge_receipt_received(update: Update, context: ContextTypes.DEFAULT_
     if promo_code:
         caption += f"\n- کد شارژ اول: `{promo_code}`"
 
-    callback_data_confirm = f"admin_confirm_charge_{charge_id}_{user_id}_{amount}"
-    if promo_code:
-        callback_data_confirm += f"_{promo_code}"
+    callback_data_confirm = f"admin_confirm_charge_{charge_id}"
+    callback_data_reject = f"admin_reject_charge_{charge_id}_{user_id}"
 
     kb_admin = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ تایید شارژ", callback_data=callback_data_confirm)],
-        [InlineKeyboardButton("❌ رد شارژ", callback_data=f"admin_reject_charge_{charge_id}_{user_id}")]
+        [InlineKeyboardButton("❌ رد شارژ", callback_data=callback_data_reject)]
     ])
     try:
         await context.bot.send_photo(
