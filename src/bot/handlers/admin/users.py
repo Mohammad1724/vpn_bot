@@ -87,8 +87,6 @@ def _ensure_user_exists(user_id: int):
 def _update_balance(user_id: int, delta: int) -> bool:
     _ensure_user_exists(user_id)
     try:
-        if hasattr(db, "change_balance"):
-            db.change_balance(user_id, delta); return True
         if hasattr(db, "update_balance"):
             db.update_balance(user_id, delta); return True
         if delta >= 0 and hasattr(db, "increase_balance"):
@@ -206,28 +204,9 @@ async def admin_user_purchases_cb(update: Update, context: ContextTypes.DEFAULT_
 async def admin_user_trial_reset_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     target_id = int(q.data.split('_')[-1])
-    ok = False
-    try:
-        await q.answer()
-        if hasattr(db, "reset_user_trial"):
-            db.reset_user_trial(target_id); ok = True
-        elif hasattr(db, "set_user_trial_used"):
-            try:
-                db.set_user_trial_used(target_id, False); ok = True
-            except TypeError:
-                if hasattr(db, "clear_user_trial"):
-                    db.clear_user_trial(target_id); ok = True
-    except Exception as e:
-        logger.warning("Trial reset failed: %s", e)
-        ok = False
-
-    if ok:
-        await _send_user_panel(update, target_id)
-    else:
-        try:
-            await q.answer("❌ ریست تست ناموفق بود یا در DB پشتیبانی نشده است.", show_alert=True)
-        except Exception:
-            pass
+    db.reset_user_trial(target_id)
+    await q.answer("✅ وضعیت تست کاربر ریست شد.", show_alert=False)
+    await _send_user_panel(update, target_id)
 
 async def admin_user_toggle_ban_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -483,34 +462,39 @@ async def broadcast_to_user_message_received(update: Update, context: ContextTyp
 async def admin_confirm_charge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    
-    parts = q.data.split('_')
     try:
-        user_id = int(parts[3])
-        amount = int(parts[4])
-        promo_code_in = parts[5].upper() if len(parts) > 5 else ""
+        charge_id = int(q.data.split('_')[3])
     except (IndexError, ValueError):
         await q.edit_message_caption("❌ اطلاعات دکمه نامعتبر است.")
         return
 
-    ok = _update_balance(user_id, amount)
+    req = db.get_charge_request(charge_id)
+    if not req:
+        await q.edit_message_caption("❌ درخواست شارژ یافت نشد یا قبلاً پردازش شده است.")
+        return
+
+    user_id = int(req['user_id'])
+    amount = int(float(req['amount']))
+    promo_code_in = (req.get('note') or "").strip().upper()
+
+    ok = db.confirm_charge_request(charge_id)
     if not ok:
-        await q.edit_message_caption("❌ اعمال شارژ اصلی ناموفق بود.")
+        await q.edit_message_caption("❌ تایید شارژ ناموفق بود (احتمالاً در DB).")
         return
 
     bonus_applied = 0
     try:
-        pc = (db.get_setting('first_charge_code') or '').upper()
-        pct = int(db.get_setting('first_charge_bonus_percent') or 0)
-        exp_raw = db.get_setting('first_charge_expires_at') or ''
-        exp_dt = utils.parse_date_flexible(exp_raw) if exp_raw else None
-        now = datetime.now().astimezone()
+        if hasattr(db, "get_user_charge_count") and db.get_user_charge_count(user_id) == 1: # چون همین الان یکی ثبت شد
+            pc = (db.get_setting('first_charge_code') or '').upper()
+            pct = int(db.get_setting('first_charge_bonus_percent') or 0)
+            exp_raw = db.get_setting('first_charge_expires_at') or ''
+            exp_dt = utils.parse_date_flexible(exp_raw) if exp_raw else None
+            now = datetime.now().astimezone()
 
-        if hasattr(db, "get_user_charge_count") and db.get_user_charge_count(user_id) == 0:
             if promo_code_in and promo_code_in == pc and pct > 0 and (not exp_dt or now <= exp_dt):
                 bonus = int(amount * (pct / 100.0))
                 if bonus > 0:
-                    _update_balance(user_id, bonus)
+                    db.update_balance(user_id, bonus)
                     bonus_applied = bonus
     except Exception as e:
         logger.error(f"Error applying first charge bonus: {e}")
@@ -536,8 +520,17 @@ async def admin_reject_charge_callback(update: Update, context: ContextTypes.DEF
     q = update.callback_query
     await q.answer()
     try:
-        user_id = int(q.data.split('_')[-1])
+        charge_id = int(q.data.split('_')[3])
+        user_id = int(q.data.split('_')[4])
+    except (IndexError, ValueError):
+        await q.edit_message_caption("❌ اطلاعات دکمه نامعتبر است.")
+        return
+
+    if db.reject_charge_request(charge_id):
         await q.edit_message_caption(f"❌ درخواست شارژ کاربر `{user_id}` رد شد.")
-        await context.bot.send_message(chat_id=user_id, text="❌ متاسفانه درخواست شارژ شما توسط ادمین رد شد.")
-    except Exception:
-        await q.edit_message_caption("❌ عملیات ناموفق بود.")
+        try:
+            await context.bot.send_message(chat_id=user_id, text="❌ متاسفانه درخواست شارژ شما توسط ادمین رد شد.")
+        except Exception:
+            pass
+    else:
+        await q.edit_message_caption("❌ عملیات ناموفق بود یا درخواست قبلاً پردازش شده است.")
