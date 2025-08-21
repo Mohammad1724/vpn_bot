@@ -2,6 +2,7 @@
 
 from functools import wraps
 import logging
+import re
 from datetime import datetime, timedelta
 from telegram.ext import ContextTypes
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -16,7 +17,6 @@ _MEMBERSHIP_CACHE: dict[tuple[int, str], tuple[bool, datetime]] = {}
 _CACHE_TTL = timedelta(minutes=10)
 
 def _cache_get(user_id: int, channel_key: str) -> tuple[bool, bool]:
-    """خروجی: (found_in_cache, is_member)"""
     key = (user_id, channel_key)
     data = _MEMBERSHIP_CACHE.get(key)
     if not data:
@@ -37,27 +37,85 @@ def _is_enabled() -> bool:
         v = db.get_setting("force_channel_enabled")
     return str(v or "0").lower() in ("1", "true", "on", "yes")
 
+def _parse_single_channel_token(token: str):
+    """
+    یک توکن کانال را به یکی از این‌ها تبدیل می‌کند:
+      - chat_id عددی (int) مثل -1001234567890
+      - نام کاربری با @ (str) مثل @mychannel
+    از قالب‌های زیر پشتیبانی می‌کند:
+      - -1001234567890
+      - @username
+      - username
+      - https://t.me/username
+      - t.me/username
+      - https://t.me/c/1234567890  -> -1001234567890
+      - t.me/c/1234567890          -> -1001234567890
+    """
+    t = (token or "").strip()
+    if not t:
+        return None
+
+    # اگر عددی است
+    try:
+        return int(t)
+    except ValueError:
+        pass
+
+    # اگر با @ شروع شده
+    if t.startswith("@"):
+        uname = t[1:].strip()
+        if re.fullmatch(r"[A-Za-z0-9_]{4,}", uname):
+            return f"@{uname}"
+        return None
+
+    # اگر لینک t.me است
+    if "t.me/" in t:
+        # استخراج بخش بعد از t.me/
+        m = re.search(r"(?:https?://)?t\.me/([^/\s]+)", t)
+        if m:
+            rest = m.group(1)  # ممکن است c/123456789 یا username باشد
+            # حالت /c/ID
+            if rest.startswith("c/"):
+                inner = rest[2:]
+                # ممکن است انتها / یا پارامتر داشته باشد
+                inner = re.split(r"[/?#]", inner)[0]
+                if inner.isdigit():
+                    return int(f"-100{inner}")
+                return None
+            # حالت username
+            uname = re.split(r"[/?#]", rest)[0]
+            if re.fullmatch(r"[A-Za-z0-9_]{4,}", uname):
+                return f"@{uname}"
+            return None
+
+    # اگر فقط username بدون @ است
+    if re.fullmatch(r"[A-Za-z0-9_]{4,}", t):
+        return f"@{t}"
+
+    return None
+
 def _get_channels() -> list[object]:
     """
     خروجی لیستی از آیتم‌ها:
       - اعداد (chat_id های عددی)
       - رشته‌های شروع‌شده با @ برای username
     پشتیبانی از هر دو کلید: جدید (force_join_channel) و قدیمی (force_channel_id)
+    چند مقدار با کاما جدا می‌شوند.
     """
-    s = db.get_setting("force_join_channel") or db.get_setting("force_channel_id") or ""
-    channels: list[object] = []
-    for token in s.split(","):
-        t = token.strip()
-        if not t:
-            continue
-        if t.startswith("@"):
-            channels.append(t)  # username
+    raw = db.get_setting("force_join_channel") or db.get_setting("force_channel_id") or ""
+    items = [s.strip() for s in raw.split(",") if s.strip()]
+    result = []
+    invalid = []
+    for it in items:
+        parsed = _parse_single_channel_token(it)
+        if parsed is None:
+            invalid.append(it)
         else:
-            try:
-                channels.append(int(t))
-            except ValueError:
-                logger.warning("Invalid channel identifier in settings: %r (ignored)", t)
-    return channels
+            result.append(parsed)
+    if invalid:
+        # یک بار به‌صورت مجتمع هشدار بدهیم نه برای هر بار
+        logger.warning("Invalid channel identifiers in settings ignored: %s", ", ".join(repr(i) for i in invalid))
+    return result
 
 # مجوزهای معتبر عضویت (سازگار با نسخه‌های مختلف PTB)
 _ALLOWED_STATUSES = set(
@@ -65,13 +123,12 @@ _ALLOWED_STATUSES = set(
         getattr(ChatMemberStatus, "MEMBER", "member"),
         getattr(ChatMemberStatus, "ADMINISTRATOR", "administrator"),
         getattr(ChatMemberStatus, "OWNER", "owner"),      # PTB 20+
-        getattr(ChatMemberStatus, "CREATOR", None),      # سازگاری با قدیمی‌ها
+        getattr(ChatMemberStatus, "CREATOR", None),       # سازگاری با قدیمی‌ها
     )
     if x
 )
 
 async def _is_member(bot, channel: object, user_id: int) -> bool:
-    # کلید کش را به رشته یکتا تبدیل می‌کنیم
     channel_key = str(channel).lstrip()
     found, cached_val = _cache_get(user_id, channel_key)
     if found:
@@ -83,7 +140,6 @@ async def _is_member(bot, channel: object, user_id: int) -> bool:
         return is_ok
     except Exception as e:
         logger.warning("Could not check membership for user %s in channel %s: %s", user_id, channel, e)
-        # شکست بررسی: به‌عنوان عضو نبودن در نظر بگیریم و کش کوتاه‌مدت بگذاریم
         _cache_set(user_id, channel_key, False, ttl=timedelta(minutes=1))
         return False
 
@@ -91,8 +147,8 @@ def check_channel_membership(func):
     """
     قبل از اجرای تابع، عضویت کاربر در کانال‌های اجباری را چک می‌کند.
     - ادمین از بررسی معاف است.
-    - از هر دو فرمت کانال (@username و chat_id عددی) پشتیبانی می‌کند.
-    - از OWNER به‌جای CREATOR استفاده می‌کند (سازگار با نسخه‌های جدید).
+    - از هر دو فرمت کانال (@username و chat_id عددی) و لینک t.me پشتیبانی می‌کند.
+    - از OWNER به‌جای CREATOR استفاده می‌کند (سازگار با نسخه‌های جدید PTB).
     """
     @wraps(func)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
@@ -127,13 +183,11 @@ def check_channel_membership(func):
             try:
                 chat = await context.bot.get_chat(ch)
                 url = None
-                # اگر بات ادمین باشد invite_link موجود است
                 if getattr(chat, "invite_link", None):
                     url = chat.invite_link
                 elif getattr(chat, "username", None):
                     url = f"https://t.me/{chat.username}"
                 elif isinstance(ch, int):
-                    # fallback (همیشه کارساز نیست برای کانال‌های خصوصی)
                     url = f"https://t.me/c/{str(ch).replace('-100', '')}"
                 else:
                     url = "https://t.me/"
