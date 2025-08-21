@@ -17,8 +17,10 @@ from bot.utils import get_domain_for_plan, create_service_info_message, get_serv
 
 logger = logging.getLogger(__name__)
 
+
 def _normalize_link_type(t: str) -> str:
     return (t or "sub").strip().lower().replace("clash-meta", "clashmeta")
+
 
 def _link_label(link_type: str) -> str:
     lt = _normalize_link_type(link_type)
@@ -31,6 +33,7 @@ def _link_label(link_type: str) -> str:
         "clash": "Clash",
         "clashmeta": "Clash Meta",
     }.get(lt, "V2Ray (sub)")
+
 
 async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -48,21 +51,36 @@ async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
+
 async def view_service_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     service_id = int(q.data.split('_')[-1])
     if q.message:
-        await q.message.delete()
+        try:
+            await q.message.delete()
+        except BadRequest:
+            pass
     msg = await context.bot.send_message(chat_id=q.from_user.id, text="در حال دریافت اطلاعات سرویس... ⏳")
     await send_service_details(context, q.from_user.id, service_id, original_message=msg, is_from_menu=True)
 
-async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int, service_id: int, original_message=None, is_from_menu: bool = False, minimal: bool = False):
+
+async def send_service_details(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    service_id: int,
+    original_message: Message | None = None,
+    is_from_menu: bool = False,
+    minimal: bool = False
+):
     service = db.get_service(service_id)
     if not service:
         text = "❌ سرویس مورد نظر یافت نشد."
         if original_message:
-            await original_message.edit_text(text)
+            try:
+                await original_message.edit_text(text)
+            except BadRequest:
+                await context.bot.send_message(chat_id=chat_id, text=text)
         else:
             await context.bot.send_message(chat_id=chat_id, text=text)
         return
@@ -76,7 +94,10 @@ async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
             ]
             text = "❌ اطلاعات این سرویس در پنل یافت نشد. احتمالاً حذف شده است.\nمی‌خواهید این سرویس از ربات هم حذف شود؟"
             if original_message:
-                await original_message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb))
+                try:
+                    await original_message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb))
+                except BadRequest:
+                    await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=InlineKeyboardMarkup(kb))
             else:
                 await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=InlineKeyboardMarkup(kb))
             return
@@ -113,9 +134,10 @@ async def send_service_details(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
             try:
                 await original_message.edit_text(text)
             except BadRequest:
-                pass
+                await context.bot.send_message(chat_id=chat_id, text=text)
         else:
             await context.bot.send_message(chat_id=chat_id, text=text)
+
 
 async def more_links_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -126,6 +148,7 @@ async def more_links_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         await q.edit_message_text("سرویس یافت نشد.")
         return
     await show_link_options_menu(q.message, uuid, service['service_id'], is_edit=True, context=context)
+
 
 async def show_link_options_menu(message: Message, user_uuid: str, service_id: int, is_edit: bool = True, context: ContextTypes.DEFAULT_TYPE = None):
     keyboard = [
@@ -140,7 +163,10 @@ async def show_link_options_menu(message: Message, user_uuid: str, service_id: i
     try:
         if is_edit:
             if message.photo:
-                await message.delete()
+                try:
+                    await message.delete()
+                except BadRequest:
+                    pass
                 if context:
                     await context.bot.send_message(chat_id=message.chat_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard))
             else:
@@ -150,6 +176,7 @@ async def show_link_options_menu(message: Message, user_uuid: str, service_id: i
     except BadRequest as e:
         if "message is not modified" not in str(e):
             logger.error("show_link_options_menu error: %s", e)
+
 
 async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -169,22 +196,31 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     config_name = info.get('name', 'config') if info else 'config'
 
     if link_type == "full":
-        await q.edit_message_text("در حال دریافت کانفیگ‌های تکی... ⏳")
+        try:
+            await q.edit_message_text("در حال دریافت کانفیگ‌های تکی... ⏳")
+        except BadRequest:
+            pass
         full_config_link = f"{base_link}/all.txt"
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=20) as client:
                 response = await client.get(full_config_link)
                 response.raise_for_status()
             configs_bytes = response.content
-            await q.message.delete()
+            try:
+                await q.message.delete()
+            except BadRequest:
+                pass
             await context.bot.send_document(
                 chat_id=q.from_user.id,
                 document=InputFile(io.BytesIO(configs_bytes), filename=f"{config_name}_configs.txt"),
                 caption="📄 کانفیگ‌های تکی شما به صورت فایل ارسال شد."
             )
         except Exception as e:
-            logger.error("Failed to fetch/send full configs: %s", e)
-            await q.edit_message_text("❌ دریافت کانفیگ‌های تکی با خطا مواجه شد.")
+            logger.error("Failed to fetch/send full configs: %s", e, exc_info=True)
+            try:
+                await q.edit_message_text("❌ دریافت کانفیگ‌های تکی با خطا مواجه شد.")
+            except BadRequest:
+                await context.bot.send_message(chat_id=q.from_user.id, text="❌ دریافت کانفیگ‌های تکی با خطا مواجه شد.")
         return
 
     url_link_type = link_type.replace('clashmeta', 'clash-meta')
@@ -204,13 +240,17 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"`{final_link}`"
     )
 
-    await q.message.delete()
+    try:
+        await q.message.delete()
+    except BadRequest:
+        pass
     await context.bot.send_photo(
         chat_id=q.message.chat_id,
         photo=bio,
         caption=caption,
         parse_mode="Markdown"
     )
+
 
 async def refresh_service_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -240,6 +280,7 @@ async def refresh_service_details(update: Update, context: ContextTypes.DEFAULT_
 
     await send_service_details(context, q.from_user.id, service_id, original_message=msg, is_from_menu=True)
 
+
 async def back_to_services_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -249,6 +290,7 @@ async def back_to_services_callback(update: Update, context: ContextTypes.DEFAUL
         pass
     await list_my_services(update, context)
 
+
 async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -257,14 +299,18 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
     try:
         service_id = int(data.split('_')[-1])
     except Exception:
-        try: await q.edit_message_text("❌ ورودی نامعتبر.")
-        except Exception: pass
+        try:
+            await q.edit_message_text("❌ ورودی نامعتبر.")
+        except Exception:
+            pass
         return
 
     service = db.get_service(service_id)
     if not service or service['user_id'] != q.from_user.id:
-        try: await q.edit_message_text("❌ سرویس یافت نشد یا متعلق به شما نیست.")
-        except Exception: pass
+        try:
+            await q.edit_message_text("❌ سرویس یافت نشد یا متعلق به شما نیست.")
+        except Exception:
+            pass
         return
 
     if data.startswith("delete_service_confirm_"):
@@ -301,6 +347,7 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
         ]
     ])
     await q.edit_message_text("آیا از حذف این سرویس مطمئن هستید؟ این عمل سرویس را از پنل اصلی نیز حذف می‌کند و قابل بازگشت نیست.", reply_markup=confirm_kb)
+
 
 async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
@@ -376,52 +423,110 @@ async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TY
         parse_mode=ParseMode.MARKDOWN
     )
 
+
 async def confirm_renewal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
     await q.answer()
     await proceed_with_renewal(update, context, original_message=q.message)
 
+
 async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYPE, original_message=None):
+    """
+    انجام فرآیند تمدید سرویس با مدیریت خطای بهبود یافته
+    """
     q = update.callback_query
     user_id = q.from_user.id if q else update.effective_user.id
+
+    # بررسی اطلاعات تمدید
     service_id = context.user_data.get('renewal_service_id')
     plan_id = context.user_data.get('renewal_plan_id')
 
     if not service_id or not plan_id:
-        if original_message:
-            await original_message.edit_text("❌ خطای داخلی: اطلاعات تمدید یافت نشد.")
+        await _send_renewal_error(original_message, "❌ خطای داخلی: اطلاعات تمدید یافت نشد.")
         return
 
+    # نمایش وضعیت در حال پردازش
     if original_message:
-        await original_message.edit_text("در حال ارسال درخواست تمدید به پنل... ⏳")
+        try:
+            await original_message.edit_text("در حال ارسال درخواست تمدید به پنل... ⏳")
+        except BadRequest:
+            pass
 
+    # گام 1: بررسی سرویس و پلن
+    service, plan = await _validate_renewal_data(user_id, service_id, plan_id)
+    if not service or not plan:
+        await _send_renewal_error(original_message, "❌ اطلاعات سرویس یا پلن نامعتبر است.")
+        return
+
+    # گام 2: آغاز تراکنش مالی
     txn_id = db.initiate_renewal_transaction(user_id, service_id, plan_id)
     if not txn_id:
-        if original_message:
-            await original_message.edit_text("❌ مشکلی در شروع فرآیند تمدید پیش آمد (مثلاً عدم موجودی).")
+        await _send_renewal_error(original_message, "❌ مشکلی در شروع فرآیند تمدید پیش آمد (مثلاً عدم موجودی).")
         return
 
-    service = db.get_service(service_id)
-    plan = db.get_plan(plan_id)
-    new_info = await hiddify_api.renew_user_subscription(
-        user_uuid=service['sub_uuid'],
-        plan_days=plan['days'],
-        plan_gb=plan['gb']
-    )
+    # گام 3: ارسال درخواست تمدید به پنل هیدیفای
+    try:
+        new_info = await hiddify_api.renew_user_subscription(
+            user_uuid=service['sub_uuid'],
+            plan_days=plan['days'],
+            plan_gb=plan['gb']
+        )
 
-    if new_info:
+        if not new_info:
+            raise ValueError("پاسخ API نامعتبر است")
+
+        # گام 4: تکمیل تراکنش در دیتابیس
         db.finalize_renewal_transaction(txn_id, plan_id)
-        if original_message:
-            await original_message.edit_text("✅ سرویس با موفقیت تمدید شد! در حال نمایش اطلاعات جدید...")
-        await send_service_details(context, user_id, service_id, original_message=original_message, is_from_menu=True)
-    else:
-        db.cancel_renewal_transaction(txn_id)
-        if original_message:
-            await original_message.edit_text("❌ خطا در تمدید سرویس. مشکلی در ارتباط با پنل وجود دارد. لطفاً به پشتیبانی اطلاع دهید.")
 
+        # گام 5: اعلام موفقیت و نمایش اطلاعات جدید
+        if original_message:
+            try:
+                await original_message.edit_text("✅ سرویس با موفقیت تمدید شد! در حال نمایش اطلاعات جدید...")
+            except BadRequest:
+                pass
+
+        await send_service_details(context, user_id, service_id, original_message=original_message, is_from_menu=True)
+
+    except Exception as e:
+        # در صورت خطا، تراکنش را لغو می‌کنیم
+        logger.error(f"Service renewal failed: {e}", exc_info=True)
+        db.cancel_renewal_transaction(txn_id)
+        await _send_renewal_error(original_message,
+                                  "❌ خطا در تمدید سرویس. مشکلی در ارتباط با پنل وجود دارد. لطفاً به پشتیبانی اطلاع دهید.")
+
+    # پاکسازی داده‌های موقت
     context.user_data.clear()
+
+
+async def _validate_renewal_data(user_id: int, service_id: int, plan_id: int):
+    """بررسی اعتبار داده‌های تمدید"""
+    service = db.get_service(service_id)
+    if not service or service['user_id'] != user_id:
+        return None, None
+
+    plan = db.get_plan(plan_id)
+    if not plan:
+        return service, None
+
+    return service, plan
+
+
+async def _send_renewal_error(message, error_text: str):
+    """ارسال پیام خطا در فرآیند تمدید"""
+    if message:
+        try:
+            await message.edit_text(error_text)
+        except Exception:
+            try:
+                await message.reply_text(error_text)
+            except Exception:
+                pass
+
 
 async def cancel_renewal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
     await q.answer()
-    await q.edit_message_text("عملیات تمدید لغو شد.")
+    try:
+        await q.edit_message_text("عملیات تمدید لغو شد.")
+    except BadRequest:
+        pass
