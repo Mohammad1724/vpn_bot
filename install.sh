@@ -7,8 +7,6 @@ SERVICE_NAME="vpn_bot"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 CONF_FILE="/etc/vpn_bot.conf"
 DEFAULT_GITHUB_REPO="https://github.com/Mohammad1724/vpn_bot.git"
-MIN_PYTHON_VERSION="3.8.0"
-DEFAULT_PORT="8443"
 
 print_color() {
   local COLOR="$1"; shift
@@ -33,66 +31,10 @@ ensure_root() {
 
 escape_sed() { echo "$1" | sed -e 's/[\/&]/\\&/g'; }
 
-check_python_version() {
-  local current_version
-  if command -v python3 >/dev/null 2>&1; then
-    current_version=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:3])))')
-    print_color green "Found Python version: ${current_version}"
-    
-    # Compare versions
-    if python3 -c "import sys; from packaging.version import Version; sys.exit(0 if Version('${current_version}') >= Version('${MIN_PYTHON_VERSION}') else 1)"; then
-      return 0
-    else
-      print_color yellow "Python version ${current_version} is older than required version ${MIN_PYTHON_VERSION}"
-      return 1
-    fi
-  else
-    print_color yellow "Python 3 not found"
-    return 1
-  fi
-}
-
 ensure_deps() {
-  print_color yellow "Checking and installing system dependencies..."
-  
-  # Update package list
+  print_color yellow "Installing system dependencies (python3, venv, git, sqlite3)..."
   apt-get update -y >/dev/null 2>&1 || true
-  
-  # Check if pip3 is available
-  if ! command -v pip3 >/dev/null 2>&1; then
-    print_color yellow "Installing Python3 and pip..."
-    apt-get install -y python3 python3-pip >/dev/null 2>&1 || {
-      print_color red "Failed to install Python3 and pip. Please install them manually."
-      exit 1
-    }
-  fi
-  
-  # Check Python version
-  if ! check_python_version; then
-    print_color yellow "Trying to install newer Python version..."
-    if [ -f /etc/debian_version ]; then
-      # For Debian/Ubuntu, try using deadsnakes PPA
-      apt-get install -y software-properties-common >/dev/null 2>&1
-      add-apt-repository -y ppa:deadsnakes/ppa >/dev/null 2>&1 || true
-      apt-get update -y >/dev/null 2>&1
-      apt-get install -y python3.9 python3.9-venv python3.9-dev >/dev/null 2>&1 || {
-        print_color red "Failed to install Python 3.9. Please install Python ${MIN_PYTHON_VERSION} or higher manually."
-        exit 1
-      }
-    else
-      print_color red "Your Python version is too old and we couldn't upgrade it automatically."
-      print_color red "Please install Python ${MIN_PYTHON_VERSION} or higher manually."
-      exit 1
-    fi
-  fi
-  
-  # Install other dependencies
-  apt-get install -y python3-venv curl git sqlite3 >/dev/null 2>&1 || {
-    print_color red "Failed to install required packages. Please install them manually: python3-venv curl git sqlite3"
-    exit 1
-  }
-  
-  print_color green "All dependencies installed successfully."
+  apt-get install -y python3 python3-pip python3-venv curl git sqlite3 >/dev/null 2>&1 || true
 }
 
 load_conf() {
@@ -131,7 +73,7 @@ create_service_file() {
   print_color yellow "Creating/updating systemd service..."
   cat > "$SERVICE_FILE" << EOL
 [Unit]
-Description=VPN Telegram Bot Service
+Description=Hiddify Telegram Bot Service
 After=network.target
 
 [Service]
@@ -159,48 +101,23 @@ deactivate_venv() {
   set -u
 }
 
-check_firewall() {
-  # Check if firewall is enabled and open the necessary port if needed
-  if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
-    print_color yellow "Firewall (ufw) detected. Do you want to open port ${DEFAULT_PORT} for Telegram Bot API? [Y/n]"
-    read -r OPEN_PORT
-    OPEN_PORT=${OPEN_PORT:-Y}
-    if [[ "$OPEN_PORT" =~ ^[Yy]$ ]]; then
-      ufw allow "${DEFAULT_PORT}/tcp" comment "Telegram Bot API"
-      print_color green "Port ${DEFAULT_PORT} opened in firewall."
-    fi
-  fi
-}
-
 ensure_install_dir_vars() {
-  GITHUB_REPO="$DEFAULT_GITHUB_REPO"
+  # از مقدار قبلی (load_conf) اگر وجود داشته باشد استفاده شود
+  GITHUB_REPO="${GITHUB_REPO:-$DEFAULT_GITHUB_REPO}"
   print_color yellow "Using repository: ${GITHUB_REPO}"
   local DEFAULT_INSTALL_DIR="/opt/vpn-bot"
   read -rp "Installation directory [${DEFAULT_INSTALL_DIR}]: " INSTALL_DIR_INPUT
   INSTALL_DIR="${INSTALL_DIR_INPUT:-$DEFAULT_INSTALL_DIR}"
-  
-  # Create dir if it doesn't exist
-  if [ ! -d "$INSTALL_DIR" ]; then
-    mkdir -p "$INSTALL_DIR"
-  fi
 }
 
 validate_telegram_token() {
   local token="$1"
-  # Check basic format (digits:alphanumeric)
-  if ! echo "$token" | grep -qE '^[0-9]+:[a-zA-Z0-9_-]+$'; then
-    return 1
-  fi
-  return 0
+  echo "$token" | grep -qE '^[0-9]+:[a-zA-Z0-9_-]+$'
 }
 
 validate_numeric_id() {
   local id="$1"
-  # Check if it's a valid number
-  if ! [[ "$id" =~ ^[0-9]+$ ]]; then
-    return 1
-  fi
-  return 0
+  [[ "$id" =~ ^[0-9]+$ ]]
 }
 
 configure_config_py() {
@@ -218,10 +135,10 @@ configure_config_py() {
     if validate_telegram_token "$BOT_TOKEN"; then
       break
     else
-      print_color yellow "Invalid bot token format. Should be like: 123456789:ABCDefGhIJKlmNoPQRsTUVwxyZ"
+      print_color yellow "Invalid bot token format. Example: 123456789:ABCDefGhIJKlmNoPQRsTUVwxyZ"
     fi
   done
-  
+
   # Admin ID
   while true; do
     read -rp "Telegram Admin ID (numeric): " ADMIN_ID
@@ -231,7 +148,7 @@ configure_config_py() {
       print_color yellow "Invalid admin ID. Must be a number."
     fi
   done
-  
+
   read -rp "Hiddify panel domain (e.g., mypanel.com): " PANEL_DOMAIN
   read -rp "Hiddify ADMIN secret path: " ADMIN_PATH
   read -rp "Hiddify SUBSCRIPTION secret path (can be the same): " SUB_PATH
@@ -296,7 +213,10 @@ configure_config_py() {
   sed -i "s|^EXPIRY_REMINDER_DAYS = .*|EXPIRY_REMINDER_DAYS = ${EXPIRY_REMINDER_DAYS}|" "$CONFIG_FILE"
   sed -i "s|^USAGE_ALERT_THRESHOLD = .*|USAGE_ALERT_THRESHOLD = ${USAGE_ALERT_THRESHOLD}|" "$CONFIG_FILE"
 
-  print_color green "config.py created successfully."
+  # Permissions
+  chmod 640 "$CONFIG_FILE" || true
+
+  print_color green "config.py created/updated successfully."
 }
 
 append_missing_keys_if_any() {
@@ -317,32 +237,27 @@ append_missing_keys_if_any() {
   fi
 }
 
-check_connectivity() {
-  print_color yellow "Checking internet connectivity..."
-  if ! curl -s --connect-timeout 5 https://api.telegram.org > /dev/null; then
-    print_color red "Warning: Cannot connect to Telegram API. Please check your internet connection."
-    read -rp "Continue anyway? [y/N]: " CONTINUE
-    CONTINUE=${CONTINUE:-N}
-    if [[ ! "$CONTINUE" =~ ^[Yy]$ ]]; then
-      print_color yellow "Installation cancelled."
-      exit 1
-    fi
-  else
-    print_color green "Internet connectivity check passed."
-  fi
-}
+# اگر config.py وجود نداشت یا شامل مقادیر پیش‌فرض/ناقص بود، باید تنظیم شود
+needs_config_setup() {
+  local CONFIG_FILE="${INSTALL_DIR}/src/config.py"
+  # فایل وجود ندارد؟
+  [ -f "$CONFIG_FILE" ] || return 0
 
-create_backup_dir() {
-  local backup_dir="${INSTALL_DIR}/backups"
-  mkdir -p "$backup_dir"
-  chmod 750 "$backup_dir"
-  chown vpn-bot:vpn-bot "$backup_dir"
-  print_color green "Created backups directory at ${backup_dir}"
+  # مقادیر پیش‌فرض/پلیس‌هولدر
+  if grep -qE 'YOUR_BOT_TOKEN_HERE|your_panel_domain\.com|your_hiddify_api_key_here|your_support_username|your_subscription_secret_path' "$CONFIG_FILE"; then
+    return 0
+  fi
+
+  # شناسه مثال
+  if grep -qE '^\s*ADMIN_ID\s*=\s*123456789\b' "$CONFIG_FILE"; then
+    return 0
+  fi
+
+  return 1
 }
 
 install_or_reinstall() {
   ensure_root
-  check_connectivity
   ensure_deps
   ensure_install_dir_vars
 
@@ -379,28 +294,26 @@ install_or_reinstall() {
   print_color yellow "Creating Python venv and installing dependencies..."
   python3 -m venv venv
   activate_venv
-  pip install --upgrade pip >/dev/null 2>&1
+  pip install --upgrade pip >/dev/null 2>&1 || true
   if [ ! -f "requirements.txt" ]; then
     print_color red "requirements.txt not found."
     deactivate_venv
     exit 1
   fi
-  
-  print_color yellow "Installing required Python packages..."
-  pip install -r requirements.txt || {
-    print_color red "Failed to install Python packages. Please check your internet connection."
+  pip install -r requirements.txt >/dev/null 2>&1 || {
+    print_color red "Failed to install Python packages (requirements.txt)."
     deactivate_venv
     exit 1
   }
   deactivate_venv
 
-  # Fix keyboard.py filename if needed
+  # Fix potential typo in repo (keboards.py -> keyboards.py)
   if [ -f "${INSTALL_DIR}/src/bot/keboards.py" ] && [ ! -f "${INSTALL_DIR}/src/bot/keyboards.py" ]; then
-    print_color yellow "Fixing keyboard filename..."
-    mv "${INSTALL_DIR}/src/bot/keboards.py" "${INSTALL_DIR}/src/bot/keyboards.py"
+    print_color yellow "Renaming keboards.py -> keyboards.py"
+    mv "${INSTALL_DIR}/src/bot/keboards.py" "${INSTALL_DIR}/src/bot/keyboards.py" || true
   fi
-  
-  create_backup_dir
+
+  mkdir -p "${INSTALL_DIR}/backups"
 
   if [[ "$REUSE_CONFIG" =~ ^[Yy]$ ]] && [ -n "$BACKUP_DIR" ]; then
     print_color yellow "Restoring previous config and database..."
@@ -412,14 +325,26 @@ install_or_reinstall() {
     configure_config_py
   fi
 
+  # اگر config ناقص/پیش‌فرض است، اجباراً پیکربندی را اجرا کن
+  if needs_config_setup; then
+    print_color yellow "config.py شامل مقادیر پیش‌فرض/ناقص است. شروع پیکربندی..."
+    configure_config_py
+  else
+    # پیشنهاد ویرایش مجدد
+    read -rp "Do you want to review/edit config.py now? [y/N]: " EDIT_NOW
+    EDIT_NOW=${EDIT_NOW:-N}
+    if [[ "$EDIT_NOW" =~ ^[Yy]$ ]]; then
+      configure_config_py
+    fi
+  fi
+
   # Create log file and set permissions
   touch "${INSTALL_DIR}/src/bot.log"
   create_system_user
-  chown -R vpn-bot:vpn-bot "${INSTALL_DIR}"
-  chmod 640 "${INSTALL_DIR}/src/config.py"  # Additional security for config file
+  chown -R vpn-bot:vpn-bot "${INSTALL_DIR}" || true
+  chmod 640 "${INSTALL_DIR}/src/config.py" || true
 
   create_service_file
-  check_firewall
 
   print_color yellow "Enabling and starting service..."
   systemctl enable "${SERVICE_NAME}" >/dev/null 2>&1 || true
@@ -448,23 +373,6 @@ update_bot() {
   print_color yellow "Stopping service for update..."
   systemctl stop "${SERVICE_NAME}" || true
 
-  # Create backup before update
-  print_color yellow "Creating backup before update..."
-  local backup_dir="${INSTALL_DIR}/backups"
-  local backup_file="${backup_dir}/pre_update_$(date +%Y%m%d_%H%M%S).sqlite3"
-  
-  mkdir -p "$backup_dir"
-  if [ -f "${INSTALL_DIR}/src/vpn_bot.db" ]; then
-    sqlite3 "${INSTALL_DIR}/src/vpn_bot.db" ".backup '${backup_file}'" || {
-      print_color red "Failed to create backup. Proceeding with caution."
-    }
-    if [ -f "$backup_file" ]; then
-      print_color green "Database backup created at ${backup_file}"
-      chown vpn-bot:vpn-bot "$backup_file"
-      chmod 640 "$backup_file"
-    fi
-  fi
-
   print_color yellow "Pulling latest changes..."
   git -C "$INSTALL_DIR" pull --ff-only
 
@@ -472,26 +380,21 @@ update_bot() {
   activate_venv
   pip install --upgrade pip >/dev/null 2>&1 || true
   if [ -f "${INSTALL_DIR}/requirements.txt" ]; then
-    pip install -r "${INSTALL_DIR}/requirements.txt" || {
-      print_color red "Failed to update Python packages. The bot might not work correctly."
-    }
+    pip install -r "${INSTALL_DIR}/requirements.txt" >/dev/null 2>&1 || true
   fi
   deactivate_venv
 
-  # Fix keyboard.py filename if needed
+  # Fix potential typo in repo
   if [ -f "${INSTALL_DIR}/src/bot/keboards.py" ] && [ ! -f "${INSTALL_DIR}/src/bot/keyboards.py" ]; then
-    print_color yellow "Fixing keyboard filename..."
-    mv "${INSTALL_DIR}/src/bot/keboards.py" "${INSTALL_DIR}/src/bot/keyboards.py"
+    print_color yellow "Renaming keboards.py -> keyboards.py"
+    mv "${INSTALL_DIR}/src/bot/keboards.py" "${INSTALL_DIR}/src/bot/keyboards.py" || true
   fi
-
-  # Add missing config keys
-  append_missing_keys_if_any
 
   # Ensure log file exists and has correct permissions
   touch "${INSTALL_DIR}/src/bot.log"
-  chown vpn-bot:vpn-bot "${INSTALL_DIR}/src/bot.log"
-  chmod 640 "${INSTALL_DIR}/src/config.py"  # Additional security for config file
-  
+  chown vpn-bot:vpn-bot "${INSTALL_DIR}/src/bot.log" || true
+  chmod 640 "${INSTALL_DIR}/src/config.py" || true
+
   print_color yellow "Restarting service..."
   systemctl start "${SERVICE_NAME}"
 
@@ -514,7 +417,6 @@ status_bot() {
 follow_journal() {
   ensure_root
   print_color yellow "Following live journal logs (Ctrl+C to exit)"
-  # Run in a subshell so Ctrl+C doesn't exit the main script
   ( journalctl -u "${SERVICE_NAME}" -f )
   print_color yellow "Stopped following logs."
 }
