@@ -313,26 +313,6 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
             pass
         return
 
-    if data.startswith("delete_service_confirm_"):
-        try:
-            await q.edit_message_text("در حال حذف سرویس از پنل... ⏳")
-
-            success_on_panel = await hiddify_api.delete_user_from_panel(service['sub_uuid'])
-            if not success_on_panel:
-                await q.edit_message_text("❌ حذف سرویس از پنل با خطا مواجه شد. لطفاً به پشتیبانی اطلاع دهید.")
-                return
-
-            db.delete_service(service_id)
-            await q.edit_message_text("✅ سرویس با موفقیت از پنل و ربات حذف شد.")
-        except Exception as e:
-            logger.error("Delete service %s failed: %s", service_id, e, exc_info=True)
-            await q.edit_message_text("❌ حذف سرویس با خطای ناشناخته مواجه شد.")
-            return
-
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت به سرویس‌ها", callback_data="back_to_services")]])
-        await context.bot.send_message(chat_id=q.from_user.id, text="عملیات حذف کامل شد.", reply_markup=kb)
-        return
-
     if data.startswith("delete_service_cancel_"):
         try:
             await send_service_details(context, q.from_user.id, service_id, original_message=q.message, is_from_menu=True)
@@ -340,13 +320,63 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
             pass
         return
 
-    confirm_kb = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("❌ انصراف", callback_data=f"delete_service_cancel_{service_id}"),
-            InlineKeyboardButton("✅ تایید حذف", callback_data=f"delete_service_confirm_{service_id}")
-        ]
-    ])
-    await q.edit_message_text("آیا از حذف این سرویس مطمئن هستید؟ این عمل سرویس را از پنل اصلی نیز حذف می‌کند و قابل بازگشت نیست.", reply_markup=confirm_kb)
+    if not data.startswith("delete_service_confirm_"):
+        confirm_kb = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("❌ انصراف", callback_data=f"delete_service_cancel_{service_id}"),
+                InlineKeyboardButton("✅ تایید حذف", callback_data=f"delete_service_confirm_{service_id}")
+            ]
+        ])
+        await q.edit_message_text(
+            "آیا از حذف این سرویس مطمئن هستید؟ این عمل سرویس را از پنل اصلی نیز حذف می‌کند و قابل بازگشت نیست.",
+            reply_markup=confirm_kb
+        )
+        return
+
+    # تایید حذف
+    try:
+        await q.edit_message_text("در حال حذف سرویس از پنل... ⏳")
+    except BadRequest:
+        pass
+
+    try:
+        success_on_panel = await hiddify_api.delete_user_from_panel(service['sub_uuid'])
+
+        # اگر ناموفق، یک چک نهایی برای اطمینان از «عدم وجود» انجام بده
+        if not success_on_panel:
+            probe = await hiddify_api.get_user_info(service['sub_uuid'])
+            if isinstance(probe, dict) and probe.get("_not_found"):
+                success_on_panel = True
+
+        if not success_on_panel:
+            try:
+                await q.edit_message_text("❌ حذف سرویس از پنل با خطا مواجه شد. لطفاً به پشتیبانی اطلاع دهید.")
+            except BadRequest:
+                pass
+            return
+
+        # حذف رکورد DB
+        db.delete_service(service_id)
+
+        try:
+            await q.edit_message_text("✅ سرویس با موفقیت از پنل و ربات حذف شد.")
+        except BadRequest:
+            pass
+
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 بازگشت به سرویس‌ها", callback_data="back_to_services")]
+        ])
+        try:
+            await context.bot.send_message(chat_id=q.from_user.id, text="عملیات حذف کامل شد.", reply_markup=kb)
+        except Exception:
+            pass
+
+    except Exception as e:
+        logger.error("Delete service %s failed: %s", service_id, e, exc_info=True)
+        try:
+            await q.edit_message_text("❌ حذف سرویس با خطای ناشناخته مواجه شد.")
+        except BadRequest:
+            pass
 
 
 async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -437,7 +467,6 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
     q = update.callback_query
     user_id = q.from_user.id if q else update.effective_user.id
 
-    # بررسی اطلاعات تمدید
     service_id = context.user_data.get('renewal_service_id')
     plan_id = context.user_data.get('renewal_plan_id')
 
@@ -445,26 +474,22 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
         await _send_renewal_error(original_message, "❌ خطای داخلی: اطلاعات تمدید یافت نشد.")
         return
 
-    # نمایش وضعیت در حال پردازش
     if original_message:
         try:
             await original_message.edit_text("در حال ارسال درخواست تمدید به پنل... ⏳")
         except BadRequest:
             pass
 
-    # گام 1: بررسی سرویس و پلن
     service, plan = await _validate_renewal_data(user_id, service_id, plan_id)
     if not service or not plan:
         await _send_renewal_error(original_message, "❌ اطلاعات سرویس یا پلن نامعتبر است.")
         return
 
-    # گام 2: آغاز تراکنش مالی
     txn_id = db.initiate_renewal_transaction(user_id, service_id, plan_id)
     if not txn_id:
         await _send_renewal_error(original_message, "❌ مشکلی در شروع فرآیند تمدید پیش آمد (مثلاً عدم موجودی).")
         return
 
-    # گام 3: ارسال درخواست تمدید به پنل هیدیفای
     try:
         new_info = await hiddify_api.renew_user_subscription(
             user_uuid=service['sub_uuid'],
@@ -475,10 +500,8 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
         if not new_info:
             raise ValueError("پاسخ API نامعتبر است")
 
-        # گام 4: تکمیل تراکنش در دیتابیس
         db.finalize_renewal_transaction(txn_id, plan_id)
 
-        # گام 5: اعلام موفقیت و نمایش اطلاعات جدید
         if original_message:
             try:
                 await original_message.edit_text("✅ سرویس با موفقیت تمدید شد! در حال نمایش اطلاعات جدید...")
@@ -488,18 +511,15 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
         await send_service_details(context, user_id, service_id, original_message=original_message, is_from_menu=True)
 
     except Exception as e:
-        # در صورت خطا، تراکنش را لغو می‌کنیم
         logger.error(f"Service renewal failed: {e}", exc_info=True)
         db.cancel_renewal_transaction(txn_id)
         await _send_renewal_error(original_message,
                                   "❌ خطا در تمدید سرویس. مشکلی در ارتباط با پنل وجود دارد. لطفاً به پشتیبانی اطلاع دهید.")
 
-    # پاکسازی داده‌های موقت
     context.user_data.clear()
 
 
 async def _validate_renewal_data(user_id: int, service_id: int, plan_id: int):
-    """بررسی اعتبار داده‌های تمدید"""
     service = db.get_service(service_id)
     if not service or service['user_id'] != user_id:
         return None, None
@@ -512,7 +532,6 @@ async def _validate_renewal_data(user_id: int, service_id: int, plan_id: int):
 
 
 async def _send_renewal_error(message, error_text: str):
-    """ارسال پیام خطا در فرآیند تمدید"""
     if message:
         try:
             await message.edit_text(error_text)
