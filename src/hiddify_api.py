@@ -1,92 +1,135 @@
 # -*- coding: utf-8 -*-
 
+import asyncio
 import httpx
 import uuid
 import random
 import logging
-import asyncio
-from typing import Optional, Dict, Any, Union
+from typing import Optional, Dict, Any
+
 from config import PANEL_DOMAIN, ADMIN_PATH, API_KEY, SUB_DOMAINS, SUB_PATH
 
 logger = logging.getLogger(__name__)
 
-# تعداد تلاش‌های مجدد برای درخواست‌های ناموفق
+# Retry settings
 MAX_RETRIES = 3
-# تأخیر پایه بین تلاش‌های مجدد (در ثانیه)
 BASE_RETRY_DELAY = 1.0
+
 
 def _get_base_url() -> str:
     # URL برای API v2.2.0
     return f"https://{PANEL_DOMAIN}/{ADMIN_PATH}/api/v2/admin/"
 
+
 def _get_api_headers() -> dict:
     return {
         "Hiddify-API-Key": API_KEY,
         "Content-Type": "application/json",
-        "Accept": "application/json"
+        "Accept": "application/json",
     }
+
 
 async def _make_client(timeout: float = 20.0) -> httpx.AsyncClient:
     try:
-        import h2
+        import h2  # noqa: F401
         http2_support = True
     except ImportError:
         http2_support = False
     return httpx.AsyncClient(timeout=timeout, http2=http2_support)
 
+
 async def _make_request(method: str, url: str, **kwargs) -> Optional[Dict[str, Any]]:
     """
-    اجرای درخواست HTTP با مکانیزم retry و مدیریت خطای پیشرفته
+    اجرای درخواست HTTP با مکانیزم retry و مدیریت خطای پیشرفته.
+    404 را به صورت {"_not_found": True} برمی‌گرداند.
+    برای پاسخ‌های بدون بدنه (مثلاً 204) یک dict خالی {} برمی‌گرداند.
     """
-    client = None
+    client: Optional[httpx.AsyncClient] = None
     retries = 0
+
     while retries <= MAX_RETRIES:
         try:
             if client is None:
-                client = await _make_client(timeout=kwargs.get('timeout', 20.0))
-            
-            response = await getattr(client, method.lower())(url, **kwargs)
-            response.raise_for_status()
-            return response.json()
-        
+                client = await _make_client(timeout=kwargs.get("timeout", 20.0))
+
+            resp: httpx.Response = await getattr(client, method.lower())(url, **kwargs)
+            # اگر کد خطا نباشد، raise_for_status چیزی انجام نمی‌دهد
+            resp.raise_for_status()
+
+            # تلاش برای parse JSON؛ اگر بدنه ندارد (204، یا بدنه خالی)، dict خالی بده
+            try:
+                return resp.json()
+            except ValueError:
+                return {}
+
         except httpx.HTTPStatusError as e:
-            error_details = e.response.text if hasattr(e, 'response') and e.response.status_code == 422 else str(e)
-            logger.error("%s request to %s failed with status %s: %s", 
-                        method, url, getattr(e.response, 'status_code', 'unknown'), error_details)
-            
-            # در برخی خطاها نیازی به تلاش مجدد نیست
-            if hasattr(e, 'response') and e.response.status_code in (401, 403, 404, 422):
-                if e.response.status_code == 404:
-                    return {"_not_found": True}
+            status = e.response.status_code if e.response is not None else None
+            text = e.response.text if e.response is not None else str(e)
+
+            # 404: نرمال محسوب شود (کاربر وجود ندارد/حذف شده)
+            if status == 404:
+                logger.info("%s %s -> 404 Not Found (returning _not_found)", method.upper(), url)
+                return {"_not_found": True}
+
+            # 401/403/422: خطاهای غیرقابل retry
+            if status in (401, 403, 422):
+                logger.error(
+                    "%s request to %s failed with status %s: %s",
+                    method.upper(),
+                    url,
+                    status,
+                    text,
+                )
                 break
-                
+
+            # سایر وضعیت‌ها (مثلاً 5xx): قابل retry
+            logger.warning(
+                "%s request to %s failed with status %s: %s (retry %d/%d)",
+                method.upper(),
+                url,
+                status,
+                text,
+                retries + 1,
+                MAX_RETRIES,
+            )
+
         except (httpx.ConnectError, httpx.ReadError, httpx.WriteError, httpx.TimeoutException) as e:
-            # خطاهای شبکه که احتمالاً با تلاش مجدد رفع می‌شوند
-            logger.warning("%s request to %s failed with network error: %s (retry %d/%d)", 
-                        method, url, str(e), retries + 1, MAX_RETRIES)
-            
+            # خطاهای شبکه قابل retry
+            logger.warning(
+                "%s request to %s network error: %s (retry %d/%d)",
+                method.upper(),
+                url,
+                str(e),
+                retries + 1,
+                MAX_RETRIES,
+            )
+
         except Exception as e:
-            logger.error("%s request to %s failed with unexpected error: %s", 
-                        method, url, str(e), exc_info=True)
+            logger.error(
+                "%s request to %s unexpected error: %s",
+                method.upper(),
+                url,
+                str(e),
+                exc_info=True,
+            )
             break
-            
+
         finally:
             retries += 1
-            if client and retries > MAX_RETRIES:
-                await client.aclose()
-                client = None
-            elif retries <= MAX_RETRIES:
-                # استراتژی exponential backoff برای تلاش مجدد
+            if retries <= MAX_RETRIES:
                 await asyncio.sleep(BASE_RETRY_DELAY * (2 ** (retries - 1)))
-    
+
     if client:
         await client.aclose()
     return None
 
-async def create_hiddify_user(plan_days: int, plan_gb: float, user_telegram_id: str, custom_name: str = "") -> Optional[Dict[str, Any]]:
-    """
-    ایجاد کاربر جدید در پنل Hiddify
-    """
+
+async def create_hiddify_user(
+    plan_days: int,
+    plan_gb: float,
+    user_telegram_id: str,
+    custom_name: str = "",
+) -> Optional[Dict[str, Any]]:
     endpoint = _get_base_url() + "user/"
 
     random_suffix = uuid.uuid4().hex[:4]
@@ -103,32 +146,24 @@ async def create_hiddify_user(plan_days: int, plan_gb: float, user_telegram_id: 
         "name": unique_user_name,
         "package_days": int(plan_days),
         "usage_limit_GB": usage_limit_gb,
-        "comment": user_telegram_id
+        "comment": user_telegram_id,
     }
 
-    response_data = await _make_request(
-        'post', 
-        endpoint, 
-        json=payload, 
-        headers=_get_api_headers(),
-        timeout=20.0
-    )
-    
-    if not response_data or not response_data.get("uuid"):
-        logger.error("create_hiddify_user: Failed to create user or UUID missing in response")
+    data = await _make_request("post", endpoint, json=payload, headers=_get_api_headers(), timeout=20.0)
+    if not data or not data.get("uuid"):
+        logger.error("create_hiddify_user: failed or UUID missing")
         return None
-        
-    user_uuid = response_data.get("uuid")
+
+    user_uuid = data.get("uuid")
     sub_path = SUB_PATH or ADMIN_PATH
     sub_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
     return {"full_link": f"https://{sub_domain}/{sub_path}/{user_uuid}/", "uuid": user_uuid}
 
+
 async def get_user_info(user_uuid: str) -> Optional[Dict[str, Any]]:
-    """
-    دریافت اطلاعات کاربر از پنل Hiddify
-    """
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
-    return await _make_request('get', endpoint, headers=_get_api_headers(), timeout=10.0)
+    return await _make_request("get", endpoint, headers=_get_api_headers(), timeout=10.0)
+
 
 async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float) -> Optional[Dict[str, Any]]:
     """
@@ -144,31 +179,39 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
         "package_days": int(plan_days),
         "usage_limit_GB": usage_limit_gb,
     }
-    
-    return await _make_request('patch', endpoint, json=payload, headers=_get_api_headers(), timeout=30.0)
+
+    return await _make_request("patch", endpoint, json=payload, headers=_get_api_headers(), timeout=30.0)
+
 
 async def delete_user_from_panel(user_uuid: str) -> bool:
     """
     حذف کاربر از پنل هیدیفای (API v2.2.0)
+    - اگر 404 برگردد، True برمی‌گردانیم چون کاربر در پنل وجود ندارد.
     """
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
-    response = await _make_request('delete', endpoint, headers=_get_api_headers(), timeout=15.0)
-    
-    # اگر کاربر با موفقیت حذف شد یا از قبل وجود نداشت
-    if response is not None or response == {"_not_found": True}:
-        logger.info(f"Successfully deleted/not-found user {user_uuid} from panel.")
+    data = await _make_request("delete", endpoint, headers=_get_api_headers(), timeout=15.0)
+
+    if data is not None and isinstance(data, dict) and data.get("_not_found"):
+        logger.info("Successfully deleted/not-found user %s from panel.", user_uuid)
         return True
+
+    # اگر پاسخ موفق ولی بدون بدنه بود (مثلاً 204)، data == {} خواهد بود
+    if data == {}:
+        logger.info("Successfully deleted user %s from panel.", user_uuid)
+        return True
+
+    # اگر None برگشته، یعنی بعد از چند retry هم موفق نشدیم
     return False
+
 
 async def check_api_connection() -> bool:
     """
     بررسی اتصال به API و صحت کلید API
     """
     try:
-        # تلاش برای دریافت لیست کاربران (فقط اولین صفحه)
         endpoint = _get_base_url() + "user/?page=1&per_page=1"
-        response = await _make_request('get', endpoint, headers=_get_api_headers(), timeout=5.0)
+        response = await _make_request("get", endpoint, headers=_get_api_headers(), timeout=5.0)
         return response is not None
     except Exception as e:
-        logger.error(f"API connection check failed: {e}", exc_info=True)
+        logger.error("API connection check failed: %s", e, exc_info=True)
         return False
