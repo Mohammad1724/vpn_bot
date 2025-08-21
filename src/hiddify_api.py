@@ -53,20 +53,19 @@ async def _make_request(method: str, url: str, **kwargs) -> Optional[Dict[str, A
                 client = await _make_client(timeout=kwargs.get("timeout", 20.0))
 
             resp: httpx.Response = await getattr(client, method.lower())(url, **kwargs)
-            # اگر کد خطا نباشد، raise_for_status چیزی انجام نمی‌دهد
             resp.raise_for_status()
 
-            # تلاش برای parse JSON؛ اگر بدنه ندارد (204، یا بدنه خالی)، dict خالی بده
             try:
                 return resp.json()
             except ValueError:
+                # بدنه خالی (مثل 204)
                 return {}
 
         except httpx.HTTPStatusError as e:
             status = e.response.status_code if e.response is not None else None
             text = e.response.text if e.response is not None else str(e)
 
-            # 404: نرمال محسوب شود (کاربر وجود ندارد/حذف شده)
+            # 404: کاربر/منبع وجود ندارد → حالت موفق برای حذف/چک موجود نبودن
             if status == 404:
                 logger.info("%s %s -> 404 Not Found (returning _not_found)", method.upper(), url)
                 return {"_not_found": True}
@@ -82,7 +81,7 @@ async def _make_request(method: str, url: str, **kwargs) -> Optional[Dict[str, A
                 )
                 break
 
-            # سایر وضعیت‌ها (مثلاً 5xx): قابل retry
+            # سایر وضعیت‌ها (مانند 5xx): قابل retry
             logger.warning(
                 "%s request to %s failed with status %s: %s (retry %d/%d)",
                 method.upper(),
@@ -94,7 +93,6 @@ async def _make_request(method: str, url: str, **kwargs) -> Optional[Dict[str, A
             )
 
         except (httpx.ConnectError, httpx.ReadError, httpx.WriteError, httpx.TimeoutException) as e:
-            # خطاهای شبکه قابل retry
             logger.warning(
                 "%s request to %s network error: %s (retry %d/%d)",
                 method.upper(),
@@ -136,7 +134,6 @@ async def create_hiddify_user(
     base_name = custom_name if custom_name else f"tg-{user_telegram_id.split(':')[-1]}"
     unique_user_name = f"{base_name}-{random_suffix}"
 
-    # اجازه حجم اعشاری (زیر 1GB) => float
     try:
         usage_limit_gb = float(plan_gb)
     except Exception:
@@ -186,21 +183,29 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
 async def delete_user_from_panel(user_uuid: str) -> bool:
     """
     حذف کاربر از پنل هیدیفای (API v2.2.0)
-    - اگر 404 برگردد، True برمی‌گردانیم چون کاربر در پنل وجود ندارد.
+    - اگر 404 برگردد، True برمی‌گردانیم چون کاربر در پنل وجود ندارد (idempotent).
+    - اگر خطای شبکه باشد، با یک GET نهایی بررسی می‌کنیم.
     """
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
     data = await _make_request("delete", endpoint, headers=_get_api_headers(), timeout=15.0)
 
-    if data is not None and isinstance(data, dict) and data.get("_not_found"):
-        logger.info("Successfully deleted/not-found user %s from panel.", user_uuid)
-        return True
-
-    # اگر پاسخ موفق ولی بدون بدنه بود (مثلاً 204)، data == {} خواهد بود
+    # موفقیت: 200/204 بدون بدنه -> {}
     if data == {}:
         logger.info("Successfully deleted user %s from panel.", user_uuid)
         return True
 
-    # اگر None برگشته، یعنی بعد از چند retry هم موفق نشدیم
+    # موفقیت: 404 (not found)
+    if isinstance(data, dict) and data.get("_not_found"):
+        logger.info("Successfully deleted/not-found user %s from panel.", user_uuid)
+        return True
+
+    # نامشخص: GET نهایی
+    if data is None:
+        probe = await get_user_info(user_uuid)
+        if isinstance(probe, dict) and probe.get("_not_found"):
+            logger.info("Delete treated as success for %s (verified _not_found after delete).", user_uuid)
+            return True
+
     return False
 
 
