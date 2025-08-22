@@ -42,7 +42,7 @@ async def _make_request(method: str, url: str, **kwargs) -> Optional[Dict[str, A
     """
     اجرای درخواست HTTP با مکانیزم retry و مدیریت خطای پیشرفته.
     404 را به صورت {"_not_found": True} برمی‌گرداند.
-    برای پاسخ‌های بدون بدنه (مثلاً 204) یک dict خالی {} برمی‌گرداند.
+    برای پاسخ‌های بدون بدنه (مثل 204) یک dict خالی {} برمی‌گرداند.
     """
     client: Optional[httpx.AsyncClient] = None
     retries = 0
@@ -58,57 +58,38 @@ async def _make_request(method: str, url: str, **kwargs) -> Optional[Dict[str, A
             try:
                 return resp.json()
             except ValueError:
-                # بدنه خالی (مثل 204)
                 return {}
 
         except httpx.HTTPStatusError as e:
             status = e.response.status_code if e.response is not None else None
             text = e.response.text if e.response is not None else str(e)
 
-            # 404: کاربر/منبع وجود ندارد → حالت موفق برای حذف/چک موجود نبودن
             if status == 404:
                 logger.info("%s %s -> 404 Not Found (returning _not_found)", method.upper(), url)
                 return {"_not_found": True}
 
-            # 401/403/422: خطاهای غیرقابل retry
             if status in (401, 403, 422):
                 logger.error(
                     "%s request to %s failed with status %s: %s",
-                    method.upper(),
-                    url,
-                    status,
-                    text,
+                    method.upper(), url, status, text
                 )
                 break
 
-            # سایر وضعیت‌ها (مانند 5xx): قابل retry
             logger.warning(
                 "%s request to %s failed with status %s: %s (retry %d/%d)",
-                method.upper(),
-                url,
-                status,
-                text,
-                retries + 1,
-                MAX_RETRIES,
+                method.upper(), url, status, text, retries + 1, MAX_RETRIES
             )
 
         except (httpx.ConnectError, httpx.ReadError, httpx.WriteError, httpx.TimeoutException) as e:
             logger.warning(
                 "%s request to %s network error: %s (retry %d/%d)",
-                method.upper(),
-                url,
-                str(e),
-                retries + 1,
-                MAX_RETRIES,
+                method.upper(), url, str(e), retries + 1, MAX_RETRIES
             )
 
         except Exception as e:
             logger.error(
                 "%s request to %s unexpected error: %s",
-                method.upper(),
-                url,
-                str(e),
-                exc_info=True,
+                method.upper(), url, str(e), exc_info=True
             )
             break
 
@@ -128,23 +109,31 @@ async def create_hiddify_user(
     user_telegram_id: str,
     custom_name: str = "",
 ) -> Optional[Dict[str, Any]]:
+    """
+    ایجاد کاربر در پنل. اگر plan_gb <= 0 باشد، usage_limit_GB را ارسال نمی‌کنیم تا «نامحدود» شود.
+    """
     endpoint = _get_base_url() + "user/"
 
     random_suffix = uuid.uuid4().hex[:4]
     base_name = custom_name if custom_name else f"tg-{user_telegram_id.split(':')[-1]}"
     unique_user_name = f"{base_name}-{random_suffix}"
 
+    # ساخت payload پایه
+    payload = {
+        "name": unique_user_name,
+        "package_days": int(plan_days),
+        "comment": user_telegram_id,
+    }
+
+    # فقط اگر پلن حجمی باشد، usage_limit_GB را بفرست
     try:
         usage_limit_gb = float(plan_gb)
     except Exception:
         usage_limit_gb = 0.0
 
-    payload = {
-        "name": unique_user_name,
-        "package_days": int(plan_days),
-        "usage_limit_GB": usage_limit_gb,
-        "comment": user_telegram_id,
-    }
+    if usage_limit_gb > 0:
+        payload["usage_limit_GB"] = usage_limit_gb
+    # در غیر این صورت ارسال نمی‌کنیم تا نامحدود تلقی شود
 
     data = await _make_request("post", endpoint, json=payload, headers=_get_api_headers(), timeout=20.0)
     if not data or not data.get("uuid"):
@@ -164,18 +153,22 @@ async def get_user_info(user_uuid: str) -> Optional[Dict[str, Any]]:
 
 async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float) -> Optional[Dict[str, Any]]:
     """
-    تمدید سرویس کاربر با PATCH به endpoint کاربر (سازگار با Hiddify API v2.2.0)
+    تمدید سرویس کاربر. اگر plan_gb <= 0 باشد، usage_limit_GB را نمی‌فرستیم تا نامحدود باقی بماند.
     """
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
+
+    payload = {
+        "package_days": int(plan_days),
+    }
+
     try:
         usage_limit_gb = float(plan_gb)
     except Exception:
         usage_limit_gb = 0.0
 
-    payload = {
-        "package_days": int(plan_days),
-        "usage_limit_GB": usage_limit_gb,
-    }
+    if usage_limit_gb > 0:
+        payload["usage_limit_GB"] = usage_limit_gb
+    # نامحدود: نفستادن این فیلد
 
     return await _make_request("patch", endpoint, json=payload, headers=_get_api_headers(), timeout=30.0)
 
@@ -189,17 +182,14 @@ async def delete_user_from_panel(user_uuid: str) -> bool:
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
     data = await _make_request("delete", endpoint, headers=_get_api_headers(), timeout=15.0)
 
-    # موفقیت: 200/204 بدون بدنه -> {}
     if data == {}:
         logger.info("Successfully deleted user %s from panel.", user_uuid)
         return True
 
-    # موفقیت: 404 (not found)
     if isinstance(data, dict) and data.get("_not_found"):
         logger.info("Successfully deleted/not-found user %s from panel.", user_uuid)
         return True
 
-    # نامشخص: GET نهایی
     if data is None:
         probe = await get_user_info(user_uuid)
         if isinstance(probe, dict) and probe.get("_not_found"):
