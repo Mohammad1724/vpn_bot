@@ -2,26 +2,26 @@
 
 from telegram import ReplyKeyboardMarkup
 from config import ADMIN_ID, TRIAL_ENABLED
-from bot.constants import BTN_ADMIN_PANEL, BTN_EXIT_ADMIN_PANEL
+from bot.constants import BTN_ADMIN_PANEL, BTN_EXIT_ADMIN_PANEL, BTN_MANAGE_NODES
+
 
 def get_main_menu_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     """
-    منوی اصلی کاربر را می‌سازد و دکمه‌های اختیاری را اضافه می‌کند.
+    ساخت منوی اصلی کاربر با نمایش دکمه‌های مرتبط
     """
-    # دکمه‌های اصلی همیشه نمایش داده می‌شوند
-    primary_buttons = [
+    keyboard = [
         ["🛍️ خرید سرویس", "📋 سرویس‌های من"],
         ["👤 اطلاعات حساب کاربری", "🎁 کد هدیه"],
         ["💳 شارژ حساب"],
         ["🎁 معرفی دوستان"]
     ]
-    
-    # دکمه سرویس تست در صورت فعال بودن
-    if TRIAL_ENABLED:
-        primary_buttons.insert(2, ["🧪 دریافت سرویس تست رایگان"])
 
-    # دکمه‌های پایینی همیشه نمایش داده می‌شوند
-    primary_buttons.append(["📞 پشتیبانی", "📚 راهنما"])
+    # نمایش دکمه سرویس تست در صورت فعال بودن
+    if TRIAL_ENABLED:
+        keyboard.insert(2, ["🧪 دریافت سرویس تست رایگان"])
+
+    # دکمه‌های عمومی پایین منو
+    keyboard.append(["📞 پشتیبانی", "📚 راهنما"])
 
     # تبدیل ADMIN_ID به int برای مقایسه مطمئن
     try:
@@ -29,44 +29,23 @@ def get_main_menu_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     except (ValueError, TypeError):
         admin_id_int = ADMIN_ID
 
-    # افزودن دکمه پنل ادمین برای ادمین
+    # نمایش دکمه ورود به پنل ادمین برای ادمین
     if user_id == admin_id_int:
-        primary_buttons.append([BTN_ADMIN_PANEL])
+        keyboard.append([BTN_ADMIN_PANEL])
 
-    return ReplyKeyboardMarkup(primary_buttons, resize_keyboard=True)
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
 
 def get_admin_menu_keyboard() -> ReplyKeyboardMarkup:
     """
-    منوی اصلی پنل ادمین با دکمه‌های Reply.
+    ساخت منوی اصلی ادمین با دکمه‌های مدیریتی
     """
     rows = [
         ["➕ مدیریت پلن‌ها", "📈 گزارش‌ها و آمار"],
         ["👥 مدیریت کاربران", "🎁 مدیریت کد هدیه"],
         ["⚙️ تنظیمات", "💾 پشتیبان‌گیری"],
         ["📩 ارسال پیام", "🛑 خاموش کردن ربات"],
+        ["🖧 مدیریت نودها"],  # دکمه جدید برای مدیریت نودها
         [BTN_EXIT_ADMIN_PANEL]
     ]
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
-
-def get_settings_keyboard() -> ReplyKeyboardMarkup:
-    """
-    منوی تنظیمات ادمین.
-    """
-    rows = [
-        ["⚙️ تنظیمات عمومی", "🛠️ تنظیمات پیشرفته"],
-        ["🌐 تنظیمات سرور", "🧪 تنظیمات سرویس تست"],
-        [BTN_EXIT_ADMIN_PANEL]
-    ]
-    return ReplyKeyboardMarkup(rows, resize_keyboard=True)
-
-def get_yes_no_keyboard() -> ReplyKeyboardMarkup:
-    """
-    صفحه کلید بله/خیر برای پرسش‌های ساده.
-    """
-    return ReplyKeyboardMarkup([["بله", "خیر"]], resize_keyboard=True)
-
-def get_cancel_keyboard() -> ReplyKeyboardMarkup:
-    """
-    صفحه کلید با دکمه لغو برای عملیات‌های در حال انجام.
-    """
-    return ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
