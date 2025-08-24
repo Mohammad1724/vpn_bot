@@ -114,6 +114,11 @@ def init_db():
         cursor.execute("SELECT category FROM plans LIMIT 1")
     except sqlite3.OperationalError:
         cursor.execute("ALTER TABLE plans ADD COLUMN category TEXT")
+    # Add slots (for multi-link family plans) if not exists
+    try:
+        cursor.execute("SELECT slots FROM plans LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute("ALTER TABLE plans ADD COLUMN slots INTEGER DEFAULT 1")
 
     # settings
     cursor.execute('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)''')
@@ -170,7 +175,7 @@ def init_db():
         )
     ''')
 
-    # Promo codes
+    # promo codes
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS promo_codes (
         code TEXT PRIMARY KEY,
@@ -189,9 +194,22 @@ def init_db():
         PRIMARY KEY (code, user_id)
     )""")
 
+    # Nodes (multi-node support)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS nodes (
+            node_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            api_base TEXT NOT NULL,        -- e.g., https://node-a.example.com/ADMIN_PATH/ADMIN_UUID/api/v1
+            api_key TEXT,                  -- if needed; can be NULL
+            sub_prefix TEXT,               -- e.g., https://node-a.example.com/SUB_SECRET
+            enabled INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_nodes_enabled ON nodes(enabled)")
+
     # Default settings
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_number', '0000-0000-0000-0000'))
-    # ... (بقیه default settings)
 
     # Indexes
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_services_user ON active_services(user_id)")
@@ -294,11 +312,11 @@ def apply_referral_bonus(user_id: int):
             return referrer_id, bonus_amount
     return None, 0
 
-def add_plan(name: str, price: float, days: int, gb: int, category: str):
+def add_plan(name: str, price: float, days: int, gb: int, category: str, slots: int = 1):
     conn = _connect_db()
     conn.execute(
-        "INSERT INTO plans (name, price, days, gb, category) VALUES (?, ?, ?, ?, ?)",
-        (name, price, days, gb, category)
+        "INSERT INTO plans (name, price, days, gb, category, slots) VALUES (?, ?, ?, ?, ?, ?)",
+        (name, price, days, gb, category, int(slots))
     )
     conn.commit()
 
@@ -338,7 +356,7 @@ def list_plans(only_visible: bool = False, category: str = None) -> list:
 
 def update_plan(plan_id: int, data: dict):
     fields, params = [], []
-    for k in ('name', 'price', 'days', 'gb', 'category'):
+    for k in ('name', 'price', 'days', 'gb', 'category', 'slots'):
         if k in data:
             fields.append(f"{k} = ?")
             params.append(data[k])
@@ -416,83 +434,59 @@ def delete_service(service_id: int):
     conn.commit()
 
 def initiate_purchase_transaction(user_id: int, plan_id: int, final_price: float) -> int | None:
-    """آغاز تراکنش خرید با مدیریت تراکنش بهتر"""
+    """Begin a purchase transaction with balance check."""
     conn = _connect_db()
     cursor = conn.cursor()
-    
     try:
         conn.execute("BEGIN TRANSACTION")
-        
-        # بررسی موجودی کافی
         cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
         user_balance = cursor.fetchone()
-        
         if not user_balance or user_balance['balance'] < final_price:
             conn.rollback()
             return None
-            
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute(
             "INSERT INTO transactions (user_id, plan_id, type, amount, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (user_id, plan_id, 'purchase', final_price, 'pending', now_str, now_str)
         )
         txn_id = cursor.lastrowid
-        
-        # برای اطمینان از ثبت تراکنش قبل از عملیات بعدی
         conn.commit()
         return txn_id
-        
     except sqlite3.Error as e:
         logger.error(f"Error initiating purchase: {e}", exc_info=True)
         conn.rollback()
         return None
 
 def finalize_purchase_transaction(transaction_id: int, sub_uuid: str, sub_link: str, custom_name: str):
-    """نهایی کردن تراکنش خرید با مدیریت تراکنش بهتر"""
+    """Finalize purchase: deduct balance, add active_service, sales_log, mark txn completed."""
     conn = _connect_db()
     cursor = conn.cursor()
-    
     try:
         conn.execute("BEGIN TRANSACTION")
-        
-        # بررسی وجود و وضعیت تراکنش
         cursor.execute("SELECT * FROM transactions WHERE transaction_id = ? AND status = 'pending'", (transaction_id,))
         txn = cursor.fetchone()
-        
         if not txn:
             conn.rollback()
             raise ValueError("Transaction not found or not pending.")
-            
-        # کسر مبلغ از موجودی کاربر
         cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (txn['amount'], txn['user_id']))
-        
-        # ایجاد سرویس فعال
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute(
             "INSERT INTO active_services (user_id, name, sub_uuid, sub_link, plan_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
             (txn['user_id'], custom_name, sub_uuid, sub_link, txn['plan_id'], now_str)
         )
-        
-        # ثبت در سوابق فروش
         cursor.execute(
             "INSERT INTO sales_log (user_id, plan_id, price, sale_date) VALUES (?, ?, ?, ?)",
             (txn['user_id'], txn['plan_id'], txn['amount'], now_str)
         )
-        
-        # به‌روزرسانی وضعیت تراکنش
         cursor.execute("UPDATE transactions SET status = 'completed', updated_at = ? WHERE transaction_id = ?", (now_str, transaction_id))
-        
-        # ثبت تغییرات
         conn.commit()
         logger.info(f"Purchase transaction {transaction_id} successfully finalized")
-        
     except Exception as e:
         logger.error(f"Error finalizing purchase {transaction_id}: {e}", exc_info=True)
         conn.rollback()
         raise
 
 def cancel_purchase_transaction(transaction_id: int):
-    """لغو تراکنش خرید با ثبت دقیق‌تر"""
     conn = _connect_db()
     try:
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -505,85 +499,56 @@ def cancel_purchase_transaction(transaction_id: int):
         conn.rollback()
 
 def initiate_renewal_transaction(user_id: int, service_id: int, plan_id: int) -> int | None:
-    """آغاز تراکنش تمدید با مدیریت تراکنش بهتر"""
     conn = _connect_db()
     cursor = conn.cursor()
-    
     try:
         conn.execute("BEGIN TRANSACTION")
-        
-        # بررسی معتبر بودن سرویس و پلن
         plan = get_plan(plan_id)
         service = get_service(service_id)
-        
         if not plan or not service:
             conn.rollback()
             return None
-            
-        # بررسی موجودی کافی
         cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
         user_balance = cursor.fetchone()
-        
         if not user_balance or user_balance['balance'] < plan['price']:
             conn.rollback()
             return None
-            
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute(
             "INSERT INTO transactions (user_id, plan_id, service_id, type, amount, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (user_id, plan_id, service_id, 'renewal', plan['price'], 'pending', now_str, now_str)
         )
         txn_id = cursor.lastrowid
-        
-        # برای اطمینان از ثبت تراکنش قبل از عملیات بعدی
         conn.commit()
         return txn_id
-        
     except sqlite3.Error as e:
         logger.error(f"Error initiating renewal: {e}", exc_info=True)
         conn.rollback()
         return None
 
 def finalize_renewal_transaction(transaction_id: int, new_plan_id: int):
-    """نهایی کردن تراکنش تمدید با مدیریت تراکنش بهتر"""
     conn = _connect_db()
     cursor = conn.cursor()
-    
     try:
         conn.execute("BEGIN TRANSACTION")
-        
-        # بررسی وجود و وضعیت تراکنش
         cursor.execute("SELECT * FROM transactions WHERE transaction_id = ? AND status = 'pending'", (transaction_id,))
         txn = cursor.fetchone()
-        
         if not txn:
             conn.rollback()
             raise ValueError("Renewal transaction not found or not pending.")
-            
-        # کسر مبلغ از موجودی کاربر
         cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (txn['amount'], txn['user_id']))
-        
-        # به‌روزرسانی سرویس
         cursor.execute("UPDATE active_services SET plan_id = ?, low_usage_alert_sent = 0 WHERE service_id = ?", (new_plan_id, txn['service_id']))
-        
-        # ثبت در سوابق فروش
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute("INSERT INTO sales_log (user_id, plan_id, price, sale_date) VALUES (?, ?, ?, ?)", (txn['user_id'], txn['plan_id'], txn['amount'], now_str))
-        
-        # به‌روزرسانی وضعیت تراکنش
         cursor.execute("UPDATE transactions SET status = 'completed', updated_at = ? WHERE transaction_id = ?", (now_str, transaction_id))
-        
-        # ثبت تغییرات
         conn.commit()
         logger.info(f"Renewal transaction {transaction_id} successfully finalized")
-        
     except Exception as e:
         logger.error(f"Error finalizing renewal {transaction_id}: {e}", exc_info=True)
         conn.rollback()
         raise
 
 def cancel_renewal_transaction(transaction_id: int):
-    """لغو تراکنش تمدید با ثبت دقیق‌تر"""
     conn = _connect_db()
     try:
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -824,7 +789,7 @@ def reject_charge_request(charge_id: int) -> bool:
         return False
 
 def get_user_charge_count(user_id: int) -> int:
-    """تعداد شارژهای موفق کاربر را برمی‌گرداند"""
+    """Number of successful charges for a user."""
     conn = _connect_db()
     try:
         cur = conn.cursor()
@@ -836,3 +801,54 @@ def get_user_charge_count(user_id: int) -> int:
     except Exception as e:
         logger.error(f"Error getting charge count for user {user_id}: {e}")
         return 0
+
+# --- Nodes CRUD (multi-node) ---
+def add_node(name: str, api_base: str, api_key: str | None, sub_prefix: str | None, enabled: bool = True) -> int | None:
+    """Add a new node (api_base: https://host/ADMIN_PATH/ADMIN_UUID/api/v1, sub_prefix: https://host/SUB_SECRET)."""
+    conn = _connect_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO nodes (name, api_base, api_key, sub_prefix, enabled) VALUES (?, ?, ?, ?, ?)",
+            (name.strip(), api_base.strip(), (api_key or "").strip() or None, (sub_prefix or "").strip() or None, 1 if enabled else 0)
+        )
+        conn.commit()
+        return cur.lastrowid
+    except sqlite3.Error as e:
+        logger.error(f"add_node failed: {e}", exc_info=True)
+        return None
+
+def list_nodes(only_enabled: bool = False) -> list:
+    """List nodes; if only_enabled=True returns only enabled nodes."""
+    conn = _connect_db()
+    q = "SELECT * FROM nodes"
+    if only_enabled:
+        q += " WHERE enabled=1"
+    cur = conn.execute(q)
+    return [dict(r) for r in cur.fetchall()]
+
+def get_node(node_id: int) -> dict | None:
+    conn = _connect_db()
+    cur = conn.execute("SELECT * FROM nodes WHERE node_id=?", (node_id,))
+    row = cur.fetchone()
+    return dict(row) if row else None
+
+def update_node(node_id: int, data: dict) -> bool:
+    fields, params = [], []
+    for k in ("name", "api_base", "api_key", "sub_prefix", "enabled"):
+        if k in data:
+            fields.append(f"{k}=?")
+            params.append(data[k])
+    if not fields:
+        return False
+    params.append(node_id)
+    conn = _connect_db()
+    conn.execute(f"UPDATE nodes SET {', '.join(fields)} WHERE node_id=?", tuple(params))
+    conn.commit()
+    return True
+
+def delete_node(node_id: int) -> bool:
+    conn = _connect_db()
+    cur = conn.execute("DELETE FROM nodes WHERE node_id=?", (node_id,))
+    conn.commit()
+    return cur.rowcount > 0
