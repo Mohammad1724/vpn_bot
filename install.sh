@@ -1,5 +1,5 @@
 #!/bin/bash
-# Menu-based installer/manager for vpn_bot
+# Menu-based installer/manager for vpn_bot (branch-aware)
 
 set -Eeuo pipefail
 
@@ -7,6 +7,7 @@ SERVICE_NAME="vpn_bot"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 CONF_FILE="/etc/vpn_bot.conf"
 DEFAULT_GITHUB_REPO="https://github.com/Mohammad1724/vpn_bot.git"
+DEFAULT_GIT_BRANCH="main"  # می‌توانید این را به v1.8 تغییر دهید
 
 print_color() {
   local COLOR="$1"; shift
@@ -47,6 +48,7 @@ load_conf() {
     INSTALL_DIR="${INSTALL_DIR%/src}"
   fi
   GITHUB_REPO="${GITHUB_REPO:-$DEFAULT_GITHUB_REPO}"
+  GIT_BRANCH="${GIT_BRANCH:-$DEFAULT_GIT_BRANCH}"
 }
 
 save_conf() {
@@ -55,6 +57,7 @@ save_conf() {
 SERVICE_NAME=${SERVICE_NAME}
 INSTALL_DIR=${INSTALL_DIR}
 GITHUB_REPO=${GITHUB_REPO}
+GIT_BRANCH=${GIT_BRANCH}
 EOF
   print_color green "Saved settings to ${CONF_FILE}"
 }
@@ -102,12 +105,17 @@ deactivate_venv() {
 }
 
 ensure_install_dir_vars() {
-  # از مقدار قبلی (load_conf) اگر وجود داشته باشد استفاده شود
   GITHUB_REPO="${GITHUB_REPO:-$DEFAULT_GITHUB_REPO}"
   print_color yellow "Using repository: ${GITHUB_REPO}"
   local DEFAULT_INSTALL_DIR="/opt/vpn-bot"
   read -rp "Installation directory [${DEFAULT_INSTALL_DIR}]: " INSTALL_DIR_INPUT
   INSTALL_DIR="${INSTALL_DIR_INPUT:-$DEFAULT_INSTALL_DIR}"
+
+  # انتخاب شاخه گیت
+  read -rp "Git branch/tag to checkout [${DEFAULT_GIT_BRANCH}]: " GIT_BRANCH_INPUT
+  # حذف فاصله‌های ابتدا/انتها و جایگزینی فاصله‌های وسط با _
+  GIT_BRANCH_INPUT="$(echo "${GIT_BRANCH_INPUT:-$DEFAULT_GIT_BRANCH}" | sed 's/^ *//;s/ *$//' | sed 's/ /_/g')"
+  GIT_BRANCH="${GIT_BRANCH_INPUT}"
 }
 
 validate_telegram_token() {
@@ -213,9 +221,7 @@ configure_config_py() {
   sed -i "s|^EXPIRY_REMINDER_DAYS = .*|EXPIRY_REMINDER_DAYS = ${EXPIRY_REMINDER_DAYS}|" "$CONFIG_FILE"
   sed -i "s|^USAGE_ALERT_THRESHOLD = .*|USAGE_ALERT_THRESHOLD = ${USAGE_ALERT_THRESHOLD}|" "$CONFIG_FILE"
 
-  # Permissions
   chmod 640 "$CONFIG_FILE" || true
-
   print_color green "config.py created/updated successfully."
 }
 
@@ -232,27 +238,19 @@ append_missing_keys_if_any() {
   if ! grep -q '^USAGE_ALERT_THRESHOLD' "$CONFIG_FILE"; then
     echo 'USAGE_ALERT_THRESHOLD = 0.8' >> "$CONFIG_FILE"; changed=1
   fi
-  if [ "$changed" -eq 1 ]; then
-    print_color yellow "Added missing config keys to config.py."
-  fi
+  [ "$changed" -eq 1 ] && print_color yellow "Added missing config keys to config.py."
 }
 
 # اگر config.py وجود نداشت یا شامل مقادیر پیش‌فرض/ناقص بود، باید تنظیم شود
 needs_config_setup() {
   local CONFIG_FILE="${INSTALL_DIR}/src/config.py"
-  # فایل وجود ندارد؟
   [ -f "$CONFIG_FILE" ] || return 0
-
-  # مقادیر پیش‌فرض/پلیس‌هولدر
   if grep -qE 'YOUR_BOT_TOKEN_HERE|your_panel_domain\.com|your_hiddify_api_key_here|your_support_username|your_subscription_secret_path' "$CONFIG_FILE"; then
     return 0
   fi
-
-  # شناسه مثال
   if grep -qE '^\s*ADMIN_ID\s*=\s*123456789\b' "$CONFIG_FILE"; then
     return 0
   fi
-
   return 1
 }
 
@@ -287,8 +285,11 @@ install_or_reinstall() {
     rm -rf "$INSTALL_DIR"
   fi
 
-  print_color yellow "Cloning repository..."
-  git clone "$GITHUB_REPO" "$INSTALL_DIR"
+  print_color yellow "Cloning repository (branch: ${GIT_BRANCH})..."
+  git clone --branch "${GIT_BRANCH}" --single-branch "$GITHUB_REPO" "$INSTALL_DIR" || {
+    print_color red "git clone failed. Check branch name: ${GIT_BRANCH}"
+    exit 1
+  }
   cd "$INSTALL_DIR"
 
   print_color yellow "Creating Python venv and installing dependencies..."
@@ -300,6 +301,7 @@ install_or_reinstall() {
     deactivate_venv
     exit 1
   fi
+  # مهم: httpx باید در requirements باشد (برای قابلیت نودها)
   pip install -r requirements.txt >/dev/null 2>&1 || {
     print_color red "Failed to install Python packages (requirements.txt)."
     deactivate_venv
@@ -325,12 +327,10 @@ install_or_reinstall() {
     configure_config_py
   fi
 
-  # اگر config ناقص/پیش‌فرض است، اجباراً پیکربندی را اجرا کن
   if needs_config_setup; then
-    print_color yellow "config.py شامل مقادیر پیش‌فرض/ناقص است. شروع پیکربندی..."
+    print_color yellow "config.py has default/incomplete values. Running configuration..."
     configure_config_py
   else
-    # پیشنهاد ویرایش مجدد
     read -rp "Do you want to review/edit config.py now? [y/N]: " EDIT_NOW
     EDIT_NOW=${EDIT_NOW:-N}
     if [[ "$EDIT_NOW" =~ ^[Yy]$ ]]; then
@@ -373,8 +373,16 @@ update_bot() {
   print_color yellow "Stopping service for update..."
   systemctl stop "${SERVICE_NAME}" || true
 
-  print_color yellow "Pulling latest changes..."
-  git -C "$INSTALL_DIR" pull --ff-only
+  print_color yellow "Checking out branch: ${GIT_BRANCH}"
+  git -C "$INSTALL_DIR" fetch --all --prune
+  git -C "$INSTALL_DIR" checkout "${GIT_BRANCH}" || {
+    print_color red "git checkout ${GIT_BRANCH} failed."
+    exit 1
+  }
+  git -C "$INSTALL_DIR" pull --ff-only origin "${GIT_BRANCH}" || {
+    print_color red "git pull failed."
+    exit 1
+  }
 
   print_color yellow "Updating Python deps..."
   activate_venv
