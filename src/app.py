@@ -25,6 +25,9 @@ from bot.handlers.admin import (
 import bot.handlers.admin.trial_settings_ui as trial_ui
 from bot.handlers.trial import get_trial_service as trial_get_trial_service
 from bot.handlers.admin.trial_settings import set_trial_days, set_trial_gb
+# NEW: nodes admin
+from bot.handlers.admin import nodes as admin_nodes
+
 from config import BOT_TOKEN, ADMIN_ID
 
 warnings.filterwarnings("ignore", category=PTBUserWarning)
@@ -42,6 +45,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 def build_application():
+    # align read_timeout with run_polling(timeout=60) in main_bot
     request = HTTPXRequest(connect_timeout=15.0, read_timeout=75.0, write_timeout=30.0, pool_timeout=90.0)
 
     application = (
@@ -190,7 +194,7 @@ def build_application():
         map_to_parent={ConversationHandler.END: constants.GIFT_CODES_MENU},
         per_user=True, per_chat=True, allow_reentry=True
     )
-    
+
     promo_create_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(r'^➕ ساخت کد تخفیف جدید$') & admin_filter, admin_gift.create_promo_start)],
         states={
@@ -274,6 +278,35 @@ def build_application():
     )
 
     # =========================
+    # Nodes admin conversation (NEW)
+    # =========================
+    nodes_conv = ConversationHandler(
+        entry_points=[
+            MessageHandler(filters.Regex(f'^{constants.BTN_MANAGE_NODES}$') & admin_filter, admin_nodes.nodes_menu)
+        ],
+        states={
+            constants.NODES_MENU: [
+                MessageHandler(filters.Regex(r'^➕ افزودن نود$') & admin_filter, admin_nodes.add_node_start),
+                MessageHandler(filters.Regex(r'^📜 لیست نودها$') & admin_filter, admin_nodes.list_nodes_handler),
+                MessageHandler(filters.Regex(r'^🧪 تست همه نودها$') & admin_filter, admin_nodes.test_all_nodes),
+                MessageHandler(filters.Regex(r'^📤 ارسال به تجمیع‌کننده$') & admin_filter, admin_nodes.push_nodes_to_agg),
+                MessageHandler(filters.Regex(r'^🗑️ حذف نود$') & admin_filter, admin_nodes.delete_node_start),
+                MessageHandler(filters.Regex(r'^🔄 تغییر وضعیت نود$') & admin_filter, admin_nodes.toggle_node_start),
+                MessageHandler(filters.Regex(r'^بازگشت به منوی ادمین$') & admin_filter, admin_nodes.back_to_admin),
+            ],
+            constants.NODE_ADD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_node_name_received)],
+            constants.NODE_ADD_API_BASE: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_node_api_base_received)],
+            constants.NODE_ADD_SUB_PREFIX: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_node_sub_prefix_received)],
+            constants.NODE_ADD_API_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_node_api_key_received)],
+            constants.NODE_DELETE_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.delete_node_id_received)],
+            constants.NODE_TOGGLE_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.toggle_node_id_received)],
+        },
+        fallbacks=[CommandHandler('cancel', admin_nodes.cancel)],
+        map_to_parent={ConversationHandler.END: constants.ADMIN_MENU},
+        per_user=True, per_chat=True, allow_reentry=True
+    )
+
+    # =========================
     # Main Admin Conversation
     # =========================
     admin_conv = ConversationHandler(
@@ -289,6 +322,7 @@ def build_application():
                 MessageHandler(filters.Regex('^👥 مدیریت کاربران$') & admin_filter, admin_users.user_management_menu),
                 MessageHandler(filters.Regex('^🎁 مدیریت کد هدیه$') & admin_filter, admin_gift.gift_code_management_menu),
                 MessageHandler(filters.Regex('^🛑 خاموش کردن ربات$') & admin_filter, admin_c.shutdown_bot),
+                MessageHandler(filters.Regex(f'^{constants.BTN_MANAGE_NODES}$') & admin_filter, admin_nodes.nodes_menu),  # NEW
                 CallbackQueryHandler(admin_plans.plan_management_menu, pattern="^admin_plans$"),
                 CallbackQueryHandler(admin_reports.reports_menu, pattern="^admin_reports$"),
                 CallbackQueryHandler(admin_backup.backup_restore_menu, pattern="^admin_backup$"),
@@ -299,6 +333,7 @@ def build_application():
                 CallbackQueryHandler(admin_users.admin_delete_service, pattern=r'^admin_delete_service_\d+(_\d+)?$'),
                 admin_settings_conv,
                 broadcast_conv,
+                nodes_conv,  # NEW: nested nodes conversation
             ],
 
             constants.PLAN_MENU: [
@@ -355,7 +390,7 @@ def build_application():
                 MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_users.manage_user_amount_received),
                 CallbackQueryHandler(admin_users.admin_user_amount_cancel_cb, pattern=r'^admin_user_amount_cancel_\d+$'),
             ],
-            
+
             constants.GIFT_CODES_MENU: [
                 MessageHandler(filters.Regex(r'^🎁 مدیریت کدهای هدیه$'), admin_gift.admin_gift_codes_submenu),
                 MessageHandler(filters.Regex(r'^💳 مدیریت کدهای تخفیف$'), admin_gift.admin_promo_codes_submenu),
@@ -405,7 +440,7 @@ def build_application():
     application.add_handler(MessageHandler(filters.REPLY & admin_filter, support_h.admin_reply_handler))
     application.add_handler(CallbackQueryHandler(support_h.close_ticket, pattern="^close_ticket_"))
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern="^check_membership$"))
-    
+
     application.add_handler(CallbackQueryHandler(admin_users.admin_confirm_charge_callback, pattern=r'^admin_confirm_charge_'), group=1)
     application.add_handler(CallbackQueryHandler(admin_users.admin_reject_charge_callback, pattern=r'^admin_reject_charge_'), group=1)
 
