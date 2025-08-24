@@ -1,5 +1,18 @@
+# Core bot
 python-telegram-bot[job-queue]==21.0.1
-jdatetime
-qrcode[pil]
-aiosqlite
-requests
+
+# HTTP client (used by hiddify_api and nodes_api)
+httpx>=0.24.1,<0.28
+
+# Optional HTTP/2 support (enables http2=True when available)
+h2>=4.1.0
+
+# Utilities
+jdatetime>=4.1.0
+qrcode[pil]>=7.4.2
+
+# DB async helper (optional; retained for compatibility)
+aiosqlite>=0.19.0
+
+# HTTP requests (optional; retained for compatibility)
+requests>=2.31.0
