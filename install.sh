@@ -1,5 +1,5 @@
 #!/bin/bash
-# Menu-based installer/manager for vpn_bot (branch-aware)
+# Menu-based installer/manager for vpn_bot (branch-aware, reinstall-safe)
 
 set -Eeuo pipefail
 
@@ -7,7 +7,7 @@ SERVICE_NAME="vpn_bot"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 CONF_FILE="/etc/vpn_bot.conf"
 DEFAULT_GITHUB_REPO="https://github.com/Mohammad1724/vpn_bot.git"
-DEFAULT_GIT_BRANCH="main"  # می‌توانید این را به v1.8 تغییر دهید
+DEFAULT_GIT_BRANCH="main"  # می‌توانید بعداً موقع نصب v1.8 وارد کنید
 
 print_color() {
   local COLOR="$1"; shift
@@ -107,15 +107,15 @@ deactivate_venv() {
 ensure_install_dir_vars() {
   GITHUB_REPO="${GITHUB_REPO:-$DEFAULT_GITHUB_REPO}"
   print_color yellow "Using repository: ${GITHUB_REPO}"
-  local DEFAULT_INSTALL_DIR="/opt/vpn-bot"
-  read -rp "Installation directory [${DEFAULT_INSTALL_DIR}]: " INSTALL_DIR_INPUT
-  INSTALL_DIR="${INSTALL_DIR_INPUT:-$DEFAULT_INSTALL_DIR}"
 
-  # انتخاب شاخه گیت
-  read -rp "Git branch/tag to checkout [${DEFAULT_GIT_BRANCH}]: " GIT_BRANCH_INPUT
-  # حذف فاصله‌های ابتدا/انتها و جایگزینی فاصله‌های وسط با _
-  GIT_BRANCH_INPUT="$(echo "${GIT_BRANCH_INPUT:-$DEFAULT_GIT_BRANCH}" | sed 's/^ *//;s/ *$//' | sed 's/ /_/g')"
-  GIT_BRANCH="${GIT_BRANCH_INPUT}"
+  local DEFAULT_INSTALL_DIR="/opt/vpn-bot"
+  read -rp "Installation directory [${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}]: " INSTALL_DIR_INPUT
+  INSTALL_DIR="${INSTALL_DIR_INPUT:-${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}}"
+
+  # انتخاب شاخه گیت (پیش‌فرض همان شاخه ذخیره‌شده قبلی یا DEFAULT_GIT_BRANCH)
+  read -rp "Git branch/tag to checkout [${GIT_BRANCH:-$DEFAULT_GIT_BRANCH}]: " GIT_BRANCH_INPUT
+  # بدون دستکاری فاصله‌ها؛ git clone --branch "${GIT_BRANCH}" با کوتیشن کار می‌کند
+  GIT_BRANCH="${GIT_BRANCH_INPUT:-${GIT_BRANCH:-$DEFAULT_GIT_BRANCH}}"
 }
 
 validate_telegram_token() {
@@ -206,21 +206,25 @@ configure_config_py() {
   local API_KEY_E; API_KEY_E=$(escape_sed "$API_KEY")
   local SUPPORT_USERNAME_E; SUPPORT_USERNAME_E=$(escape_sed "$SUPPORT_USERNAME")
 
-  sed -i "s|^BOT_TOKEN = .*|BOT_TOKEN = \"${BOT_TOKEN_E}\"|" "$CONFIG_FILE"
-  sed -i "s|^ADMIN_ID = .*|ADMIN_ID = ${ADMIN_ID}|" "$CONFIG_FILE"
-  sed -i "s|^PANEL_DOMAIN = .*|PANEL_DOMAIN = \"${PANEL_DOMAIN_E}\"|" "$CONFIG_FILE"
-  sed -i "s|^ADMIN_PATH = .*|ADMIN_PATH = \"${ADMIN_PATH_E}\"|" "$CONFIG_FILE"
-  sed -i "s|^SUB_PATH = .*|SUB_PATH = \"${SUB_PATH_E}\"|" "$CONFIG_FILE"
-  sed -i "s|^API_KEY = .*|API_KEY = \"${API_KEY_E}\"|" "$CONFIG_FILE"
-  sed -i "s|^SUPPORT_USERNAME = .*|SUPPORT_USERNAME = \"${SUPPORT_USERNAME_E}\"|" "$CONFIG_FILE"
-  sed -i "s|^SUB_DOMAINS = .*|SUB_DOMAINS = ${PYTHON_LIST_FORMAT}|" "$CONFIG_FILE"
-  sed -i "s|^TRIAL_ENABLED = .*|TRIAL_ENABLED = ${TRIAL_ENABLED_VAL}|" "$CONFIG_FILE"
-  sed -i "s|^TRIAL_DAYS = .*|TRIAL_DAYS = ${TRIAL_DAYS_VAL}|" "$CONFIG_FILE"
-  sed -i "s|^TRIAL_GB = .*|TRIAL_GB = ${TRIAL_GB_VAL}|" "$CONFIG_FILE"
-  sed -i "s|^REFERRAL_BONUS_AMOUNT = .*|REFERRAL_BONUS_AMOUNT = ${REFERRAL_BONUS_AMOUNT}|" "$CONFIG_FILE"
-  sed -i "s|^EXPIRY_REMINDER_DAYS = .*|EXPIRY_REMINDER_DAYS = ${EXPIRY_REMINDER_DAYS}|" "$CONFIG_FILE"
-  sed -i "s|^USAGE_ALERT_THRESHOLD = .*|USAGE_ALERT_THRESHOLD = ${USAGE_ALERT_THRESHOLD}|" "$CONFIG_FILE"
+  local CONFIG_FILE_TMP="${CONFIG_FILE}.tmp"
+  cp "$TEMPLATE_FILE" "$CONFIG_FILE_TMP"
 
+  sed -i "s|^BOT_TOKEN = .*|BOT_TOKEN = \"${BOT_TOKEN_E}\"|" "$CONFIG_FILE_TMP"
+  sed -i "s|^ADMIN_ID = .*|ADMIN_ID = ${ADMIN_ID}|" "$CONFIG_FILE_TMP"
+  sed -i "s|^PANEL_DOMAIN = .*|PANEL_DOMAIN = \"${PANEL_DOMAIN_E}\"|" "$CONFIG_FILE_TMP"
+  sed -i "s|^ADMIN_PATH = .*|ADMIN_PATH = \"${ADMIN_PATH_E}\"|" "$CONFIG_FILE_TMP"
+  sed -i "s|^SUB_PATH = .*|SUB_PATH = \"${SUB_PATH_E}\"|" "$CONFIG_FILE_TMP"
+  sed -i "s|^API_KEY = .*|API_KEY = \"${API_KEY_E}\"|" "$CONFIG_FILE_TMP"
+  sed -i "s|^SUPPORT_USERNAME = .*|SUPPORT_USERNAME = \"${SUPPORT_USERNAME_E}\"|" "$CONFIG_FILE_TMP"
+  sed -i "s|^SUB_DOMAINS = .*|SUB_DOMAINS = ${PYTHON_LIST_FORMAT}|" "$CONFIG_FILE_TMP"
+  sed -i "s|^TRIAL_ENABLED = .*|TRIAL_ENABLED = ${TRIAL_ENABLED_VAL}|" "$CONFIG_FILE_TMP"
+  sed -i "s|^TRIAL_DAYS = .*|TRIAL_DAYS = ${TRIAL_DAYS_VAL}|" "$CONFIG_FILE_TMP"
+  sed -i "s|^TRIAL_GB = .*|TRIAL_GB = ${TRIAL_GB_VAL}|" "$CONFIG_FILE_TMP"
+  sed -i "s|^REFERRAL_BONUS_AMOUNT = .*|REFERRAL_BONUS_AMOUNT = ${REFERRAL_BONUS_AMOUNT}|" "$CONFIG_FILE_TMP"
+  sed -i "s|^EXPIRY_REMINDER_DAYS = .*|EXPIRY_REMINDER_DAYS = ${EXPIRY_REMINDER_DAYS}|" "$CONFIG_FILE_TMP"
+  sed -i "s|^USAGE_ALERT_THRESHOLD = .*|USAGE_ALERT_THRESHOLD = ${USAGE_ALERT_THRESHOLD}|" "$CONFIG_FILE_TMP"
+
+  mv -f "$CONFIG_FILE_TMP" "$CONFIG_FILE"
   chmod 640 "$CONFIG_FILE" || true
   print_color green "config.py created/updated successfully."
 }
@@ -241,7 +245,6 @@ append_missing_keys_if_any() {
   [ "$changed" -eq 1 ] && print_color yellow "Added missing config keys to config.py."
 }
 
-# اگر config.py وجود نداشت یا شامل مقادیر پیش‌فرض/ناقص بود، باید تنظیم شود
 needs_config_setup() {
   local CONFIG_FILE="${INSTALL_DIR}/src/config.py"
   [ -f "$CONFIG_FILE" ] || return 0
@@ -257,6 +260,7 @@ needs_config_setup() {
 install_or_reinstall() {
   ensure_root
   ensure_deps
+  load_conf        # بارگذاری تنظیمات قبلی (برای پیش‌فرض شاخه و مسیر)
   ensure_install_dir_vars
 
   local PREV_EXISTS=0
@@ -271,7 +275,7 @@ install_or_reinstall() {
     read -rp "Reuse previous config.py and database? [y/N]: " REUSE_CONFIG
     REUSE_CONFIG=${REUSE_CONFIG:-N}
     print_color yellow "Stopping existing service (if running)..."
-    systemctl stop "${SERVICE_NAME}.service" || true
+    systemctl stop "${SERVICE_NAME}" || true
 
     if [[ "$REUSE_CONFIG" =~ ^[Yy]$ ]]; then
       BACKUP_DIR="/tmp/vpn-bot-backup-$(date +%s)"
@@ -301,7 +305,6 @@ install_or_reinstall() {
     deactivate_venv
     exit 1
   fi
-  # مهم: httpx باید در requirements باشد (برای قابلیت نودها)
   pip install -r requirements.txt >/dev/null 2>&1 || {
     print_color red "Failed to install Python packages (requirements.txt)."
     deactivate_venv
@@ -321,6 +324,7 @@ install_or_reinstall() {
     print_color yellow "Restoring previous config and database..."
     [ -f "${BACKUP_DIR}/config.py" ] && cp "${BACKUP_DIR}/config.py" "${INSTALL_DIR}/src/config.py" || true
     [ -f "${BACKUP_DIR}/vpn_bot.db" ] && cp "${BACKUP_DIR}/vpn_bot.db" "${INSTALL_DIR}/src/vpn_bot.db" || true
+    chown -R vpn-bot:vpn-bot "${INSTALL_DIR}/src" || true
     append_missing_keys_if_any
   else
     print_color blue "--- Bot Configuration ---"
@@ -338,7 +342,6 @@ install_or_reinstall() {
     fi
   fi
 
-  # Create log file and set permissions
   touch "${INSTALL_DIR}/src/bot.log"
   create_system_user
   chown -R vpn-bot:vpn-bot "${INSTALL_DIR}" || true
@@ -392,13 +395,11 @@ update_bot() {
   fi
   deactivate_venv
 
-  # Fix potential typo in repo
   if [ -f "${INSTALL_DIR}/src/bot/keboards.py" ] && [ ! -f "${INSTALL_DIR}/src/bot/keyboards.py" ]; then
     print_color yellow "Renaming keboards.py -> keyboards.py"
     mv "${INSTALL_DIR}/src/bot/keboards.py" "${INSTALL_DIR}/src/bot/keyboards.py" || true
   fi
 
-  # Ensure log file exists and has correct permissions
   touch "${INSTALL_DIR}/src/bot.log"
   chown vpn-bot:vpn-bot "${INSTALL_DIR}/src/bot.log" || true
   chmod 640 "${INSTALL_DIR}/src/config.py" || true
@@ -406,6 +407,7 @@ update_bot() {
   print_color yellow "Restarting service..."
   systemctl start "${SERVICE_NAME}"
 
+  save_conf
   print_color green "Update completed."
 }
 
@@ -493,7 +495,6 @@ show_menu() {
 
 main_loop() {
   ensure_root
-  load_conf
   while true; do
     show_menu
     read -rp "Choose an option: " CHOICE
