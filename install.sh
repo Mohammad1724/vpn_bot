@@ -1,5 +1,5 @@
 #!/bin/bash
-# Menu-based installer/manager for vpn_bot (branch-aware, reinstall-safe)
+# Menu-based installer/manager for vpn_bot (branch-aware, reinstall-safe, config-validated)
 
 set -Eeuo pipefail
 
@@ -7,7 +7,7 @@ SERVICE_NAME="vpn_bot"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 CONF_FILE="/etc/vpn_bot.conf"
 DEFAULT_GITHUB_REPO="https://github.com/Mohammad1724/vpn_bot.git"
-DEFAULT_GIT_BRANCH="main"  # می‌توانید بعداً موقع نصب v1.8 وارد کنید
+DEFAULT_GIT_BRANCH="main"  # هنگام نصب می‌توانید v1.8 وارد کنید
 
 print_color() {
   local COLOR="$1"; shift
@@ -105,16 +105,14 @@ deactivate_venv() {
 }
 
 ensure_install_dir_vars() {
+  # از مقادیر قبلی اگر وجود داشته استفاده کن
   GITHUB_REPO="${GITHUB_REPO:-$DEFAULT_GITHUB_REPO}"
-  print_color yellow "Using repository: ${GITHUB_REPO}"
-
   local DEFAULT_INSTALL_DIR="/opt/vpn-bot"
+  print_color yellow "Using repository: ${GITHUB_REPO}"
   read -rp "Installation directory [${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}]: " INSTALL_DIR_INPUT
   INSTALL_DIR="${INSTALL_DIR_INPUT:-${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}}"
 
-  # انتخاب شاخه گیت (پیش‌فرض همان شاخه ذخیره‌شده قبلی یا DEFAULT_GIT_BRANCH)
   read -rp "Git branch/tag to checkout [${GIT_BRANCH:-$DEFAULT_GIT_BRANCH}]: " GIT_BRANCH_INPUT
-  # بدون دستکاری فاصله‌ها؛ git clone --branch "${GIT_BRANCH}" با کوتیشن کار می‌کند
   GIT_BRANCH="${GIT_BRANCH_INPUT:-${GIT_BRANCH:-$DEFAULT_GIT_BRANCH}}"
 }
 
@@ -198,7 +196,7 @@ configure_config_py() {
   read -rp "Low-usage alert threshold (0.0 - 1.0) [0.8]: " USAGE_ALERT_INPUT
   local USAGE_ALERT_THRESHOLD="${USAGE_ALERT_INPUT:-0.8}"
 
-  # Escape values for sed
+  # Escape for sed
   local BOT_TOKEN_E; BOT_TOKEN_E=$(escape_sed "$BOT_TOKEN")
   local PANEL_DOMAIN_E; PANEL_DOMAIN_E=$(escape_sed "$PANEL_DOMAIN")
   local ADMIN_PATH_E; ADMIN_PATH_E=$(escape_sed "$ADMIN_PATH")
@@ -206,25 +204,21 @@ configure_config_py() {
   local API_KEY_E; API_KEY_E=$(escape_sed "$API_KEY")
   local SUPPORT_USERNAME_E; SUPPORT_USERNAME_E=$(escape_sed "$SUPPORT_USERNAME")
 
-  local CONFIG_FILE_TMP="${CONFIG_FILE}.tmp"
-  cp "$TEMPLATE_FILE" "$CONFIG_FILE_TMP"
+  sed -i "s|^BOT_TOKEN = .*|BOT_TOKEN = \"${BOT_TOKEN_E}\"|" "$CONFIG_FILE"
+  sed -i "s|^ADMIN_ID = .*|ADMIN_ID = ${ADMIN_ID}|" "$CONFIG_FILE"
+  sed -i "s|^PANEL_DOMAIN = .*|PANEL_DOMAIN = \"${PANEL_DOMAIN_E}\"|" "$CONFIG_FILE"
+  sed -i "s|^ADMIN_PATH = .*|ADMIN_PATH = \"${ADMIN_PATH_E}\"|" "$CONFIG_FILE"
+  sed -i "s|^SUB_PATH = .*|SUB_PATH = \"${SUB_PATH_E}\"|" "$CONFIG_FILE"
+  sed -i "s|^API_KEY = .*|API_KEY = \"${API_KEY_E}\"|" "$CONFIG_FILE"
+  sed -i "s|^SUPPORT_USERNAME = .*|SUPPORT_USERNAME = \"${SUPPORT_USERNAME_E}\"|" "$CONFIG_FILE"
+  sed -i "s|^SUB_DOMAINS = .*|SUB_DOMAINS = ${PYTHON_LIST_FORMAT}|" "$CONFIG_FILE"
+  sed -i "s|^TRIAL_ENABLED = .*|TRIAL_ENABLED = ${TRIAL_ENABLED_VAL}|" "$CONFIG_FILE"
+  sed -i "s|^TRIAL_DAYS = .*|TRIAL_DAYS = ${TRIAL_DAYS_VAL}|" "$CONFIG_FILE"
+  sed -i "s|^TRIAL_GB = .*|TRIAL_GB = ${TRIAL_GB_VAL}|" "$CONFIG_FILE"
+  sed -i "s|^REFERRAL_BONUS_AMOUNT = .*|REFERRAL_BONUS_AMOUNT = ${REFERRAL_BONUS_AMOUNT}|" "$CONFIG_FILE"
+  sed -i "s|^EXPIRY_REMINDER_DAYS = .*|EXPIRY_REMINDER_DAYS = ${EXPIRY_REMINDER_DAYS}|" "$CONFIG_FILE"
+  sed -i "s|^USAGE_ALERT_THRESHOLD = .*|USAGE_ALERT_THRESHOLD = ${USAGE_ALERT_THRESHOLD}|" "$CONFIG_FILE"
 
-  sed -i "s|^BOT_TOKEN = .*|BOT_TOKEN = \"${BOT_TOKEN_E}\"|" "$CONFIG_FILE_TMP"
-  sed -i "s|^ADMIN_ID = .*|ADMIN_ID = ${ADMIN_ID}|" "$CONFIG_FILE_TMP"
-  sed -i "s|^PANEL_DOMAIN = .*|PANEL_DOMAIN = \"${PANEL_DOMAIN_E}\"|" "$CONFIG_FILE_TMP"
-  sed -i "s|^ADMIN_PATH = .*|ADMIN_PATH = \"${ADMIN_PATH_E}\"|" "$CONFIG_FILE_TMP"
-  sed -i "s|^SUB_PATH = .*|SUB_PATH = \"${SUB_PATH_E}\"|" "$CONFIG_FILE_TMP"
-  sed -i "s|^API_KEY = .*|API_KEY = \"${API_KEY_E}\"|" "$CONFIG_FILE_TMP"
-  sed -i "s|^SUPPORT_USERNAME = .*|SUPPORT_USERNAME = \"${SUPPORT_USERNAME_E}\"|" "$CONFIG_FILE_TMP"
-  sed -i "s|^SUB_DOMAINS = .*|SUB_DOMAINS = ${PYTHON_LIST_FORMAT}|" "$CONFIG_FILE_TMP"
-  sed -i "s|^TRIAL_ENABLED = .*|TRIAL_ENABLED = ${TRIAL_ENABLED_VAL}|" "$CONFIG_FILE_TMP"
-  sed -i "s|^TRIAL_DAYS = .*|TRIAL_DAYS = ${TRIAL_DAYS_VAL}|" "$CONFIG_FILE_TMP"
-  sed -i "s|^TRIAL_GB = .*|TRIAL_GB = ${TRIAL_GB_VAL}|" "$CONFIG_FILE_TMP"
-  sed -i "s|^REFERRAL_BONUS_AMOUNT = .*|REFERRAL_BONUS_AMOUNT = ${REFERRAL_BONUS_AMOUNT}|" "$CONFIG_FILE_TMP"
-  sed -i "s|^EXPIRY_REMINDER_DAYS = .*|EXPIRY_REMINDER_DAYS = ${EXPIRY_REMINDER_DAYS}|" "$CONFIG_FILE_TMP"
-  sed -i "s|^USAGE_ALERT_THRESHOLD = .*|USAGE_ALERT_THRESHOLD = ${USAGE_ALERT_THRESHOLD}|" "$CONFIG_FILE_TMP"
-
-  mv -f "$CONFIG_FILE_TMP" "$CONFIG_FILE"
   chmod 640 "$CONFIG_FILE" || true
   print_color green "config.py created/updated successfully."
 }
@@ -257,16 +251,59 @@ needs_config_setup() {
   return 1
 }
 
+validate_config_offline() {
+  # آفلاین: بررسی فرمت BOT_TOKEN و ADMIN_ID با پایتون
+  local CONFIG_FILE="${INSTALL_DIR}/src/config.py"
+  if [ ! -f "$CONFIG_FILE" ]; then
+    return 1
+  fi
+  python3 - <<'PY'
+import re, sys
+from pathlib import Path
+cfg = Path(sys.argv[1])
+data = cfg.read_text(encoding="utf-8", errors="ignore")
+def get_val(k):
+    m = re.search(rf'^\s*{k}\s*=\s*(.+)$', data, re.M)
+    return m.group(1).strip() if m else ""
+def strip_quotes(s):
+    return s.strip().strip('"').strip("'")
+token = strip_quotes(get_val("BOT_TOKEN"))
+admin = get_val("ADMIN_ID")
+ok = True
+if not re.match(r'^[0-9]+:[A-Za-z0-9_-]+$', token):
+    print("Invalid BOT_TOKEN format", file=sys.stderr); ok=False
+try:
+    aid = int(eval(admin, {}))  # allow numeric value
+    if aid <= 0: raise ValueError
+except Exception:
+    print("Invalid ADMIN_ID (must be numeric)", file=sys.stderr); ok=False
+sys.exit(0 if ok else 2)
+PY
+  local rc=$?
+  return $rc
+}
+
+validate_token_online() {
+  # تست اختیاری آنلاین توکن با getMe (اگر اینترنت/تلگرام قطع باشد، فقط هشدار می‌دهد)
+  local CONFIG_FILE="${INSTALL_DIR}/src/config.py"
+  local BOT_TOKEN
+  BOT_TOKEN=$(awk -F= '/^BOT_TOKEN/ {gsub(/[ "]/,"",$2); print $2}' "$CONFIG_FILE" | tr -d '"')
+  if [ -z "$BOT_TOKEN" ]; then
+    return 1
+  fi
+  local RES
+  RES=$(curl -s --max-time 6 "https://api.telegram.org/bot${BOT_TOKEN}/getMe" || true)
+  echo "$RES" | grep -q '"ok":true' && return 0 || return 1
+}
+
 install_or_reinstall() {
   ensure_root
   ensure_deps
-  load_conf        # بارگذاری تنظیمات قبلی (برای پیش‌فرض شاخه و مسیر)
+  load_conf
   ensure_install_dir_vars
 
   local PREV_EXISTS=0
-  if [ -d "$INSTALL_DIR" ]; then
-    PREV_EXISTS=1
-  fi
+  [ -d "$INSTALL_DIR" ] && PREV_EXISTS=1
 
   local BACKUP_DIR=""
   local REUSE_CONFIG="N"
@@ -302,13 +339,11 @@ install_or_reinstall() {
   pip install --upgrade pip >/dev/null 2>&1 || true
   if [ ! -f "requirements.txt" ]; then
     print_color red "requirements.txt not found."
-    deactivate_venv
-    exit 1
+    deactivate_venv; exit 1
   fi
   pip install -r requirements.txt >/dev/null 2>&1 || {
     print_color red "Failed to install Python packages (requirements.txt)."
-    deactivate_venv
-    exit 1
+    deactivate_venv; exit 1
   }
   deactivate_venv
 
@@ -331,15 +366,18 @@ install_or_reinstall() {
     configure_config_py
   fi
 
-  if needs_config_setup; then
-    print_color yellow "config.py has default/incomplete values. Running configuration..."
+  # Validation: آفلاین (اجباری) + آنلاین (اختیاری)
+  if ! validate_config_offline; then
+    print_color red "config.py is invalid or incomplete. Let's configure it now..."
     configure_config_py
   else
-    read -rp "Do you want to review/edit config.py now? [y/N]: " EDIT_NOW
-    EDIT_NOW=${EDIT_NOW:-N}
-    if [[ "$EDIT_NOW" =~ ^[Yy]$ ]]; then
-      configure_config_py
-    fi
+    print_color green "config.py offline validation passed."
+  fi
+
+  if validate_token_online; then
+    print_color green "Telegram token online check passed (getMe ok)."
+  else
+    print_color yellow "Warning: Telegram getMe failed (no Internet or invalid token). Continuing..."
   fi
 
   touch "${INSTALL_DIR}/src/bot.log"
