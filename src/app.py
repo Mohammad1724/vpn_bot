@@ -25,7 +25,7 @@ from bot.handlers.admin import (
 import bot.handlers.admin.trial_settings_ui as trial_ui
 from bot.handlers.trial import get_trial_service as trial_get_trial_service
 from bot.handlers.admin.trial_settings import set_trial_days, set_trial_gb
-# NEW: nodes admin
+# مدیریت نودها
 from bot.handlers.admin import nodes as admin_nodes
 
 from config import BOT_TOKEN, ADMIN_ID
@@ -45,7 +45,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 def build_application():
-    # align read_timeout with run_polling(timeout=60) in main_bot
+    # تراز read_timeout با run_polling(timeout=60) در main_bot
     request = HTTPXRequest(connect_timeout=15.0, read_timeout=75.0, write_timeout=30.0, pool_timeout=90.0)
 
     application = (
@@ -58,7 +58,7 @@ def build_application():
     )
     application.add_error_handler(error_handler)
 
-    # Admin filter
+    # فیلتر ادمین
     try:
         admin_id_int = int(ADMIN_ID)
     except Exception:
@@ -217,82 +217,22 @@ def build_application():
         map_to_parent={ConversationHandler.END: constants.GIFT_CODES_MENU},
     )
 
-    broadcast_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(r'^📩 ارسال پیام$') & admin_filter, admin_users.broadcast_menu)],
-        states={
-            constants.BROADCAST_MENU: [
-                MessageHandler(filters.Regex(r'^ارسال به همه کاربران$') & admin_filter, admin_users.broadcast_to_all_start),
-                MessageHandler(filters.Regex(r'^ارسال به کاربر خاص$') & admin_filter, admin_users.broadcast_to_user_start),
-                MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
-            ],
-            constants.BROADCAST_MESSAGE: [
-                MessageHandler(~filters.COMMAND & admin_filter, admin_users.broadcast_to_all_confirm),
-                MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
-            ],
-            constants.BROADCAST_CONFIRM: [CallbackQueryHandler(admin_users.broadcast_confirm_callback, pattern=r'^broadcast_confirm_(yes|no)$')],
-            constants.BROADCAST_TO_USER_ID: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_users.broadcast_to_user_id_received),
-                MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
-            ],
-            constants.BROADCAST_TO_USER_MESSAGE: [
-                MessageHandler(~filters.COMMAND & admin_filter, admin_users.broadcast_to_user_message_received),
-                MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
-            ],
-        },
-        fallbacks=[CommandHandler('cancel', admin_c.admin_generic_cancel)],
-        map_to_parent={ConversationHandler.END: constants.ADMIN_MENU},
-        per_user=True, per_chat=True, allow_reentry=True
-    )
-
-    admin_settings_conv = ConversationHandler(
-        entry_points=[
-            MessageHandler(filters.Regex('^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
-            CallbackQueryHandler(admin_settings.settings_menu, pattern="^admin_settings$")
-        ],
-        states={
-            constants.ADMIN_SETTINGS_MENU: [
-                CallbackQueryHandler(admin_settings.maintenance_and_join_submenu, pattern="^settings_maint_join$"),
-                CallbackQueryHandler(admin_settings.payment_and_guides_submenu, pattern="^settings_payment_guides$"),
-                CallbackQueryHandler(admin_settings.payment_info_submenu, pattern="^payment_info_submenu$"),
-                CallbackQueryHandler(admin_settings.service_configs_submenu, pattern="^settings_service_configs$"),
-                CallbackQueryHandler(admin_settings.subdomains_submenu, pattern="^settings_subdomains$"),
-                CallbackQueryHandler(admin_settings.reports_and_reminders_submenu, pattern="^settings_reports_reminders$"),
-                CallbackQueryHandler(admin_settings.edit_default_link_start, pattern="^edit_default_link_type$"),
-                CallbackQueryHandler(admin_settings.set_default_link_type, pattern="^set_default_link_"),
-                CallbackQueryHandler(admin_settings.toggle_maintenance, pattern="^toggle_maintenance$"),
-                CallbackQueryHandler(admin_settings.toggle_force_join, pattern="^toggle_force_join$"),
-                CallbackQueryHandler(admin_settings.toggle_expiry_reminder, pattern="^toggle_expiry_reminder$"),
-                CallbackQueryHandler(admin_settings.toggle_report_setting, pattern="^toggle_report_"),
-                trial_settings_conv,
-                CallbackQueryHandler(admin_settings.edit_setting_start, pattern="^admin_edit_setting_"),
-                CallbackQueryHandler(admin_settings.back_to_admin_menu_cb, pattern="^admin_back_to_menu$"),
-            ],
-            constants.AWAIT_SETTING_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_settings.setting_value_received)],
-        },
-        fallbacks=[
-            CommandHandler('cancel', admin_c.admin_generic_cancel),
-            CallbackQueryHandler(admin_settings.settings_menu, pattern="^back_to_settings$")
-        ],
-        map_to_parent={constants.ADMIN_MENU: constants.ADMIN_MENU, ConversationHandler.END: constants.ADMIN_MENU},
-        per_user=True, per_chat=True, allow_reentry=True
-    )
-
     # =========================
-    # Nodes admin conversation (NEW)
+    # Nodes admin conversation (Text filters)
     # =========================
     nodes_conv = ConversationHandler(
         entry_points=[
-            MessageHandler(filters.Regex(f'^{constants.BTN_MANAGE_NODES}$') & admin_filter, admin_nodes.nodes_menu)
+            MessageHandler(filters.Text([constants.BTN_MANAGE_NODES]) & admin_filter, admin_nodes.nodes_menu)
         ],
         states={
             constants.NODES_MENU: [
-                MessageHandler(filters.Regex(r'^➕ افزودن نود$') & admin_filter, admin_nodes.add_node_start),
-                MessageHandler(filters.Regex(r'^📜 لیست نودها$') & admin_filter, admin_nodes.list_nodes_handler),
-                MessageHandler(filters.Regex(r'^🧪 تست همه نودها$') & admin_filter, admin_nodes.test_all_nodes),
-                MessageHandler(filters.Regex(r'^📤 ارسال به تجمیع‌کننده$') & admin_filter, admin_nodes.push_nodes_to_agg),
-                MessageHandler(filters.Regex(r'^🗑️ حذف نود$') & admin_filter, admin_nodes.delete_node_start),
-                MessageHandler(filters.Regex(r'^🔄 تغییر وضعیت نود$') & admin_filter, admin_nodes.toggle_node_start),
-                MessageHandler(filters.Regex(r'^بازگشت به منوی ادمین$') & admin_filter, admin_nodes.back_to_admin),
+                MessageHandler(filters.Text(["➕ افزودن نود"]) & admin_filter, admin_nodes.add_node_start),
+                MessageHandler(filters.Text(["📜 لیست نودها"]) & admin_filter, admin_nodes.list_nodes_handler),
+                MessageHandler(filters.Text(["🧪 تست همه نودها"]) & admin_filter, admin_nodes.test_all_nodes),
+                MessageHandler(filters.Text(["📤 ارسال به تجمیع‌کننده"]) & admin_filter, admin_nodes.push_nodes_to_agg),
+                MessageHandler(filters.Text(["🗑️ حذف نود"]) & admin_filter, admin_nodes.delete_node_start),
+                MessageHandler(filters.Text(["🔄 تغییر وضعیت نود"]) & admin_filter, admin_nodes.toggle_node_start),
+                MessageHandler(filters.Text([constants.BTN_BACK_TO_ADMIN_MENU]) & admin_filter, admin_nodes.back_to_admin),
             ],
             constants.NODE_ADD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_node_name_received)],
             constants.NODE_ADD_API_BASE: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_node_api_base_received)],
@@ -322,7 +262,7 @@ def build_application():
                 MessageHandler(filters.Regex('^👥 مدیریت کاربران$') & admin_filter, admin_users.user_management_menu),
                 MessageHandler(filters.Regex('^🎁 مدیریت کد هدیه$') & admin_filter, admin_gift.gift_code_management_menu),
                 MessageHandler(filters.Regex('^🛑 خاموش کردن ربات$') & admin_filter, admin_c.shutdown_bot),
-                MessageHandler(filters.Regex(f'^{constants.BTN_MANAGE_NODES}$') & admin_filter, admin_nodes.nodes_menu),  # NEW
+                MessageHandler(filters.Text([constants.BTN_MANAGE_NODES]) & admin_filter, admin_nodes.nodes_menu),
                 CallbackQueryHandler(admin_plans.plan_management_menu, pattern="^admin_plans$"),
                 CallbackQueryHandler(admin_reports.reports_menu, pattern="^admin_reports$"),
                 CallbackQueryHandler(admin_backup.backup_restore_menu, pattern="^admin_backup$"),
@@ -331,9 +271,14 @@ def build_application():
                 CallbackQueryHandler(admin_c.shutdown_bot, pattern="^admin_shutdown$"),
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
                 CallbackQueryHandler(admin_users.admin_delete_service, pattern=r'^admin_delete_service_\d+(_\d+)?$'),
-                admin_settings_conv,
-                broadcast_conv,
-                nodes_conv,  # NEW: nested nodes conversation
+                # Nested conversations
+                nodes_conv,
+                add_plan_conv,
+                edit_plan_conv,
+                trial_settings_conv,
+                gift_code_create_conv,
+                promo_create_conv,
+                referral_bonus_conv,
             ],
 
             constants.PLAN_MENU: [
