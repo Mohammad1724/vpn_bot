@@ -7,7 +7,7 @@ SERVICE_NAME="vpn_bot"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 CONF_FILE="/etc/vpn_bot.conf"
 DEFAULT_GITHUB_REPO="https://github.com/Mohammad1724/vpn_bot.git"
-DEFAULT_GIT_BRANCH="main"  # هنگام نصب می‌توانید v1.8 وارد کنید
+DEFAULT_GIT_BRANCH="main"
 
 print_color() {
   local COLOR="$1"; shift
@@ -105,15 +105,13 @@ deactivate_venv() {
 }
 
 ensure_install_dir_vars() {
-  # از مقادیر قبلی اگر وجود داشته استفاده کن
   GITHUB_REPO="${GITHUB_REPO:-$DEFAULT_GITHUB_REPO}"
-  local DEFAULT_INSTALL_DIR="/opt/vpn-bot"
   print_color yellow "Using repository: ${GITHUB_REPO}"
+  local DEFAULT_INSTALL_DIR="/opt/vpn-bot"
   read -rp "Installation directory [${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}]: " INSTALL_DIR_INPUT
   INSTALL_DIR="${INSTALL_DIR_INPUT:-${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}}"
 
   read -rp "Git branch/tag to checkout [${GIT_BRANCH:-$DEFAULT_GIT_BRANCH}]: " GIT_BRANCH_INPUT
-  # بدون دستکاری فاصله‌ها؛ git با کوتیشن هندل می‌کند
   GIT_BRANCH="${GIT_BRANCH_INPUT:-${GIT_BRANCH:-$DEFAULT_GIT_BRANCH}}"
 }
 
@@ -134,7 +132,6 @@ configure_config_py() {
     print_color red "Missing template file: ${TEMPLATE_FILE}"
     exit 1
   fi
-  cp "$TEMPLATE_FILE" "$CONFIG_FILE"
 
   # Bot Token
   while true; do
@@ -205,21 +202,25 @@ configure_config_py() {
   local API_KEY_E; API_KEY_E=$(escape_sed "$API_KEY")
   local SUPPORT_USERNAME_E; SUPPORT_USERNAME_E=$(escape_sed "$SUPPORT_USERNAME")
 
-  sed -i "s|^BOT_TOKEN = .*|BOT_TOKEN = \"${BOT_TOKEN_E}\"|" "$CONFIG_FILE"
-  sed -i "s|^ADMIN_ID = .*|ADMIN_ID = ${ADMIN_ID}|" "$CONFIG_FILE"
-  sed -i "s|^PANEL_DOMAIN = .*|PANEL_DOMAIN = \"${PANEL_DOMAIN_E}\"|" "$CONFIG_FILE"
-  sed -i "s|^ADMIN_PATH = .*|ADMIN_PATH = \"${ADMIN_PATH_E}\"|" "$CONFIG_FILE"
-  sed -i "s|^SUB_PATH = .*|SUB_PATH = \"${SUB_PATH_E}\"|" "$CONFIG_FILE"
-  sed -i "s|^API_KEY = .*|API_KEY = \"${API_KEY_E}\"|" "$CONFIG_FILE"
-  sed -i "s|^SUPPORT_USERNAME = .*|SUPPORT_USERNAME = \"${SUPPORT_USERNAME_E}\"|" "$CONFIG_FILE"
-  sed -i "s|^SUB_DOMAINS = .*|SUB_DOMAINS = ${PYTHON_LIST_FORMAT}|" "$CONFIG_FILE"
-  sed -i "s|^TRIAL_ENABLED = .*|TRIAL_ENABLED = ${TRIAL_ENABLED_VAL}|" "$CONFIG_FILE"
-  sed -i "s|^TRIAL_DAYS = .*|TRIAL_DAYS = ${TRIAL_DAYS_VAL}|" "$CONFIG_FILE"
-  sed -i "s|^TRIAL_GB = .*|TRIAL_GB = ${TRIAL_GB_VAL}|" "$CONFIG_FILE"
-  sed -i "s|^REFERRAL_BONUS_AMOUNT = .*|REFERRAL_BONUS_AMOUNT = ${REFERRAL_BONUS_AMOUNT}|" "$CONFIG_FILE"
-  sed -i "s|^EXPIRY_REMINDER_DAYS = .*|EXPIRY_REMINDER_DAYS = ${EXPIRY_REMINDER_DAYS}|" "$CONFIG_FILE"
-  sed -i "s|^USAGE_ALERT_THRESHOLD = .*|USAGE_ALERT_THRESHOLD = ${USAGE_ALERT_THRESHOLD}|" "$CONFIG_FILE"
+  local CONFIG_FILE_TMP="${CONFIG_FILE}.tmp"
+  cp "$TEMPLATE_FILE" "$CONFIG_FILE_TMP"
 
+  sed -i "s|^BOT_TOKEN = .*|BOT_TOKEN = \"${BOT_TOKEN_E}\"|" "$CONFIG_FILE_TMP"
+  sed -i "s|^ADMIN_ID = .*|ADMIN_ID = ${ADMIN_ID}|" "$CONFIG_FILE_TMP"
+  sed -i "s|^PANEL_DOMAIN = .*|PANEL_DOMAIN = \"${PANEL_DOMAIN_E}\"|" "$CONFIG_FILE_TMP"
+  sed -i "s|^ADMIN_PATH = .*|ADMIN_PATH = \"${ADMIN_PATH_E}\"|" "$CONFIG_FILE_TMP"
+  sed -i "s|^SUB_PATH = .*|SUB_PATH = \"${SUB_PATH_E}\"|" "$CONFIG_FILE_TMP"
+  sed -i "s|^API_KEY = .*|API_KEY = \"${API_KEY_E}\"|" "$CONFIG_FILE_TMP"
+  sed -i "s|^SUPPORT_USERNAME = .*|SUPPORT_USERNAME = \"${SUPPORT_USERNAME_E}\"|" "$CONFIG_FILE_TMP"
+  sed -i "s|^SUB_DOMAINS = .*|SUB_DOMAINS = ${PYTHON_LIST_FORMAT}|" "$CONFIG_FILE_TMP"
+  sed -i "s|^TRIAL_ENABLED = .*|TRIAL_ENABLED = ${TRIAL_ENABLED_VAL}|" "$CONFIG_FILE_TMP"
+  sed -i "s|^TRIAL_DAYS = .*|TRIAL_DAYS = ${TRIAL_DAYS_VAL}|" "$CONFIG_FILE_TMP"
+  sed -i "s|^TRIAL_GB = .*|TRIAL_GB = ${TRIAL_GB_VAL}|" "$CONFIG_FILE_TMP"
+  sed -i "s|^REFERRAL_BONUS_AMOUNT = .*|REFERRAL_BONUS_AMOUNT = ${REFERRAL_BONUS_AMOUNT}|" "$CONFIG_FILE_TMP"
+  sed -i "s|^EXPIRY_REMINDER_DAYS = .*|EXPIRY_REMINDER_DAYS = ${EXPIRY_REMINDER_DAYS}|" "$CONFIG_FILE_TMP"
+  sed -i "s|^USAGE_ALERT_THRESHOLD = .*|USAGE_ALERT_THRESHOLD = ${USAGE_ALERT_THRESHOLD}|" "$CONFIG_FILE_TMP"
+
+  mv -f "$CONFIG_FILE_TMP" "$CONFIG_FILE"
   chmod 640 "$CONFIG_FILE" || true
   print_color green "config.py created/updated successfully."
 }
@@ -240,80 +241,40 @@ append_missing_keys_if_any() {
   [ "$changed" -eq 1 ] && print_color yellow "Added missing config keys to config.py."
 }
 
-needs_config_setup() {
-  local CONFIG_FILE="${INSTALL_DIR}/src/config.py"
-  [ -f "$CONFIG_FILE" ] || return 0
-  if grep -qE 'YOUR_BOT_TOKEN_HERE|your_panel_domain\.com|your_hiddify_api_key_here|your_support_username|your_subscription_secret_path' "$CONFIG_FILE"; then
-    return 0
-  fi
-  if grep -qE '^\s*ADMIN_ID\s*=\s*123456789\b' "$CONFIG_FILE"; then
-    return 0
-  fi
-  return 1
-}
-
 validate_config_offline() {
-  # آفلاین: بررسی BOT_TOKEN و ADMIN_ID
   local CONFIG_FILE="${INSTALL_DIR}/src/config.py"
-  if [ ! -f "$CONFIG_FILE" ]; then
-    return 1
-  fi
+  if [ ! -f "$CONFIG_FILE" ]; then return 1; fi
   python3 - "$CONFIG_FILE" <<'PY'
 import re, sys
 from pathlib import Path
-
 cfg_path = sys.argv[1] if len(sys.argv) > 1 else ""
-if not cfg_path:
-    print("No config path", file=sys.stderr); sys.exit(2)
-
-p = Path(cfg_path)
-if not p.exists():
+if not cfg_path or not Path(cfg_path).exists():
     print("Config not found", file=sys.stderr); sys.exit(2)
-
-data = p.read_text(encoding="utf-8", errors="ignore")
-
+data = Path(cfg_path).read_text(encoding="utf-8", errors="ignore")
 def get_val(k):
     m = re.search(rf'^\s*{k}\s*=\s*(.+)$', data, re.M)
     return m.group(1).strip() if m else ""
-
-def stripq(x): 
-    return x.strip().strip('"').strip("'")
-
+def stripq(x): return x.strip().strip('"').strip("'")
 ok = True
-
-# BOT_TOKEN
-token = stripq(get_val("BOT_TOKEN"))
-if not re.match(r'^[0-9]+:[A-Za-z0-9_-]+$', token):
-    print("Invalid BOT_TOKEN format", file=sys.stderr)
-    ok = False
-
-# ADMIN_ID باید عدد معتبر باشد
-admin_expr = get_val("ADMIN_ID")
+if not re.match(r'^[0-9]+:[A-Za-z0-9_-]+$', stripq(get_val("BOT_TOKEN"))):
+    print("Invalid BOT_TOKEN format", file=sys.stderr); ok = False
 try:
-    aid = int(eval(admin_expr, {}))  # allow numeric literal
-    if aid <= 0:
-        raise ValueError
+    if int(eval(get_val("ADMIN_ID"), {})) <= 0: raise ValueError
 except Exception:
-    print("Invalid ADMIN_ID (must be numeric)", file=sys.stderr)
-    ok = False
-
+    print("Invalid ADMIN_ID (must be positive number)", file=sys.stderr); ok = False
 sys.exit(0 if ok else 2)
 PY
-  local rc=$?
-  return $rc
+  return $?
 }
 
 validate_token_online() {
-  # تست اختیاری آنلاین
   local CONFIG_FILE="${INSTALL_DIR}/src/config.py"
   local BOT_TOKEN
   BOT_TOKEN=$(awk -F= '/^BOT_TOKEN/ {print $2}' "$CONFIG_FILE" | tr -d ' "')
-  if [ -z "$BOT_TOKEN" ]; then
-    return 1
-  fi
+  if [ -z "$BOT_TOKEN" ]; then return 1; fi
   local RES
   RES=$(curl -s --max-time 6 "https://api.telegram.org/bot${BOT_TOKEN}/getMe" || true)
-  echo "$RES" | grep -q '"ok":true' && return 0 || return 1
+  echo "$RES" | grep -q '"ok":true'
 }
 
 install_or_reinstall() {
@@ -322,12 +283,7 @@ install_or_reinstall() {
   load_conf
   ensure_install_dir_vars
 
-  local PREV_EXISTS=0
-  [ -d "$INSTALL_DIR" ] && PREV_EXISTS=1
-
-  local BACKUP_DIR=""
-  local REUSE_CONFIG="N"
-  if [ "$PREV_EXISTS" -eq 1 ]; then
+  [ -d "$INSTALL_DIR" ] && {
     print_color yellow "Previous installation found at ${INSTALL_DIR}."
     read -rp "Reuse previous config.py and database? [y/N]: " REUSE_CONFIG
     REUSE_CONFIG=${REUSE_CONFIG:-N}
@@ -344,7 +300,7 @@ install_or_reinstall() {
 
     print_color yellow "Removing previous installation..."
     rm -rf "$INSTALL_DIR"
-  fi
+  }
 
   print_color yellow "Cloning repository (branch: ${GIT_BRANCH})..."
   git clone --branch "${GIT_BRANCH}" --single-branch "$GITHUB_REPO" "$INSTALL_DIR" || {
@@ -367,7 +323,6 @@ install_or_reinstall() {
   }
   deactivate_venv
 
-  # Fix potential typo in repo (keboards.py -> keyboards.py)
   if [ -f "${INSTALL_DIR}/src/bot/keboards.py" ] && [ ! -f "${INSTALL_DIR}/src/bot/keyboards.py" ]; then
     print_color yellow "Renaming keboards.py -> keyboards.py"
     mv "${INSTALL_DIR}/src/bot/keboards.py" "${INSTALL_DIR}/src/bot/keyboards.py" || true
@@ -375,7 +330,7 @@ install_or_reinstall() {
 
   mkdir -p "${INSTALL_DIR}/backups"
 
-  if [[ "$REUSE_CONFIG" =~ ^[Yy]$ ]] && [ -n "$BACKUP_DIR" ]; then
+  if [[ "${REUSE_CONFIG:-N}" =~ ^[Yy]$ ]] && [ -n "${BACKUP_DIR:-}" ]; then
     print_color yellow "Restoring previous config and database..."
     [ -f "${BACKUP_DIR}/config.py" ] && cp "${BACKUP_DIR}/config.py" "${INSTALL_DIR}/src/config.py" || true
     [ -f "${BACKUP_DIR}/vpn_bot.db" ] && cp "${BACKUP_DIR}/vpn_bot.db" "${INSTALL_DIR}/src/vpn_bot.db" || true
@@ -386,9 +341,8 @@ install_or_reinstall() {
     configure_config_py
   fi
 
-  # Validation: آفلاین (اجباری) + آنلاین (اختیاری)
   if ! validate_config_offline; then
-    print_color red "config.py is invalid or incomplete. Let's configure it now..."
+    print_color red "Reused config.py is invalid or incomplete. Let's configure it now..."
     configure_config_py
   else
     print_color green "config.py offline validation passed."
