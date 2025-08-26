@@ -68,7 +68,7 @@ create_system_user() {
   fi
   if ! id -u vpn-bot >/dev/null 2>&1; then
     print_color yellow "Creating system user 'vpn-bot'..."
-    useradd --system --home "${INSTALL_DIR}" --shell /usr/sbin/nologin --gid vpn-bot vpn-bot
+    useradd --system --home "${INSTALL_DIR:-/opt/vpn-bot}" --shell /usr/sbin/nologin --gid vpn-bot vpn-bot
   fi
 }
 
@@ -127,7 +127,7 @@ validate_numeric_id() {
 configure_config_py() {
   local CONFIG_FILE="${INSTALL_DIR}/src/config.py"
   local TEMPLATE_FILE="${INSTALL_DIR}/src/config_template.py"
-  
+
   if [ ! -f "$CONFIG_FILE" ]; then
     if [ ! -f "$TEMPLATE_FILE" ]; then
       print_color red "Missing template file: ${TEMPLATE_FILE}"
@@ -135,7 +135,7 @@ configure_config_py() {
     fi
     cp "$TEMPLATE_FILE" "$CONFIG_FILE"
   fi
-  
+
   local prev_token; prev_token=$(awk -F= '/^BOT_TOKEN/ {print $2}' "$CONFIG_FILE" | tr -d ' "')
   local prev_admin_id; prev_admin_id=$(awk -F= '/^ADMIN_ID/ {print $2}' "$CONFIG_FILE" | tr -d ' ')
   local prev_domain; prev_domain=$(awk -F= '/^PANEL_DOMAIN/ {print $2}' "$CONFIG_FILE" | tr -d ' "')
@@ -161,19 +161,50 @@ configure_config_py() {
   read -rp "Hiddify SUBSCRIPTION secret path [${prev_sub_path}]: " SUB_PATH; SUB_PATH=${SUB_PATH:-$prev_sub_path}
   read -rp "Hiddify API Key [${prev_api_key}]: " API_KEY; API_KEY=${API_KEY:-$prev_api_key}
   read -rp "Support username [${prev_support}]: " SUPPORT_USERNAME; SUPPORT_USERNAME=${SUPPORT_USERNAME:-$prev_support}
-  
+
   read -rp "Enter subscription domains (comma-separated): " SUB_DOMAINS_INPUT
   read -rp "Enable free trial? [Y/n]: " ENABLE_TRIAL
+  ENABLE_TRIAL=${ENABLE_TRIAL:-Y}
   read -rp "Referral bonus amount [5000]: " REFERRAL_BONUS_INPUT
+  REFERRAL_BONUS_INPUT=${REFERRAL_BONUS_INPUT:-5000}
   read -rp "Expiry reminder days [3]: " EXPIRY_REMINDER_INPUT
+  EXPIRY_REMINDER_INPUT=${EXPIRY_REMINDER_INPUT:-3}
   read -rp "Low-usage alert threshold [0.8]: " USAGE_ALERT_INPUT
+  USAGE_ALERT_INPUT=${USAGE_ALERT_INPUT:-0.8}
 
   local BOT_TOKEN_E; BOT_TOKEN_E=$(escape_sed "$BOT_TOKEN")
+  local PANEL_DOMAIN_E; PANEL_DOMAIN_E=$(escape_sed "$PANEL_DOMAIN")
+  local ADMIN_PATH_E; ADMIN_PATH_E=$(escape_sed "$ADMIN_PATH")
+  local SUB_PATH_E; SUB_PATH_E=$(escape_sed "$SUB_PATH")
+  local API_KEY_E; API_KEY_E=$(escape_sed "$API_KEY")
+  local SUPPORT_USERNAME_E; SUPPORT_USERNAME_E=$(escape_sed "$SUPPORT_USERNAME")
+
   sed -i "s|^BOT_TOKEN = .*|BOT_TOKEN = \"${BOT_TOKEN_E}\"|" "$CONFIG_FILE"
   sed -i "s|^ADMIN_ID = .*|ADMIN_ID = ${ADMIN_ID}|" "$CONFIG_FILE"
-  # ... (بقیه sedها)
+  sed -i "s|^PANEL_DOMAIN = .*|PANEL_DOMAIN = \"${PANEL_DOMAIN_E}\"|" "$CONFIG_FILE"
+  sed -i "s|^ADMIN_PATH = .*|ADMIN_PATH = \"${ADMIN_PATH_E}\"|" "$CONFIG_FILE"
+  sed -i "s|^SUB_PATH = .*|SUB_PATH = \"${SUB_PATH_E}\"|" "$CONFIG_FILE"
+  sed -i "s|^API_KEY = .*|API_KEY = \"${API_KEY_E}\"|" "$CONFIG_FILE"
+  sed -i "s|^SUPPORT_USERNAME = .*|SUPPORT_USERNAME = \"${SUPPORT_USERNAME_E}\"|" "$CONFIG_FILE"
   
-  chmod 640 "$CONFIG_FILE" || true
+  if [ -n "$SUB_DOMAINS_INPUT" ]; then
+    local SUB_DOMAINS_FORMATTED
+    SUB_DOMAINS_FORMATTED=$(echo "$SUB_DOMAINS_INPUT" | sed 's/,/", "/g' | sed 's/^/["/' | sed 's/$/"]/')
+    sed -i "s|^SUBSCRIPTION_DOMAINS = .*|SUBSCRIPTION_DOMAINS = ${SUB_DOMAINS_FORMATTED}|" "$CONFIG_FILE"
+  fi
+  
+  if [[ "$ENABLE_TRIAL" =~ ^[Yy]$ ]]; then
+    sed -i "s|^ENABLE_FREE_TRIAL = .*|ENABLE_FREE_TRIAL = True|" "$CONFIG_FILE"
+  else
+    sed -i "s|^ENABLE_FREE_TRIAL = .*|ENABLE_FREE_TRIAL = False|" "$CONFIG_FILE"
+  fi
+  
+  sed -i "s|^REFERRAL_BONUS_AMOUNT = .*|REFERRAL_BONUS_AMOUNT = ${REFERRAL_BONUS_INPUT}|" "$CONFIG_FILE"
+  sed -i "s|^EXPIRY_REMINDER_DAYS = .*|EXPIRY_REMINDER_DAYS = ${EXPIRY_REMINDER_INPUT}|" "$CONFIG_FILE"
+  sed -i "s|^USAGE_ALERT_THRESHOLD = .*|USAGE_ALERT_THRESHOLD = ${USAGE_ALERT_INPUT}|" "$CONFIG_FILE"
+
+  chown vpn-bot:vpn-bot "$CONFIG_FILE"
+  chmod 640 "$CONFIG_FILE"
   print_color green "config.py updated successfully."
 }
 
@@ -231,13 +262,13 @@ validate_token_online() {
 
 install_or_reinstall() {
   unset INSTALL_DIR GIT_BRANCH GITHUB_REPO REUSE_CONFIG BACKUP_DIR
-  
+
   ensure_root
   ensure_deps
   load_conf
   ensure_install_dir_vars
-  
-  # **مهم: کاربر سیستم را همینجا بساز**
+
+  # Create system user first
   create_system_user
 
   if [ -d "$INSTALL_DIR" ]; then
@@ -262,60 +293,86 @@ install_or_reinstall() {
   git clone --branch "${GIT_BRANCH}" --single-branch "$GITHUB_REPO" "$INSTALL_DIR" || {
     print_color red "git clone failed. Check branch name: ${GIT_BRANCH}"; exit 1;
   }
+  
+  # Set ownership immediately after clone
+  chown -R vpn-bot:vpn-bot "${INSTALL_DIR}" || true
+  
   cd "$INSTALL_DIR"
 
   print_color yellow "Creating Python venv and installing dependencies..."
-  python3 -m venv venv; activate_venv
-  pip install --upgrade pip >/dev/null 2>&1 || true
-  if [ ! -f "requirements.txt" ]; then
-    print_color red "requirements.txt not found."; deactivate_venv; exit 1
-  fi
-  pip install -r requirements.txt >/dev/null 2>&1 || {
-    print_color red "Failed to install Python packages (requirements.txt)."; deactivate_venv; exit 1
+  # Create venv as vpn-bot user
+  sudo -u vpn-bot python3 -m venv venv
+  
+  # Install dependencies as vpn-bot user
+  sudo -u vpn-bot bash -c "source venv/bin/activate && pip install --upgrade pip >/dev/null 2>&1 && pip install -r requirements.txt >/dev/null 2>&1" || {
+    print_color red "Failed to install Python packages."; exit 1;
   }
-  deactivate_venv
 
+  # Check requirements.txt
+  if [ ! -f "requirements.txt" ]; then
+    print_color red "requirements.txt not found."; exit 1;
+  fi
+
+  # Fix filename issue
   if [ -f "${INSTALL_DIR}/src/bot/keboards.py" ] && [ ! -f "${INSTALL_DIR}/src/bot/keyboards.py" ]; then
     print_color yellow "Renaming keboards.py -> keyboards.py"
     mv "${INSTALL_DIR}/src/bot/keboards.py" "${INSTALL_DIR}/src/bot/keyboards.py" || true
   fi
+  
+  # Create backups directory
   mkdir -p "${INSTALL_DIR}/backups"
+  chown vpn-bot:vpn-bot "${INSTALL_DIR}/backups"
 
+  # Restore or configure
   if [[ "${REUSE_CONFIG:-N}" =~ ^[Yy]$ ]] && [ -n "${BACKUP_DIR:-}" ]; then
     print_color yellow "Restoring previous config and database..."
-    [ -f "${BACKUP_DIR}/config.py" ] && cp "${BACKUP_DIR}/config.py" "${INSTALL_DIR}/src/config.py" || true
-    [ -f "${BACKUP_DIR}/vpn_bot.db" ] && cp "${BACKUP_DIR}/vpn_bot.db" "${INSTALL_DIR}/src/vpn_bot.db" || true
+    if [ -f "${BACKUP_DIR}/config.py" ]; then
+      cp "${BACKUP_DIR}/config.py" "${INSTALL_DIR}/src/config.py"
+      chown vpn-bot:vpn-bot "${INSTALL_DIR}/src/config.py"
+      chmod 640 "${INSTALL_DIR}/src/config.py"
+    fi
+    if [ -f "${BACKUP_DIR}/vpn_bot.db" ]; then
+      cp "${BACKUP_DIR}/vpn_bot.db" "${INSTALL_DIR}/src/vpn_bot.db"
+      chown vpn-bot:vpn-bot "${INSTALL_DIR}/src/vpn_bot.db"
+    fi
     append_missing_keys_if_any
   else
     print_color blue "--- Bot Configuration ---"
     configure_config_py
   fi
-  
-  chown -R vpn-bot:vpn-bot "${INSTALL_DIR}" || true
+
+  # Ensure correct ownership and permissions
+  chown -R vpn-bot:vpn-bot "${INSTALL_DIR}"
   chmod 640 "${INSTALL_DIR}/src/config.py" || true
 
+  # Validate config
   if ! validate_config_offline; then
-    print_color red "Reused config.py is invalid or incomplete. Let's configure it now..."
+    print_color red "Config validation failed. Please reconfigure..."
     configure_config_py
   else
     print_color green "config.py offline validation passed."
   fi
 
+  # Check token online
   if validate_token_online; then
-    print_color green "Telegram token online check passed (getMe ok)."
+    print_color green "Telegram token online check passed."
   else
-    print_color yellow "Warning: Telegram getMe failed (no Internet or invalid token). Continuing..."
+    print_color yellow "Warning: Telegram getMe failed. Continuing..."
   fi
 
+  # Create log file
   touch "${INSTALL_DIR}/src/bot.log"
-  chown vpn-bot:vpn-bot "${INSTALL_DIR}/src/bot.log" || true
+  chown vpn-bot:vpn-bot "${INSTALL_DIR}/src/bot.log"
 
+  # Create service file
   create_service_file
 
+  # Enable and start service
   print_color yellow "Enabling and starting service..."
   systemctl enable "${SERVICE_NAME}" >/dev/null 2>&1 || true
   systemctl start "${SERVICE_NAME}"
 
+  # Save settings
   save_conf
 
   print_color blue "--- Installation Complete ---"
@@ -351,18 +408,15 @@ update_bot() {
   }
 
   print_color yellow "Updating Python deps..."
-  activate_venv
-  pip install --upgrade pip >/dev/null 2>&1 || true
-  if [ -f "${INSTALL_DIR}/requirements.txt" ]; then
-    pip install -r "${INSTALL_DIR}/requirements.txt" >/dev/null 2>&1 || true
-  fi
-  deactivate_venv
+  sudo -u vpn-bot bash -c "cd ${INSTALL_DIR} && source venv/bin/activate && pip install --upgrade pip >/dev/null 2>&1 && pip install -r requirements.txt >/dev/null 2>&1" || true
 
   if [ -f "${INSTALL_DIR}/src/bot/keboards.py" ] && [ ! -f "${INSTALL_DIR}/src/bot/keyboards.py" ]; then
     print_color yellow "Renaming keboards.py -> keyboards.py"
     mv "${INSTALL_DIR}/src/bot/keboards.py" "${INSTALL_DIR}/src/bot/keyboards.py" || true
   fi
 
+  # Ensure correct ownership after update
+  chown -R vpn-bot:vpn-bot "${INSTALL_DIR}"
   touch "${INSTALL_DIR}/src/bot.log"
   chown vpn-bot:vpn-bot "${INSTALL_DIR}/src/bot.log" || true
   chmod 640 "${INSTALL_DIR}/src/config.py" || true
