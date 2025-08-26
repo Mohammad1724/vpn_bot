@@ -34,8 +34,8 @@ escape_sed() { echo "$1" | sed -e 's/[\/&]/\\&/g'; }
 
 ensure_deps() {
   print_color yellow "Installing system dependencies (python3, venv, git, sqlite3)..."
-  apt-get update -y >/dev/null 2>&1 || print_color red "Warning: apt-get update failed, continuing anyway"
-  apt-get install -y python3 python3-pip python3-venv curl git sqlite3 || {
+  apt-get update -y >/dev/null 2>&1 || print_color yellow "Warning: apt-get update failed, continuing anyway"
+  apt-get install -y python3 python3-pip python3-venv curl git sqlite3 rsync >/dev/null 2>&1 || {
     print_color red "Failed to install system dependencies. Please install them manually and try again."
     exit 1
   }
@@ -189,6 +189,7 @@ configure_config_py() {
   if [[ "$ENABLE_TRIAL" =~ ^[Yy]$ ]]; then
     sed -i "s|^ENABLE_FREE_TRIAL = .*|ENABLE_FREE_TRIAL = True|" "$CONFIG_FILE"
   else
+
     sed -i "s|^ENABLE_FREE_TRIAL = .*|ENABLE_FREE_TRIAL = False|" "$CONFIG_FILE"
   fi
   
@@ -261,142 +262,225 @@ install_or_reinstall() {
   load_conf
   ensure_install_dir_vars
 
-  # Create system user first
+  # اطمینان از ساخت دایرکتوری نصب در صورت عدم وجود
+  mkdir -p "$INSTALL_DIR" || {
+    print_color red "خطا: نمی‌توان دایرکتوری نصب را ایجاد کرد: ${INSTALL_DIR}"
+    exit 1
+  }
+
+  # ایجاد کاربر سیستم 
   create_system_user
 
-  if [ -d "$INSTALL_DIR" ]; then
-    print_color yellow "Previous installation found at ${INSTALL_DIR}."
-    read -rp "Reuse previous config.py and database? [y/N]: " REUSE_CONFIG
+  # بررسی نصب قبلی و پشتیبان‌گیری
+  if [ -d "${INSTALL_DIR}/.git" ] || [ -f "${INSTALL_DIR}/src/config.py" ]; then
+    print_color yellow "نصب قبلی در ${INSTALL_DIR} یافت شد."
+    read -rp "استفاده مجدد از تنظیمات و پایگاه داده قبلی؟ [y/N]: " REUSE_CONFIG
     REUSE_CONFIG=${REUSE_CONFIG:-N}
-    print_color yellow "Stopping existing service..."
+    
+    print_color yellow "توقف سرویس موجود..."
     systemctl stop "${SERVICE_NAME}" || true
+    sleep 2  # مکث کوتاه برای اطمینان از توقف کامل
 
+    # پشتیبان‌گیری از فایل‌های مهم
     if [[ "$REUSE_CONFIG" =~ ^[Yy]$ ]]; then
       BACKUP_DIR="/tmp/vpn-bot-backup-$(date +%s)"
       mkdir -p "$BACKUP_DIR"
+      
+      print_color yellow "در حال تهیه پشتیبان از فایل‌های مهم..."
+      
+      # پشتیبان‌گیری از config.py
       if [ -f "${INSTALL_DIR}/src/config.py" ]; then
-        print_color yellow "Backing up config.py..."
-        cp "${INSTALL_DIR}/src/config.py" "${BACKUP_DIR}/config.py"
+        print_color yellow "پشتیبان‌گیری از config.py..."
+        cp -f "${INSTALL_DIR}/src/config.py" "${BACKUP_DIR}/config.py" || 
+          print_color red "خطا در کپی config.py"
+      else
+        print_color yellow "فایل config.py یافت نشد!"
       fi
+      
+      # پشتیبان‌گیری از دیتابیس
       if [ -f "${INSTALL_DIR}/src/vpn_bot.db" ]; then
-        print_color yellow "Backing up database..."
-        cp "${INSTALL_DIR}/src/vpn_bot.db" "${BACKUP_DIR}/vpn_bot.db"
+        print_color yellow "پشتیبان‌گیری از پایگاه داده..."
+        cp -f "${INSTALL_DIR}/src/vpn_bot.db" "${BACKUP_DIR}/vpn_bot.db" || 
+          print_color red "خطا در کپی دیتابیس"
+        
+        # یک کپی اضافی به عنوان محافظت
+        cp -f "${INSTALL_DIR}/src/vpn_bot.db" "/root/vpn_bot_db_$(date +%Y%m%d_%H%M%S).db" || true
+      else
+        print_color yellow "فایل دیتابیس یافت نشد!"
       fi
-      print_color green "Temporary backup saved to ${BACKUP_DIR}."
+      
+      print_color green "پشتیبان موقت در ${BACKUP_DIR} ذخیره شد."
     fi
-    print_color yellow "Removing previous installation..."
-    rm -rf "$INSTALL_DIR"
   fi
 
-  print_color yellow "Cloning repository (branch: ${GIT_BRANCH})..."
-  git clone --branch "${GIT_BRANCH}" --single-branch "$GITHUB_REPO" "$INSTALL_DIR" || {
-    print_color red "git clone failed. Check branch name: ${GIT_BRANCH}"; exit 1;
-  }
-  
-  # Set ownership immediately after clone
-  print_color yellow "Setting correct ownership..."
-  chown -R vpn-bot:vpn-bot "${INSTALL_DIR}"
-  
-  cd "$INSTALL_DIR" || {
-    print_color red "Failed to cd into ${INSTALL_DIR}"; exit 1;
+  # حذف نصب قبلی (اما نه پشتیبان)
+  if [ -d "$INSTALL_DIR" ]; then
+    print_color yellow "حذف نصب قبلی..."
+    
+    # حذف محیط مجازی به صورت جداگانه برای اطمینان
+    if [ -d "${INSTALL_DIR}/venv" ]; then
+      print_color yellow "حذف محیط مجازی قبلی..."
+      rm -rf "${INSTALL_DIR}/venv"
+    fi
+    
+    # حذف کامل با استثنای فایل‌های مهم
+    find "$INSTALL_DIR" -mindepth 1 -not -path "${INSTALL_DIR}/src/vpn_bot.db" | xargs rm -rf || {
+      print_color red "خطا در حذف نصب قبلی. تلاش برای حذف کامل..."
+      rm -rf "$INSTALL_DIR"
+      mkdir -p "$INSTALL_DIR"
+    }
+  fi
+
+  # ایجاد مجدد دایرکتوری (اگر حذف کامل شده)
+  mkdir -p "$INSTALL_DIR" || {
+    print_color red "خطا: نمی‌توان دایرکتوری نصب را ایجاد کرد."
+    exit 1
   }
 
-  print_color yellow "Creating Python venv and installing dependencies..."
-  
-  # Create Python venv directly (not as vpn-bot user)
-  print_color yellow "Creating Python virtual environment..."
-  python3 -m venv venv
+  # تنظیم مالکیت اولیه
+  chown -R vpn-bot:vpn-bot "$INSTALL_DIR"
+  chmod -R 775 "$INSTALL_DIR"
 
-  # Allow vpn-bot to write to the venv
+  # کلون مخزن
+  print_color yellow "کلون مخزن (شاخه: ${GIT_BRANCH})..."
+  git clone --branch "${GIT_BRANCH}" --single-branch "$GITHUB_REPO" "${INSTALL_DIR}.tmp" || {
+    print_color red "خطا: کلون گیت شکست خورد. شاخه را بررسی کنید: ${GIT_BRANCH}"
+    exit 1
+  }
+  
+  # انتقال فایل‌ها به دایرکتوری نصب
+  print_color yellow "انتقال فایل‌ها به محل نصب..."
+  rsync -a "${INSTALL_DIR}.tmp/" "$INSTALL_DIR/" || {
+    print_color red "خطا در انتقال فایل‌ها. استفاده از روش جایگزین..."
+    cp -rf "${INSTALL_DIR}.tmp/"* "$INSTALL_DIR/" || {
+      print_color red "خطای کپی فایل‌ها."
+      exit 1
+    }
+  }
+  
+  # پاکسازی دایرکتوری موقت
+  rm -rf "${INSTALL_DIR}.tmp"
+  
+  # تنظیم مجوزها
+  print_color yellow "تنظیم مجوزها..."
+  chown -R vpn-bot:vpn-bot "$INSTALL_DIR"
+  
+  # ایجاد محیط مجازی پایتون
+  print_color yellow "ایجاد محیط مجازی پایتون و نصب وابستگی‌ها..."
+  python3 -m venv "${INSTALL_DIR}/venv" || {
+    print_color red "خطا در ایجاد محیط مجازی."
+    exit 1
+  }
+  
+  # تنظیم مالکیت محیط مجازی
   chown -R vpn-bot:vpn-bot "${INSTALL_DIR}/venv"
   
-  # Check requirements.txt
-  if [ ! -f "requirements.txt" ]; then
-    print_color red "requirements.txt not found in ${INSTALL_DIR}."
-    exit 1
-  fi
-  
-  # Install dependencies directly, not as vpn-bot user
-  print_color yellow "Installing Python dependencies..."
-  "${INSTALL_DIR}/venv/bin/pip" install --upgrade pip
-  "${INSTALL_DIR}/venv/bin/pip" install -r requirements.txt || {
-    print_color red "Failed to install Python packages."
+  # نصب وابستگی‌ها
+  ${INSTALL_DIR}/venv/bin/pip install --upgrade pip || print_color yellow "خطا در بروزرسانی pip"
+  ${INSTALL_DIR}/venv/bin/pip install -r "${INSTALL_DIR}/requirements.txt" || {
+    print_color red "خطا در نصب وابستگی‌های پایتون."
     exit 1
   }
 
-  # Fix filename issue
+  # بررسی وجود فایل requirements.txt
+  if [ ! -f "${INSTALL_DIR}/requirements.txt" ]; then
+    print_color red "خطا: requirements.txt یافت نشد."
+    exit 1
+  fi
+
+  # اصلاح نام فایل keyboard در صورت نیاز
   if [ -f "${INSTALL_DIR}/src/bot/keboards.py" ] && [ ! -f "${INSTALL_DIR}/src/bot/keyboards.py" ]; then
-    print_color yellow "Renaming keboards.py -> keyboards.py"
+    print_color yellow "تغییر نام keboards.py به keyboards.py"
     mv "${INSTALL_DIR}/src/bot/keboards.py" "${INSTALL_DIR}/src/bot/keyboards.py" || true
   fi
   
-  # Create backups directory
+  # ایجاد دایرکتوری backups
   mkdir -p "${INSTALL_DIR}/backups"
+  chown vpn-bot:vpn-bot "${INSTALL_DIR}/backups"
 
-  # Restore or configure
+  # بازیابی یا پیکربندی تنظیمات
+  mkdir -p "${INSTALL_DIR}/src"
   if [[ "${REUSE_CONFIG:-N}" =~ ^[Yy]$ ]] && [ -n "${BACKUP_DIR:-}" ]; then
-    print_color yellow "Restoring previous config and database..."
+    print_color yellow "بازیابی تنظیمات و پایگاه داده قبلی..."
+    
+    # بازیابی config.py
     if [ -f "${BACKUP_DIR}/config.py" ]; then
-      print_color yellow "Restoring config.py..."
-      cp "${BACKUP_DIR}/config.py" "${INSTALL_DIR}/src/config.py"
+      print_color yellow "بازیابی config.py..."
+      cp -f "${BACKUP_DIR}/config.py" "${INSTALL_DIR}/src/config.py"
+      chown vpn-bot:vpn-bot "${INSTALL_DIR}/src/config.py"
       chmod 640 "${INSTALL_DIR}/src/config.py"
+    else
+      print_color yellow "فایل config.py در پشتیبان یافت نشد. نیاز به پیکربندی جدید..."
+      configure_config_py
     fi
+    
+    # بازیابی دیتابیس
     if [ -f "${BACKUP_DIR}/vpn_bot.db" ]; then
-      print_color yellow "Restoring database..."
-      cp "${BACKUP_DIR}/vpn_bot.db" "${INSTALL_DIR}/src/vpn_bot.db"
+      print_color yellow "بازیابی پایگاه داده..."
+      cp -f "${BACKUP_DIR}/vpn_bot.db" "${INSTALL_DIR}/src/vpn_bot.db"
+      chown vpn-bot:vpn-bot "${INSTALL_DIR}/src/vpn_bot.db"
+      chmod 640 "${INSTALL_DIR}/src/vpn_bot.db"
     fi
-    print_color yellow "Checking for missing config keys..."
+    
+    # بررسی کلیدهای گم شده
+    print_color yellow "بررسی تنظیمات گمشده..."
     append_missing_keys_if_any
-    rm -rf "${BACKUP_DIR}"
+    
+    # پاکسازی پشتیبان موقت
+    rm -rf "${BACKUP_DIR}" || true
   else
-    print_color blue "--- Bot Configuration ---"
+    print_color blue "--- پیکربندی ربات ---"
     configure_config_py
   fi
 
-  # Ensure correct ownership and permissions
-  print_color yellow "Setting correct permissions..."
+  # اطمینان از مجوزهای صحیح
+  print_color yellow "تنظیم مجوزهای نهایی..."
   chown -R vpn-bot:vpn-bot "${INSTALL_DIR}"
   chmod 640 "${INSTALL_DIR}/src/config.py" || true
+  [ -f "${INSTALL_DIR}/src/vpn_bot.db" ] && chmod 640 "${INSTALL_DIR}/src/vpn_bot.db" || true
 
-  # Validate config
-  print_color yellow "Validating configuration..."
+  # بررسی اعتبار تنظیمات
+  print_color yellow "بررسی اعتبار تنظیمات..."
   if ! validate_config_offline; then
-    print_color red "Config validation failed. Please reconfigure..."
+    print_color red "خطا در اعتبارسنجی تنظیمات. لطفا مجددا پیکربندی کنید..."
     configure_config_py
   else
-    print_color green "config.py offline validation passed."
+    print_color green "بررسی آفلاین config.py موفقیت‌آمیز بود."
   fi
 
-  # Check token online
-  print_color yellow "Testing Telegram token online..."
+  # بررسی آنلاین توکن تلگرام
+  print_color yellow "بررسی آنلاین توکن تلگرام..."
   if validate_token_online; then
-    print_color green "Telegram token online check passed."
+    print_color green "بررسی آنلاین توکن تلگرام موفقیت‌آمیز بود."
   else
-    print_color yellow "Warning: Telegram getMe failed. Continuing anyway..."
+    print_color yellow "هشدار: بررسی توکن تلگرام ناموفق بود. به هر حال ادامه می‌دهیم..."
   fi
 
-  # Create log file
-  print_color yellow "Creating log file..."
+  # ایجاد فایل لاگ
+  print_color yellow "ایجاد فایل لاگ..."
   touch "${INSTALL_DIR}/src/bot.log"
   chown vpn-bot:vpn-bot "${INSTALL_DIR}/src/bot.log"
+  chmod 664 "${INSTALL_DIR}/src/bot.log"
 
-  # Create service file
+  # ایجاد فایل سرویس
   create_service_file
 
-  # Enable and start service
-  print_color yellow "Enabling and starting service..."
-  systemctl enable "${SERVICE_NAME}"
-  systemctl start "${SERVICE_NAME}" || {
-    print_color red "Failed to start service. Check logs with: journalctl -u ${SERVICE_NAME}"
+  # فعال‌سازی و شروع سرویس
+  print_color yellow "فعال‌سازی و شروع سرویس..."
+  systemctl daemon-reload
+  systemctl enable "${SERVICE_NAME}" || true
+  systemctl restart "${SERVICE_NAME}" || {
+    print_color red "خطا در شروع سرویس. لاگ‌ها را بررسی کنید: journalctl -u ${SERVICE_NAME}"
+    exit 1
   }
 
-  # Save settings
+  # ذخیره تنظیمات
   save_conf
 
-  print_color blue "--- Installation Complete ---"
-  print_color green "Service '${SERVICE_NAME}' installed and started."
-  print_color yellow "Status: systemctl status ${SERVICE_NAME}"
-  print_color yellow "Live logs: journalctl -u ${SERVICE_NAME} -f"
+  print_color blue "--- نصب کامل شد ---"
+  print_color green "سرویس '${SERVICE_NAME}' شروع شد."
+  print_color yellow "وضعیت: systemctl status ${SERVICE_NAME}"
+  print_color yellow "لاگ زنده: journalctl -u ${SERVICE_NAME} -f"
 }
 
 update_bot() {
@@ -455,9 +539,7 @@ update_bot() {
 restart_bot() {
   ensure_root
   print_color yellow "Restarting service..."
-  systemctl restart "${SERVICE_NAME}" || {
-    print_color red "Failed to restart service. Check logs with: journalctl -u ${SERVICE_NAME}"
-  }
+  systemctl restart "${SERVICE_NAME}" || true
   print_color green "Done."
 }
 
