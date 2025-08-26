@@ -25,7 +25,7 @@ pause() { read -rp "Press Enter to continue..." _; }
 
 ensure_root() {
   if [ "$(id -u)" -ne "0" ]; then
-    print_color red "Run as root. Example: sudo bash install.sh"
+    print_color red "Please run as root. Example: sudo bash install.sh"
     exit 1
   fi
 }
@@ -33,7 +33,7 @@ ensure_root() {
 escape_sed() { echo "$1" | sed -e 's/[\/&]/\\&/g'; }
 
 ensure_deps() {
-  print_color yellow "Installing system dependencies (python3, venv, git, sqlite3)..."
+  print_color yellow "Installing system dependencies (python3, venv, git, sqlite3, rsync)..."
   apt-get update -y >/dev/null 2>&1 || print_color yellow "Warning: apt-get update failed, continuing anyway"
   apt-get install -y python3 python3-pip python3-venv curl git sqlite3 rsync >/dev/null 2>&1 || {
     print_color red "Failed to install system dependencies. Please install them manually and try again."
@@ -71,7 +71,7 @@ create_system_user() {
   fi
   if ! id -u vpn-bot >/dev/null 2>&1; then
     print_color yellow "Creating system user 'vpn-bot'..."
-    useradd --system --home "${INSTALL_DIR:-/opt/vpn-bot}" --shell /usr/sbin/nologin --gid vpn-bot vpn-bot
+    useradd --system --home "${INSTALL_DIR:-/opt/vpn-bot}" --shell /usr/sbin/nologin --gid vpn-bot vpn-bot || true
   fi
 }
 
@@ -80,15 +80,17 @@ create_service_file() {
   cat > "$SERVICE_FILE" << EOL
 [Unit]
 Description=Hiddify Telegram Bot Service
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
+Type=simple
 User=vpn-bot
 Group=vpn-bot
 WorkingDirectory=${INSTALL_DIR}/src
-ExecStart=${INSTALL_DIR}/venv/bin/python main_bot.py
-Restart=always
-RestartSec=10
+ExecStart=${INSTALL_DIR}/venv/bin/python ${INSTALL_DIR}/src/main_bot.py
+Restart=on-failure
+RestartSec=5
 Environment=PYTHONUNBUFFERED=1
 
 [Install]
@@ -117,16 +119,27 @@ validate_numeric_id() {
   [[ "$id" =~ ^[0-9]+$ ]]
 }
 
+# helper: set or add a key in config.py
+set_or_add_py_key() {
+  local file="$1"; local key="$2"; local value="$3"
+  if grep -qE "^[[:space:]]*${key}[[:space:]]*=" "$file"; then
+    sed -i -E "s|^[[:space:]]*${key}[[:space:]]*=.*|${key} = ${value}|" "$file"
+  else
+    echo "${key} = ${value}" >> "$file"
+  fi
+}
+
 configure_config_py() {
   local CONFIG_FILE="${INSTALL_DIR}/src/config.py"
   local TEMPLATE_FILE="${INSTALL_DIR}/src/config_template.py"
 
   if [ ! -f "$CONFIG_FILE" ]; then
-    if [ ! -f "$TEMPLATE_FILE" ]; then
+    if [ -f "$TEMPLATE_FILE" ]; then
+      cp "$TEMPLATE_FILE" "$CONFIG_FILE"
+    else
       print_color red "Missing template file: ${TEMPLATE_FILE}"
       exit 1
     fi
-    cp "$TEMPLATE_FILE" "$CONFIG_FILE"
   fi
 
   local prev_token; prev_token=$(awk -F= '/^BOT_TOKEN/ {print $2}' "$CONFIG_FILE" | tr -d ' "')
@@ -146,7 +159,7 @@ configure_config_py() {
   while true; do
     read -rp "Telegram Admin ID (numeric) [${prev_admin_id}]: " ADMIN_ID
     ADMIN_ID=${ADMIN_ID:-$prev_admin_id}
-    if validate_numeric_id "$ADMIN_ID"; then break; else print_color yellow "Invalid admin ID."; fi
+    if validate_numeric_id "$ADMIN_ID"; then break; else print_color yellow "Invalid admin ID (numeric only)."; fi
   done
 
   read -rp "Hiddify panel domain [${prev_domain}]: " PANEL_DOMAIN; PANEL_DOMAIN=${PANEL_DOMAIN:-$prev_domain}
@@ -172,30 +185,29 @@ configure_config_py() {
   local API_KEY_E; API_KEY_E=$(escape_sed "$API_KEY")
   local SUPPORT_USERNAME_E; SUPPORT_USERNAME_E=$(escape_sed "$SUPPORT_USERNAME")
 
-  sed -i "s|^BOT_TOKEN = .*|BOT_TOKEN = \"${BOT_TOKEN_E}\"|" "$CONFIG_FILE"
-  sed -i "s|^ADMIN_ID = .*|ADMIN_ID = ${ADMIN_ID}|" "$CONFIG_FILE"
-  sed -i "s|^PANEL_DOMAIN = .*|PANEL_DOMAIN = \"${PANEL_DOMAIN_E}\"|" "$CONFIG_FILE"
-  sed -i "s|^ADMIN_PATH = .*|ADMIN_PATH = \"${ADMIN_PATH_E}\"|" "$CONFIG_FILE"
-  sed -i "s|^SUB_PATH = .*|SUB_PATH = \"${SUB_PATH_E}\"|" "$CONFIG_FILE"
-  sed -i "s|^API_KEY = .*|API_KEY = \"${API_KEY_E}\"|" "$CONFIG_FILE"
-  sed -i "s|^SUPPORT_USERNAME = .*|SUPPORT_USERNAME = \"${SUPPORT_USERNAME_E}\"|" "$CONFIG_FILE"
-  
+  set_or_add_py_key "$CONFIG_FILE" "BOT_TOKEN" "\"${BOT_TOKEN_E}\""
+  set_or_add_py_key "$CONFIG_FILE" "ADMIN_ID" "${ADMIN_ID}"
+  set_or_add_py_key "$CONFIG_FILE" "PANEL_DOMAIN" "\"${PANEL_DOMAIN_E}\""
+  set_or_add_py_key "$CONFIG_FILE" "ADMIN_PATH" "\"${ADMIN_PATH_E}\""
+  set_or_add_py_key "$CONFIG_FILE" "SUB_PATH" "\"${SUB_PATH_E}\""
+  set_or_add_py_key "$CONFIG_FILE" "API_KEY" "\"${API_KEY_E}\""
+  set_or_add_py_key "$CONFIG_FILE" "SUPPORT_USERNAME" "\"${SUPPORT_USERNAME_E}\""
+
   if [ -n "$SUB_DOMAINS_INPUT" ]; then
     local SUB_DOMAINS_FORMATTED
     SUB_DOMAINS_FORMATTED=$(echo "$SUB_DOMAINS_INPUT" | sed 's/,/", "/g' | sed 's/^/["/' | sed 's/$/"]/')
-    sed -i "s|^SUBSCRIPTION_DOMAINS = .*|SUBSCRIPTION_DOMAINS = ${SUB_DOMAINS_FORMATTED}|" "$CONFIG_FILE"
+    set_or_add_py_key "$CONFIG_FILE" "SUBSCRIPTION_DOMAINS" "${SUB_DOMAINS_FORMATTED}"
   fi
-  
-  if [[ "$ENABLE_TRIAL" =~ ^[Yy]$ ]]; then
-    sed -i "s|^ENABLE_FREE_TRIAL = .*|ENABLE_FREE_TRIAL = True|" "$CONFIG_FILE"
-  else
 
-    sed -i "s|^ENABLE_FREE_TRIAL = .*|ENABLE_FREE_TRIAL = False|" "$CONFIG_FILE"
+  if [[ "$ENABLE_TRIAL" =~ ^[Yy]$ ]]; then
+    set_or_add_py_key "$CONFIG_FILE" "ENABLE_FREE_TRIAL" "True"
+  else
+    set_or_add_py_key "$CONFIG_FILE" "ENABLE_FREE_TRIAL" "False"
   fi
-  
-  sed -i "s|^REFERRAL_BONUS_AMOUNT = .*|REFERRAL_BONUS_AMOUNT = ${REFERRAL_BONUS_INPUT}|" "$CONFIG_FILE"
-  sed -i "s|^EXPIRY_REMINDER_DAYS = .*|EXPIRY_REMINDER_DAYS = ${EXPIRY_REMINDER_INPUT}|" "$CONFIG_FILE"
-  sed -i "s|^USAGE_ALERT_THRESHOLD = .*|USAGE_ALERT_THRESHOLD = ${USAGE_ALERT_INPUT}|" "$CONFIG_FILE"
+
+  set_or_add_py_key "$CONFIG_FILE" "REFERRAL_BONUS_AMOUNT" "${REFERRAL_BONUS_INPUT}"
+  set_or_add_py_key "$CONFIG_FILE" "EXPIRY_REMINDER_DAYS" "${EXPIRY_REMINDER_INPUT}"
+  set_or_add_py_key "$CONFIG_FILE" "USAGE_ALERT_THRESHOLD" "${USAGE_ALERT_INPUT}"
 
   chown vpn-bot:vpn-bot "$CONFIG_FILE"
   chmod 640 "$CONFIG_FILE"
@@ -262,225 +274,153 @@ install_or_reinstall() {
   load_conf
   ensure_install_dir_vars
 
-  # اطمینان از ساخت دایرکتوری نصب در صورت عدم وجود
+  # Ensure install dir exists
   mkdir -p "$INSTALL_DIR" || {
-    print_color red "خطا: نمی‌توان دایرکتوری نصب را ایجاد کرد: ${INSTALL_DIR}"
+    print_color red "Error: cannot create install directory: ${INSTALL_DIR}"
     exit 1
   }
 
-  # ایجاد کاربر سیستم 
+  # Create system user/group
   create_system_user
 
-  # بررسی نصب قبلی و پشتیبان‌گیری
-  if [ -d "${INSTALL_DIR}/.git" ] || [ -f "${INSTALL_DIR}/src/config.py" ]; then
-    print_color yellow "نصب قبلی در ${INSTALL_DIR} یافت شد."
-    read -rp "استفاده مجدد از تنظیمات و پایگاه داده قبلی؟ [y/N]: " REUSE_CONFIG
-    REUSE_CONFIG=${REUSE_CONFIG:-N}
-    
-    print_color yellow "توقف سرویس موجود..."
-    systemctl stop "${SERVICE_NAME}" || true
-    sleep 2  # مکث کوتاه برای اطمینان از توقف کامل
+  # Detect previous install
+  local PREV=0
+  if [ -d "${INSTALL_DIR}/.git" ] || [ -f "${INSTALL_DIR}/src/config.py" ] || [ -d "${INSTALL_DIR}/src" ]; then
+    PREV=1
+  fi
 
-    # پشتیبان‌گیری از فایل‌های مهم
+  if [ "$PREV" -eq 1 ]; then
+    print_color yellow "Previous installation found at ${INSTALL_DIR}."
+    read -rp "Reuse previous config and database? [y/N]: " REUSE_CONFIG
+    REUSE_CONFIG=${REUSE_CONFIG:-N}
+
+    print_color yellow "Stopping existing service..."
+    systemctl stop "${SERVICE_NAME}" || true
+    sleep 1
+
     if [[ "$REUSE_CONFIG" =~ ^[Yy]$ ]]; then
       BACKUP_DIR="/tmp/vpn-bot-backup-$(date +%s)"
       mkdir -p "$BACKUP_DIR"
-      
-      print_color yellow "در حال تهیه پشتیبان از فایل‌های مهم..."
-      
-      # پشتیبان‌گیری از config.py
-      if [ -f "${INSTALL_DIR}/src/config.py" ]; then
-        print_color yellow "پشتیبان‌گیری از config.py..."
-        cp -f "${INSTALL_DIR}/src/config.py" "${BACKUP_DIR}/config.py" || 
-          print_color red "خطا در کپی config.py"
-      else
-        print_color yellow "فایل config.py یافت نشد!"
-      fi
-      
-      # پشتیبان‌گیری از دیتابیس
-      if [ -f "${INSTALL_DIR}/src/vpn_bot.db" ]; then
-        print_color yellow "پشتیبان‌گیری از پایگاه داده..."
-        cp -f "${INSTALL_DIR}/src/vpn_bot.db" "${BACKUP_DIR}/vpn_bot.db" || 
-          print_color red "خطا در کپی دیتابیس"
-        
-        # یک کپی اضافی به عنوان محافظت
-        cp -f "${INSTALL_DIR}/src/vpn_bot.db" "/root/vpn_bot_db_$(date +%Y%m%d_%H%M%S).db" || true
-      else
-        print_color yellow "فایل دیتابیس یافت نشد!"
-      fi
-      
-      print_color green "پشتیبان موقت در ${BACKUP_DIR} ذخیره شد."
+      print_color yellow "Backing up important files to ${BACKUP_DIR}..."
+      [ -f "${INSTALL_DIR}/src/config.py" ] && cp -f "${INSTALL_DIR}/src/config.py" "${BACKUP_DIR}/config.py" || print_color yellow "config.py not found to backup."
+      [ -f "${INSTALL_DIR}/src/vpn_bot.db" ] && cp -f "${INSTALL_DIR}/src/vpn_bot.db" "${BACKUP_DIR}/vpn_bot.db" || print_color yellow "vpn_bot.db not found to backup."
+      [ -f "${INSTALL_DIR}/src/vpn_bot.db" ] && cp -f "${INSTALL_DIR}/src/vpn_bot.db" "/root/vpn_bot_db_$(date +%Y%m%d_%H%M%S).db" || true
+      print_color green "Temporary backup saved at ${BACKUP_DIR}."
     fi
+
+    print_color yellow "Removing previous installation..."
+    rm -rf "${INSTALL_DIR}"
   fi
 
-  # حذف نصب قبلی (اما نه پشتیبان)
-  if [ -d "$INSTALL_DIR" ]; then
-    print_color yellow "حذف نصب قبلی..."
-    
-    # حذف محیط مجازی به صورت جداگانه برای اطمینان
-    if [ -d "${INSTALL_DIR}/venv" ]; then
-      print_color yellow "حذف محیط مجازی قبلی..."
-      rm -rf "${INSTALL_DIR}/venv"
-    fi
-    
-    # حذف کامل با استثنای فایل‌های مهم
-    find "$INSTALL_DIR" -mindepth 1 -not -path "${INSTALL_DIR}/src/vpn_bot.db" | xargs rm -rf || {
-      print_color red "خطا در حذف نصب قبلی. تلاش برای حذف کامل..."
-      rm -rf "$INSTALL_DIR"
-      mkdir -p "$INSTALL_DIR"
-    }
-  fi
-
-  # ایجاد مجدد دایرکتوری (اگر حذف کامل شده)
-  mkdir -p "$INSTALL_DIR" || {
-    print_color red "خطا: نمی‌توان دایرکتوری نصب را ایجاد کرد."
+  # Fresh clone
+  print_color yellow "Cloning repository (branch: ${GIT_BRANCH})..."
+  git clone --branch "${GIT_BRANCH}" --single-branch "$GITHUB_REPO" "${INSTALL_DIR}" || {
+    print_color red "Git clone failed. Check the branch name: ${GIT_BRANCH}"
     exit 1
   }
 
-  # تنظیم مالکیت اولیه
+  # Permissions on code
   chown -R vpn-bot:vpn-bot "$INSTALL_DIR"
   chmod -R 775 "$INSTALL_DIR"
 
-  # کلون مخزن
-  print_color yellow "کلون مخزن (شاخه: ${GIT_BRANCH})..."
-  git clone --branch "${GIT_BRANCH}" --single-branch "$GITHUB_REPO" "${INSTALL_DIR}.tmp" || {
-    print_color red "خطا: کلون گیت شکست خورد. شاخه را بررسی کنید: ${GIT_BRANCH}"
-    exit 1
-  }
-  
-  # انتقال فایل‌ها به دایرکتوری نصب
-  print_color yellow "انتقال فایل‌ها به محل نصب..."
-  rsync -a "${INSTALL_DIR}.tmp/" "$INSTALL_DIR/" || {
-    print_color red "خطا در انتقال فایل‌ها. استفاده از روش جایگزین..."
-    cp -rf "${INSTALL_DIR}.tmp/"* "$INSTALL_DIR/" || {
-      print_color red "خطای کپی فایل‌ها."
-      exit 1
-    }
-  }
-  
-  # پاکسازی دایرکتوری موقت
-  rm -rf "${INSTALL_DIR}.tmp"
-  
-  # تنظیم مجوزها
-  print_color yellow "تنظیم مجوزها..."
-  chown -R vpn-bot:vpn-bot "$INSTALL_DIR"
-  
-  # ایجاد محیط مجازی پایتون
-  print_color yellow "ایجاد محیط مجازی پایتون و نصب وابستگی‌ها..."
-  python3 -m venv "${INSTALL_DIR}/venv" || {
-    print_color red "خطا در ایجاد محیط مجازی."
-    exit 1
-  }
-  
-  # تنظیم مالکیت محیط مجازی
-  chown -R vpn-bot:vpn-bot "${INSTALL_DIR}/venv"
-  
-  # نصب وابستگی‌ها
-  ${INSTALL_DIR}/venv/bin/pip install --upgrade pip || print_color yellow "خطا در بروزرسانی pip"
-  ${INSTALL_DIR}/venv/bin/pip install -r "${INSTALL_DIR}/requirements.txt" || {
-    print_color red "خطا در نصب وابستگی‌های پایتون."
-    exit 1
-  }
-
-  # بررسی وجود فایل requirements.txt
+  # Ensure requirements exist before install
   if [ ! -f "${INSTALL_DIR}/requirements.txt" ]; then
-    print_color red "خطا: requirements.txt یافت نشد."
+    print_color red "requirements.txt not found in the repository."
     exit 1
   fi
 
-  # اصلاح نام فایل keyboard در صورت نیاز
+  # Python venv and deps
+  print_color yellow "Creating Python virtual environment and installing dependencies..."
+  python3 -m venv "${INSTALL_DIR}/venv" || {
+    print_color red "Failed to create Python virtual environment."
+    exit 1
+  }
+  chown -R vpn-bot:vpn-bot "${INSTALL_DIR}/venv"
+
+  "${INSTALL_DIR}/venv/bin/pip" install --upgrade pip || print_color yellow "Failed to upgrade pip (continuing)."
+  "${INSTALL_DIR}/venv/bin/pip" install -r "${INSTALL_DIR}/requirements.txt" || {
+    print_color red "Failed to install Python dependencies."
+    exit 1
+  }
+
+  # Rename typo if exists
   if [ -f "${INSTALL_DIR}/src/bot/keboards.py" ] && [ ! -f "${INSTALL_DIR}/src/bot/keyboards.py" ]; then
-    print_color yellow "تغییر نام keboards.py به keyboards.py"
+    print_color yellow "Renaming keboards.py -> keyboards.py"
     mv "${INSTALL_DIR}/src/bot/keboards.py" "${INSTALL_DIR}/src/bot/keyboards.py" || true
   fi
-  
-  # ایجاد دایرکتوری backups
+
+  # backups dir
   mkdir -p "${INSTALL_DIR}/backups"
   chown vpn-bot:vpn-bot "${INSTALL_DIR}/backups"
 
-  # بازیابی یا پیکربندی تنظیمات
+  # Restore or configure
   mkdir -p "${INSTALL_DIR}/src"
   if [[ "${REUSE_CONFIG:-N}" =~ ^[Yy]$ ]] && [ -n "${BACKUP_DIR:-}" ]; then
-    print_color yellow "بازیابی تنظیمات و پایگاه داده قبلی..."
-    
-    # بازیابی config.py
+    print_color yellow "Restoring previous config and database..."
     if [ -f "${BACKUP_DIR}/config.py" ]; then
-      print_color yellow "بازیابی config.py..."
       cp -f "${BACKUP_DIR}/config.py" "${INSTALL_DIR}/src/config.py"
-      chown vpn-bot:vpn-bot "${INSTALL_DIR}/src/config.py"
-      chmod 640 "${INSTALL_DIR}/src/config.py"
     else
-      print_color yellow "فایل config.py در پشتیبان یافت نشد. نیاز به پیکربندی جدید..."
+      print_color yellow "config.py was not in the backup. Running interactive configuration..."
       configure_config_py
     fi
-    
-    # بازیابی دیتابیس
+
     if [ -f "${BACKUP_DIR}/vpn_bot.db" ]; then
-      print_color yellow "بازیابی پایگاه داده..."
       cp -f "${BACKUP_DIR}/vpn_bot.db" "${INSTALL_DIR}/src/vpn_bot.db"
-      chown vpn-bot:vpn-bot "${INSTALL_DIR}/src/vpn_bot.db"
-      chmod 640 "${INSTALL_DIR}/src/vpn_bot.db"
     fi
-    
-    # بررسی کلیدهای گم شده
-    print_color yellow "بررسی تنظیمات گمشده..."
+
     append_missing_keys_if_any
-    
-    # پاکسازی پشتیبان موقت
     rm -rf "${BACKUP_DIR}" || true
   else
-    print_color blue "--- پیکربندی ربات ---"
+    print_color blue "--- Configure the bot ---"
     configure_config_py
   fi
 
-  # اطمینان از مجوزهای صحیح
-  print_color yellow "تنظیم مجوزهای نهایی..."
+  # Final perms
   chown -R vpn-bot:vpn-bot "${INSTALL_DIR}"
   chmod 640 "${INSTALL_DIR}/src/config.py" || true
   [ -f "${INSTALL_DIR}/src/vpn_bot.db" ] && chmod 640 "${INSTALL_DIR}/src/vpn_bot.db" || true
 
-  # بررسی اعتبار تنظیمات
-  print_color yellow "بررسی اعتبار تنظیمات..."
+  # Offline validation
+  print_color yellow "Validating config (offline)..."
   if ! validate_config_offline; then
-    print_color red "خطا در اعتبارسنجی تنظیمات. لطفا مجددا پیکربندی کنید..."
+    print_color red "Config validation failed. Re-running configuration..."
     configure_config_py
   else
-    print_color green "بررسی آفلاین config.py موفقیت‌آمیز بود."
+    print_color green "Offline config validation passed."
   fi
 
-  # بررسی آنلاین توکن تلگرام
-  print_color yellow "بررسی آنلاین توکن تلگرام..."
+  # Online token validation (non-fatal)
+  print_color yellow "Validating Telegram token (online)..."
   if validate_token_online; then
-    print_color green "بررسی آنلاین توکن تلگرام موفقیت‌آمیز بود."
+    print_color green "Telegram token looks valid."
   else
-    print_color yellow "هشدار: بررسی توکن تلگرام ناموفق بود. به هر حال ادامه می‌دهیم..."
+    print_color yellow "Warning: Telegram token validation failed (network or token). Continuing anyway..."
   fi
 
-  # ایجاد فایل لاگ
-  print_color yellow "ایجاد فایل لاگ..."
+  # Log file
+  print_color yellow "Creating log file..."
   touch "${INSTALL_DIR}/src/bot.log"
   chown vpn-bot:vpn-bot "${INSTALL_DIR}/src/bot.log"
   chmod 664 "${INSTALL_DIR}/src/bot.log"
 
-  # ایجاد فایل سرویس
+  # Service file
   create_service_file
 
-  # فعال‌سازی و شروع سرویس
-  print_color yellow "فعال‌سازی و شروع سرویس..."
+  # Enable and start
+  print_color yellow "Enabling and starting service..."
   systemctl daemon-reload
   systemctl enable "${SERVICE_NAME}" || true
-  systemctl restart "${SERVICE_NAME}" || {
-    print_color red "خطا در شروع سرویس. لاگ‌ها را بررسی کنید: journalctl -u ${SERVICE_NAME}"
+  if ! systemctl restart "${SERVICE_NAME}"; then
+    print_color red "Failed to start the service. Check logs: journalctl -xeu ${SERVICE_NAME}"
     exit 1
-  }
+  fi
 
-  # ذخیره تنظیمات
   save_conf
 
-  print_color blue "--- نصب کامل شد ---"
-  print_color green "سرویس '${SERVICE_NAME}' شروع شد."
-  print_color yellow "وضعیت: systemctl status ${SERVICE_NAME}"
-  print_color yellow "لاگ زنده: journalctl -u ${SERVICE_NAME} -f"
+  print_color blue "--- Installation completed ---"
+  print_color green "Service '${SERVICE_NAME}' has been started."
+  print_color yellow "Status: systemctl status ${SERVICE_NAME}"
+  print_color yellow "Live logs: journalctl -u ${SERVICE_NAME} -f"
 }
 
 update_bot() {
@@ -509,7 +449,7 @@ update_bot() {
     exit 1
   }
 
-  print_color yellow "Updating Python deps..."
+  print_color yellow "Updating Python dependencies..."
   "${INSTALL_DIR}/venv/bin/pip" install --upgrade pip
   "${INSTALL_DIR}/venv/bin/pip" install -r "${INSTALL_DIR}/requirements.txt" || {
     print_color red "Failed to update Python dependencies."
@@ -520,17 +460,16 @@ update_bot() {
     mv "${INSTALL_DIR}/src/bot/keboards.py" "${INSTALL_DIR}/src/bot/keyboards.py" || true
   fi
 
-  # Ensure correct ownership after update
-  print_color yellow "Setting correct permissions..."
+  print_color yellow "Fixing permissions..."
   chown -R vpn-bot:vpn-bot "${INSTALL_DIR}"
   touch "${INSTALL_DIR}/src/bot.log"
   chown vpn-bot:vpn-bot "${INSTALL_DIR}/src/bot.log" || true
   chmod 640 "${INSTALL_DIR}/src/config.py" || true
 
   print_color yellow "Restarting service..."
-  systemctl start "${SERVICE_NAME}" || {
-    print_color red "Failed to start service after update. Check logs."
-  }
+  if ! systemctl start "${SERVICE_NAME}"; then
+    print_color red "Failed to start service after update. Check logs: journalctl -xeu ${SERVICE_NAME}"
+  fi
 
   save_conf
   print_color green "Update completed."
