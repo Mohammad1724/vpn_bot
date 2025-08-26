@@ -218,7 +218,7 @@ def build_application():
     )
 
     # =========================
-    # Nodes admin conversation (Text filters)
+    # Nodes admin conversation (Text filters) - ONLY nested conv, no extra handler
     # =========================
     nodes_conv = ConversationHandler(
         entry_points=[
@@ -262,7 +262,16 @@ def build_application():
                 MessageHandler(filters.Regex('^👥 مدیریت کاربران$') & admin_filter, admin_users.user_management_menu),
                 MessageHandler(filters.Regex('^🎁 مدیریت کد هدیه$') & admin_filter, admin_gift.gift_code_management_menu),
                 MessageHandler(filters.Regex('^🛑 خاموش کردن ربات$') & admin_filter, admin_c.shutdown_bot),
-                MessageHandler(filters.Text([constants.BTN_MANAGE_NODES]) & admin_filter, admin_nodes.nodes_menu),
+                # مهم: فقط nodes_conv را به‌عنوان Conversation فرزند قرار می‌دهیم
+                nodes_conv,
+                # سایر کانورسیشن‌ها
+                add_plan_conv,
+                edit_plan_conv,
+                trial_settings_conv,
+                gift_code_create_conv,
+                promo_create_conv,
+                referral_bonus_conv,
+
                 CallbackQueryHandler(admin_plans.plan_management_menu, pattern="^admin_plans$"),
                 CallbackQueryHandler(admin_reports.reports_menu, pattern="^admin_reports$"),
                 CallbackQueryHandler(admin_backup.backup_restore_menu, pattern="^admin_backup$"),
@@ -271,14 +280,6 @@ def build_application():
                 CallbackQueryHandler(admin_c.shutdown_bot, pattern="^admin_shutdown$"),
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
                 CallbackQueryHandler(admin_users.admin_delete_service, pattern=r'^admin_delete_service_\d+(_\d+)?$'),
-                # Nested conversations
-                nodes_conv,
-                add_plan_conv,
-                edit_plan_conv,
-                trial_settings_conv,
-                gift_code_create_conv,
-                promo_create_conv,
-                referral_bonus_conv,
             ],
 
             constants.PLAN_MENU: [
