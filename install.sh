@@ -34,8 +34,11 @@ escape_sed() { echo "$1" | sed -e 's/[\/&]/\\&/g'; }
 
 ensure_deps() {
   print_color yellow "Installing system dependencies (python3, venv, git, sqlite3)..."
-  apt-get update -y >/dev/null 2>&1 || true
-  apt-get install -y python3 python3-pip python3-venv curl git sqlite3 >/dev/null 2>&1 || true
+  apt-get update -y >/dev/null 2>&1 || print_color red "Warning: apt-get update failed, continuing anyway"
+  apt-get install -y python3 python3-pip python3-venv curl git sqlite3 || {
+    print_color red "Failed to install system dependencies. Please install them manually and try again."
+    exit 1
+  }
 }
 
 load_conf() {
@@ -92,16 +95,6 @@ Environment=PYTHONUNBUFFERED=1
 WantedBy=multi-user.target
 EOL
   systemctl daemon-reload
-}
-
-activate_venv() { # shellcheck disable=SC1090
-  source "${INSTALL_DIR}/venv/bin/activate"
-}
-
-deactivate_venv() {
-  set +u
-  deactivate || true
-  set -u
 }
 
 ensure_install_dir_vars() {
@@ -281,8 +274,14 @@ install_or_reinstall() {
     if [[ "$REUSE_CONFIG" =~ ^[Yy]$ ]]; then
       BACKUP_DIR="/tmp/vpn-bot-backup-$(date +%s)"
       mkdir -p "$BACKUP_DIR"
-      [ -f "${INSTALL_DIR}/src/config.py" ] && cp "${INSTALL_DIR}/src/config.py" "${BACKUP_DIR}/config.py" || true
-      [ -f "${INSTALL_DIR}/src/vpn_bot.db" ] && cp "${INSTALL_DIR}/src/vpn_bot.db" "${BACKUP_DIR}/vpn_bot.db" || true
+      if [ -f "${INSTALL_DIR}/src/config.py" ]; then
+        print_color yellow "Backing up config.py..."
+        cp "${INSTALL_DIR}/src/config.py" "${BACKUP_DIR}/config.py"
+      fi
+      if [ -f "${INSTALL_DIR}/src/vpn_bot.db" ]; then
+        print_color yellow "Backing up database..."
+        cp "${INSTALL_DIR}/src/vpn_bot.db" "${BACKUP_DIR}/vpn_bot.db"
+      fi
       print_color green "Temporary backup saved to ${BACKUP_DIR}."
     fi
     print_color yellow "Removing previous installation..."
@@ -295,23 +294,35 @@ install_or_reinstall() {
   }
   
   # Set ownership immediately after clone
-  chown -R vpn-bot:vpn-bot "${INSTALL_DIR}" || true
+  print_color yellow "Setting correct ownership..."
+  chown -R vpn-bot:vpn-bot "${INSTALL_DIR}"
   
-  cd "$INSTALL_DIR"
-
-  print_color yellow "Creating Python venv and installing dependencies..."
-  # Create venv as vpn-bot user
-  sudo -u vpn-bot python3 -m venv venv
-  
-  # Install dependencies as vpn-bot user
-  sudo -u vpn-bot bash -c "source venv/bin/activate && pip install --upgrade pip >/dev/null 2>&1 && pip install -r requirements.txt >/dev/null 2>&1" || {
-    print_color red "Failed to install Python packages."; exit 1;
+  cd "$INSTALL_DIR" || {
+    print_color red "Failed to cd into ${INSTALL_DIR}"; exit 1;
   }
 
+  print_color yellow "Creating Python venv and installing dependencies..."
+  
+  # Create Python venv directly (not as vpn-bot user)
+  print_color yellow "Creating Python virtual environment..."
+  python3 -m venv venv
+
+  # Allow vpn-bot to write to the venv
+  chown -R vpn-bot:vpn-bot "${INSTALL_DIR}/venv"
+  
   # Check requirements.txt
   if [ ! -f "requirements.txt" ]; then
-    print_color red "requirements.txt not found."; exit 1;
+    print_color red "requirements.txt not found in ${INSTALL_DIR}."
+    exit 1
   fi
+  
+  # Install dependencies directly, not as vpn-bot user
+  print_color yellow "Installing Python dependencies..."
+  "${INSTALL_DIR}/venv/bin/pip" install --upgrade pip
+  "${INSTALL_DIR}/venv/bin/pip" install -r requirements.txt || {
+    print_color red "Failed to install Python packages."
+    exit 1
+  }
 
   # Fix filename issue
   if [ -f "${INSTALL_DIR}/src/bot/keboards.py" ] && [ ! -f "${INSTALL_DIR}/src/bot/keyboards.py" ]; then
@@ -321,31 +332,34 @@ install_or_reinstall() {
   
   # Create backups directory
   mkdir -p "${INSTALL_DIR}/backups"
-  chown vpn-bot:vpn-bot "${INSTALL_DIR}/backups"
 
   # Restore or configure
   if [[ "${REUSE_CONFIG:-N}" =~ ^[Yy]$ ]] && [ -n "${BACKUP_DIR:-}" ]; then
     print_color yellow "Restoring previous config and database..."
     if [ -f "${BACKUP_DIR}/config.py" ]; then
+      print_color yellow "Restoring config.py..."
       cp "${BACKUP_DIR}/config.py" "${INSTALL_DIR}/src/config.py"
-      chown vpn-bot:vpn-bot "${INSTALL_DIR}/src/config.py"
       chmod 640 "${INSTALL_DIR}/src/config.py"
     fi
     if [ -f "${BACKUP_DIR}/vpn_bot.db" ]; then
+      print_color yellow "Restoring database..."
       cp "${BACKUP_DIR}/vpn_bot.db" "${INSTALL_DIR}/src/vpn_bot.db"
-      chown vpn-bot:vpn-bot "${INSTALL_DIR}/src/vpn_bot.db"
     fi
+    print_color yellow "Checking for missing config keys..."
     append_missing_keys_if_any
+    rm -rf "${BACKUP_DIR}"
   else
     print_color blue "--- Bot Configuration ---"
     configure_config_py
   fi
 
   # Ensure correct ownership and permissions
+  print_color yellow "Setting correct permissions..."
   chown -R vpn-bot:vpn-bot "${INSTALL_DIR}"
   chmod 640 "${INSTALL_DIR}/src/config.py" || true
 
   # Validate config
+  print_color yellow "Validating configuration..."
   if ! validate_config_offline; then
     print_color red "Config validation failed. Please reconfigure..."
     configure_config_py
@@ -354,13 +368,15 @@ install_or_reinstall() {
   fi
 
   # Check token online
+  print_color yellow "Testing Telegram token online..."
   if validate_token_online; then
     print_color green "Telegram token online check passed."
   else
-    print_color yellow "Warning: Telegram getMe failed. Continuing..."
+    print_color yellow "Warning: Telegram getMe failed. Continuing anyway..."
   fi
 
   # Create log file
+  print_color yellow "Creating log file..."
   touch "${INSTALL_DIR}/src/bot.log"
   chown vpn-bot:vpn-bot "${INSTALL_DIR}/src/bot.log"
 
@@ -369,14 +385,16 @@ install_or_reinstall() {
 
   # Enable and start service
   print_color yellow "Enabling and starting service..."
-  systemctl enable "${SERVICE_NAME}" >/dev/null 2>&1 || true
-  systemctl start "${SERVICE_NAME}"
+  systemctl enable "${SERVICE_NAME}"
+  systemctl start "${SERVICE_NAME}" || {
+    print_color red "Failed to start service. Check logs with: journalctl -u ${SERVICE_NAME}"
+  }
 
   # Save settings
   save_conf
 
   print_color blue "--- Installation Complete ---"
-  print_color green "Service '${SERVICE_NAME}' started."
+  print_color green "Service '${SERVICE_NAME}' installed and started."
   print_color yellow "Status: systemctl status ${SERVICE_NAME}"
   print_color yellow "Live logs: journalctl -u ${SERVICE_NAME} -f"
 }
@@ -408,7 +426,10 @@ update_bot() {
   }
 
   print_color yellow "Updating Python deps..."
-  sudo -u vpn-bot bash -c "cd ${INSTALL_DIR} && source venv/bin/activate && pip install --upgrade pip >/dev/null 2>&1 && pip install -r requirements.txt >/dev/null 2>&1" || true
+  "${INSTALL_DIR}/venv/bin/pip" install --upgrade pip
+  "${INSTALL_DIR}/venv/bin/pip" install -r "${INSTALL_DIR}/requirements.txt" || {
+    print_color red "Failed to update Python dependencies."
+  }
 
   if [ -f "${INSTALL_DIR}/src/bot/keboards.py" ] && [ ! -f "${INSTALL_DIR}/src/bot/keyboards.py" ]; then
     print_color yellow "Renaming keboards.py -> keyboards.py"
@@ -416,13 +437,16 @@ update_bot() {
   fi
 
   # Ensure correct ownership after update
+  print_color yellow "Setting correct permissions..."
   chown -R vpn-bot:vpn-bot "${INSTALL_DIR}"
   touch "${INSTALL_DIR}/src/bot.log"
   chown vpn-bot:vpn-bot "${INSTALL_DIR}/src/bot.log" || true
   chmod 640 "${INSTALL_DIR}/src/config.py" || true
 
   print_color yellow "Restarting service..."
-  systemctl start "${SERVICE_NAME}"
+  systemctl start "${SERVICE_NAME}" || {
+    print_color red "Failed to start service after update. Check logs."
+  }
 
   save_conf
   print_color green "Update completed."
@@ -431,7 +455,9 @@ update_bot() {
 restart_bot() {
   ensure_root
   print_color yellow "Restarting service..."
-  systemctl restart "${SERVICE_NAME}" || true
+  systemctl restart "${SERVICE_NAME}" || {
+    print_color red "Failed to restart service. Check logs with: journalctl -u ${SERVICE_NAME}"
+  }
   print_color green "Done."
 }
 
@@ -444,7 +470,7 @@ status_bot() {
 follow_journal() {
   ensure_root
   print_color yellow "Following live journal logs (Ctrl+C to exit)"
-  ( journalctl -u "${SERVICE_NAME}" -f )
+  journalctl -u "${SERVICE_NAME}" -f
   print_color yellow "Stopped following logs."
 }
 
@@ -454,7 +480,7 @@ follow_bot_log() {
   local LOG_FILE="${INSTALL_DIR:-/opt/vpn-bot}/src/bot.log"
   if [ -f "$LOG_FILE" ]; then
     print_color yellow "Tailing bot.log (last 200 lines, live). Ctrl+C to exit."
-    ( tail -n 200 -f "$LOG_FILE" )
+    tail -n 200 -f "$LOG_FILE"
     print_color yellow "Stopped following logs."
   else
     print_color red "bot.log not found at: $LOG_FILE"
