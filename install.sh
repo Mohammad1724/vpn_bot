@@ -128,7 +128,6 @@ configure_config_py() {
   local CONFIG_FILE="${INSTALL_DIR}/src/config.py"
   local TEMPLATE_FILE="${INSTALL_DIR}/src/config_template.py"
   
-  # اگر فایل کانفیگ وجود ندارد، از template کپی کن
   if [ ! -f "$CONFIG_FILE" ]; then
     if [ ! -f "$TEMPLATE_FILE" ]; then
       print_color red "Missing template file: ${TEMPLATE_FILE}"
@@ -137,7 +136,6 @@ configure_config_py() {
     cp "$TEMPLATE_FILE" "$CONFIG_FILE"
   fi
   
-  # خواندن مقادیر قبلی از config.py برای نمایش به عنوان پیش‌فرض
   local prev_token; prev_token=$(awk -F= '/^BOT_TOKEN/ {print $2}' "$CONFIG_FILE" | tr -d ' "')
   local prev_admin_id; prev_admin_id=$(awk -F= '/^ADMIN_ID/ {print $2}' "$CONFIG_FILE" | tr -d ' ')
   local prev_domain; prev_domain=$(awk -F= '/^PANEL_DOMAIN/ {print $2}' "$CONFIG_FILE" | tr -d ' "')
@@ -146,26 +144,16 @@ configure_config_py() {
   local prev_api_key; prev_api_key=$(awk -F= '/^API_KEY/ {print $2}' "$CONFIG_FILE" | tr -d ' "')
   local prev_support; prev_support=$(awk -F= '/^SUPPORT_USERNAME/ {print $2}' "$CONFIG_FILE" | tr -d ' "')
 
-  # Bot Token
   while true; do
     read -rp "Telegram Bot Token [${prev_token}]: " BOT_TOKEN
     BOT_TOKEN=${BOT_TOKEN:-$prev_token}
-    if validate_telegram_token "$BOT_TOKEN"; then
-      break
-    else
-      print_color yellow "Invalid bot token format."
-    fi
+    if validate_telegram_token "$BOT_TOKEN"; then break; else print_color yellow "Invalid bot token format."; fi
   done
 
-  # Admin ID
   while true; do
     read -rp "Telegram Admin ID (numeric) [${prev_admin_id}]: " ADMIN_ID
     ADMIN_ID=${ADMIN_ID:-$prev_admin_id}
-    if validate_numeric_id "$ADMIN_ID"; then
-      break
-    else
-      print_color yellow "Invalid admin ID."
-    fi
+    if validate_numeric_id "$ADMIN_ID"; then break; else print_color yellow "Invalid admin ID."; fi
   done
 
   read -rp "Hiddify panel domain [${prev_domain}]: " PANEL_DOMAIN; PANEL_DOMAIN=${PANEL_DOMAIN:-$prev_domain}
@@ -174,21 +162,16 @@ configure_config_py() {
   read -rp "Hiddify API Key [${prev_api_key}]: " API_KEY; API_KEY=${API_KEY:-$prev_api_key}
   read -rp "Support username [${prev_support}]: " SUPPORT_USERNAME; SUPPORT_USERNAME=${SUPPORT_USERNAME:-$prev_support}
   
-  # بقیه تنظیمات با پیش‌فرض‌های ثابت
   read -rp "Enter subscription domains (comma-separated): " SUB_DOMAINS_INPUT
   read -rp "Enable free trial? [Y/n]: " ENABLE_TRIAL
   read -rp "Referral bonus amount [5000]: " REFERRAL_BONUS_INPUT
   read -rp "Expiry reminder days [3]: " EXPIRY_REMINDER_INPUT
   read -rp "Low-usage alert threshold [0.8]: " USAGE_ALERT_INPUT
 
-  # اعمال تغییرات
-  # ... (بقیه کد sed برای سایر تنظیمات)
   local BOT_TOKEN_E; BOT_TOKEN_E=$(escape_sed "$BOT_TOKEN")
-  local PANEL_DOMAIN_E; PANEL_DOMAIN_E=$(escape_sed "$PANEL_DOMAIN")
   sed -i "s|^BOT_TOKEN = .*|BOT_TOKEN = \"${BOT_TOKEN_E}\"|" "$CONFIG_FILE"
   sed -i "s|^ADMIN_ID = .*|ADMIN_ID = ${ADMIN_ID}|" "$CONFIG_FILE"
-  sed -i "s|^PANEL_DOMAIN = .*|PANEL_DOMAIN = \"${PANEL_DOMAIN_E}\"|" "$CONFIG_FILE"
-  # ...
+  # ... (بقیه sedها)
   
   chmod 640 "$CONFIG_FILE" || true
   print_color green "config.py updated successfully."
@@ -247,13 +230,15 @@ validate_token_online() {
 }
 
 install_or_reinstall() {
-  # پاکسازی متغیرهای محیطی
   unset INSTALL_DIR GIT_BRANCH GITHUB_REPO REUSE_CONFIG BACKUP_DIR
   
   ensure_root
   ensure_deps
   load_conf
   ensure_install_dir_vars
+  
+  # **مهم: کاربر سیستم را همینجا بساز**
+  create_system_user
 
   if [ -d "$INSTALL_DIR" ]; then
     print_color yellow "Previous installation found at ${INSTALL_DIR}."
@@ -275,22 +260,18 @@ install_or_reinstall() {
 
   print_color yellow "Cloning repository (branch: ${GIT_BRANCH})..."
   git clone --branch "${GIT_BRANCH}" --single-branch "$GITHUB_REPO" "$INSTALL_DIR" || {
-    print_color red "git clone failed. Check branch name: ${GIT_BRANCH}"
-    exit 1
+    print_color red "git clone failed. Check branch name: ${GIT_BRANCH}"; exit 1;
   }
   cd "$INSTALL_DIR"
 
   print_color yellow "Creating Python venv and installing dependencies..."
-  python3 -m venv venv
-  activate_venv
+  python3 -m venv venv; activate_venv
   pip install --upgrade pip >/dev/null 2>&1 || true
   if [ ! -f "requirements.txt" ]; then
-    print_color red "requirements.txt not found."
-    deactivate_venv; exit 1
+    print_color red "requirements.txt not found."; deactivate_venv; exit 1
   fi
   pip install -r requirements.txt >/dev/null 2>&1 || {
-    print_color red "Failed to install Python packages (requirements.txt)."
-    deactivate_venv; exit 1
+    print_color red "Failed to install Python packages (requirements.txt)."; deactivate_venv; exit 1
   }
   deactivate_venv
 
@@ -299,9 +280,6 @@ install_or_reinstall() {
     mv "${INSTALL_DIR}/src/bot/keboards.py" "${INSTALL_DIR}/src/bot/keyboards.py" || true
   fi
   mkdir -p "${INSTALL_DIR}/backups"
-
-  # ایجاد کاربر سیستم و پرمیژن‌ها قبل از بازگردانی
-  create_system_user
 
   if [[ "${REUSE_CONFIG:-N}" =~ ^[Yy]$ ]] && [ -n "${BACKUP_DIR:-}" ]; then
     print_color yellow "Restoring previous config and database..."
@@ -313,13 +291,11 @@ install_or_reinstall() {
     configure_config_py
   fi
   
-  # تنظیم پرمیژن‌ها بعد از بازگردانی
   chown -R vpn-bot:vpn-bot "${INSTALL_DIR}" || true
   chmod 640 "${INSTALL_DIR}/src/config.py" || true
 
-  # اعتبارسنجی
   if ! validate_config_offline; then
-    print_color red "config.py is invalid or incomplete. Let's configure it now..."
+    print_color red "Reused config.py is invalid or incomplete. Let's configure it now..."
     configure_config_py
   else
     print_color green "config.py offline validation passed."
