@@ -12,7 +12,7 @@ from telegram.constants import ParseMode
 
 import database as db
 import hiddify_api
-from config import ADMIN_ID
+from config import ADMIN_ID, SUB_PATH
 from bot.utils import get_domain_for_plan, create_service_info_message, get_service_status
 
 logger = logging.getLogger(__name__)
@@ -189,9 +189,12 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     plan = db.get_plan(service.get('plan_id')) if service else None
     sub_domain = get_domain_for_plan(plan)
 
-    from config import SUB_PATH, ADMIN_PATH
-    sub_path = SUB_PATH or ADMIN_PATH
-    base_link = f"https://{sub_domain}/{sub_path}/{user_uuid}"
+    # تغییر: استفاده مستقیم از SUB_PATH به جای استفاده از ADMIN_PATH به عنوان جایگزین
+    if not SUB_PATH:
+        await q.edit_message_text("❌ خطا: مسیر اشتراک (SUB_PATH) در فایل config.py تنظیم نشده است. لطفاً با مدیر سیستم تماس بگیرید.")
+        return
+
+    base_link = f"https://{sub_domain}/{SUB_PATH}/{user_uuid}"
     info = await hiddify_api.get_user_info(user_uuid)
     config_name = info.get('name', 'config') if info else 'config'
 
