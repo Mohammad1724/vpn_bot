@@ -113,6 +113,7 @@ ensure_install_dir_vars() {
   INSTALL_DIR="${INSTALL_DIR_INPUT:-${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}}"
 
   read -rp "Git branch/tag to checkout [${GIT_BRANCH:-$DEFAULT_GIT_BRANCH}]: " GIT_BRANCH_INPUT
+  # بدون دستکاری فاصله‌ها؛ git با کوتیشن هندل می‌کند
   GIT_BRANCH="${GIT_BRANCH_INPUT:-${GIT_BRANCH:-$DEFAULT_GIT_BRANCH}}"
 }
 
@@ -252,31 +253,50 @@ needs_config_setup() {
 }
 
 validate_config_offline() {
-  # آفلاین: بررسی فرمت BOT_TOKEN و ADMIN_ID با پایتون
+  # آفلاین: بررسی BOT_TOKEN و ADMIN_ID
   local CONFIG_FILE="${INSTALL_DIR}/src/config.py"
   if [ ! -f "$CONFIG_FILE" ]; then
     return 1
   fi
-  python3 - <<'PY'
+  python3 - "$CONFIG_FILE" <<'PY'
 import re, sys
 from pathlib import Path
-cfg = Path(sys.argv[1])
-data = cfg.read_text(encoding="utf-8", errors="ignore")
+
+cfg_path = sys.argv[1] if len(sys.argv) > 1 else ""
+if not cfg_path:
+    print("No config path", file=sys.stderr); sys.exit(2)
+
+p = Path(cfg_path)
+if not p.exists():
+    print("Config not found", file=sys.stderr); sys.exit(2)
+
+data = p.read_text(encoding="utf-8", errors="ignore")
+
 def get_val(k):
     m = re.search(rf'^\s*{k}\s*=\s*(.+)$', data, re.M)
     return m.group(1).strip() if m else ""
-def strip_quotes(s):
-    return s.strip().strip('"').strip("'")
-token = strip_quotes(get_val("BOT_TOKEN"))
-admin = get_val("ADMIN_ID")
+
+def stripq(x): 
+    return x.strip().strip('"').strip("'")
+
 ok = True
+
+# BOT_TOKEN
+token = stripq(get_val("BOT_TOKEN"))
 if not re.match(r'^[0-9]+:[A-Za-z0-9_-]+$', token):
-    print("Invalid BOT_TOKEN format", file=sys.stderr); ok=False
+    print("Invalid BOT_TOKEN format", file=sys.stderr)
+    ok = False
+
+# ADMIN_ID باید عدد معتبر باشد
+admin_expr = get_val("ADMIN_ID")
 try:
-    aid = int(eval(admin, {}))  # allow numeric value
-    if aid <= 0: raise ValueError
+    aid = int(eval(admin_expr, {}))  # allow numeric literal
+    if aid <= 0:
+        raise ValueError
 except Exception:
-    print("Invalid ADMIN_ID (must be numeric)", file=sys.stderr); ok=False
+    print("Invalid ADMIN_ID (must be numeric)", file=sys.stderr)
+    ok = False
+
 sys.exit(0 if ok else 2)
 PY
   local rc=$?
@@ -284,10 +304,10 @@ PY
 }
 
 validate_token_online() {
-  # تست اختیاری آنلاین توکن با getMe (اگر اینترنت/تلگرام قطع باشد، فقط هشدار می‌دهد)
+  # تست اختیاری آنلاین
   local CONFIG_FILE="${INSTALL_DIR}/src/config.py"
   local BOT_TOKEN
-  BOT_TOKEN=$(awk -F= '/^BOT_TOKEN/ {gsub(/[ "]/,"",$2); print $2}' "$CONFIG_FILE" | tr -d '"')
+  BOT_TOKEN=$(awk -F= '/^BOT_TOKEN/ {print $2}' "$CONFIG_FILE" | tr -d ' "')
   if [ -z "$BOT_TOKEN" ]; then
     return 1
   fi
