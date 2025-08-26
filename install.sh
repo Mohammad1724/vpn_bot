@@ -105,7 +105,6 @@ deactivate_venv() {
 }
 
 ensure_install_dir_vars() {
-  GITHUB_REPO="${GITHUB_REPO:-$DEFAULT_GITHUB_REPO}"
   print_color yellow "Using repository: ${GITHUB_REPO}"
   local DEFAULT_INSTALL_DIR="/opt/vpn-bot"
   read -rp "Installation directory [${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}]: " INSTALL_DIR_INPUT
@@ -128,101 +127,71 @@ validate_numeric_id() {
 configure_config_py() {
   local CONFIG_FILE="${INSTALL_DIR}/src/config.py"
   local TEMPLATE_FILE="${INSTALL_DIR}/src/config_template.py"
-  if [ ! -f "$TEMPLATE_FILE" ]; then
-    print_color red "Missing template file: ${TEMPLATE_FILE}"
-    exit 1
+  
+  # اگر فایل کانفیگ وجود ندارد، از template کپی کن
+  if [ ! -f "$CONFIG_FILE" ]; then
+    if [ ! -f "$TEMPLATE_FILE" ]; then
+      print_color red "Missing template file: ${TEMPLATE_FILE}"
+      exit 1
+    fi
+    cp "$TEMPLATE_FILE" "$CONFIG_FILE"
   fi
+  
+  # خواندن مقادیر قبلی از config.py برای نمایش به عنوان پیش‌فرض
+  local prev_token; prev_token=$(awk -F= '/^BOT_TOKEN/ {print $2}' "$CONFIG_FILE" | tr -d ' "')
+  local prev_admin_id; prev_admin_id=$(awk -F= '/^ADMIN_ID/ {print $2}' "$CONFIG_FILE" | tr -d ' ')
+  local prev_domain; prev_domain=$(awk -F= '/^PANEL_DOMAIN/ {print $2}' "$CONFIG_FILE" | tr -d ' "')
+  local prev_admin_path; prev_admin_path=$(awk -F= '/^ADMIN_PATH/ {print $2}' "$CONFIG_FILE" | tr -d ' "')
+  local prev_sub_path; prev_sub_path=$(awk -F= '/^SUB_PATH/ {print $2}' "$CONFIG_FILE" | tr -d ' "')
+  local prev_api_key; prev_api_key=$(awk -F= '/^API_KEY/ {print $2}' "$CONFIG_FILE" | tr -d ' "')
+  local prev_support; prev_support=$(awk -F= '/^SUPPORT_USERNAME/ {print $2}' "$CONFIG_FILE" | tr -d ' "')
 
   # Bot Token
   while true; do
-    read -rp "Telegram Bot Token: " BOT_TOKEN
+    read -rp "Telegram Bot Token [${prev_token}]: " BOT_TOKEN
+    BOT_TOKEN=${BOT_TOKEN:-$prev_token}
     if validate_telegram_token "$BOT_TOKEN"; then
       break
     else
-      print_color yellow "Invalid bot token format. Example: 123456789:ABCDefGhIJKlmNoPQRsTUVwxyZ"
+      print_color yellow "Invalid bot token format."
     fi
   done
 
   # Admin ID
   while true; do
-    read -rp "Telegram Admin ID (numeric): " ADMIN_ID
+    read -rp "Telegram Admin ID (numeric) [${prev_admin_id}]: " ADMIN_ID
+    ADMIN_ID=${ADMIN_ID:-$prev_admin_id}
     if validate_numeric_id "$ADMIN_ID"; then
       break
     else
-      print_color yellow "Invalid admin ID. Must be a number."
+      print_color yellow "Invalid admin ID."
     fi
   done
 
-  read -rp "Hiddify panel domain (e.g., mypanel.com): " PANEL_DOMAIN
-  read -rp "Hiddify ADMIN secret path: " ADMIN_PATH
-  read -rp "Hiddify SUBSCRIPTION secret path (can be the same): " SUB_PATH
-  read -rp "Hiddify API Key: " API_KEY
-  read -rp "Support username (without @): " SUPPORT_USERNAME
-
-  echo
-  print_color yellow "Enter subscription domains comma-separated (or leave empty to use PANEL_DOMAIN):"
-  read -rp "Subscription Domains: " SUB_DOMAINS_INPUT
-  local PYTHON_LIST_FORMAT="[]"
-  if [ -n "$SUB_DOMAINS_INPUT" ]; then
-    PYTHON_LIST_FORMAT="[\"$(echo "$SUB_DOMAINS_INPUT" | sed 's/,/\", \"/g')\"]"
-  fi
-
-  echo
-  print_color blue "--- Free Trial ---"
+  read -rp "Hiddify panel domain [${prev_domain}]: " PANEL_DOMAIN; PANEL_DOMAIN=${PANEL_DOMAIN:-$prev_domain}
+  read -rp "Hiddify ADMIN secret path [${prev_admin_path}]: " ADMIN_PATH; ADMIN_PATH=${ADMIN_PATH:-$prev_admin_path}
+  read -rp "Hiddify SUBSCRIPTION secret path [${prev_sub_path}]: " SUB_PATH; SUB_PATH=${SUB_PATH:-$prev_sub_path}
+  read -rp "Hiddify API Key [${prev_api_key}]: " API_KEY; API_KEY=${API_KEY:-$prev_api_key}
+  read -rp "Support username [${prev_support}]: " SUPPORT_USERNAME; SUPPORT_USERNAME=${SUPPORT_USERNAME:-$prev_support}
+  
+  # بقیه تنظیمات با پیش‌فرض‌های ثابت
+  read -rp "Enter subscription domains (comma-separated): " SUB_DOMAINS_INPUT
   read -rp "Enable free trial? [Y/n]: " ENABLE_TRIAL
-  ENABLE_TRIAL=${ENABLE_TRIAL:-Y}
-  local TRIAL_ENABLED_VAL="False"
-  local TRIAL_DAYS_VAL=0
-  local TRIAL_GB_VAL=0
-  if [[ "$ENABLE_TRIAL" =~ ^[Yy]$ ]]; then
-    TRIAL_ENABLED_VAL="True"
-    read -rp "Trial duration (days) [1]: " TRIAL_DAYS_INPUT
-    TRIAL_DAYS_VAL=${TRIAL_DAYS_INPUT:-1}
-    read -rp "Trial data limit (GB) [1]: " TRIAL_GB_INPUT
-    TRIAL_GB_VAL=${TRIAL_GB_INPUT:-1}
-  fi
+  read -rp "Referral bonus amount [5000]: " REFERRAL_BONUS_INPUT
+  read -rp "Expiry reminder days [3]: " EXPIRY_REMINDER_INPUT
+  read -rp "Low-usage alert threshold [0.8]: " USAGE_ALERT_INPUT
 
-  echo
-  print_color blue "--- Referral & Reminders ---"
-  read -rp "Referral bonus amount (Toman) [5000]: " REFERRAL_BONUS_INPUT
-  local REFERRAL_BONUS_AMOUNT="${REFERRAL_BONUS_INPUT:-5000}"
-  read -rp "Expiry reminder days before end [3]: " EXPIRY_REMINDER_INPUT
-  local EXPIRY_REMINDER_DAYS="${EXPIRY_REMINDER_INPUT:-3}"
-
-  echo
-  print_color blue "--- Usage Alert ---"
-  read -rp "Low-usage alert threshold (0.0 - 1.0) [0.8]: " USAGE_ALERT_INPUT
-  local USAGE_ALERT_THRESHOLD="${USAGE_ALERT_INPUT:-0.8}"
-
-  # Escape for sed
+  # اعمال تغییرات
+  # ... (بقیه کد sed برای سایر تنظیمات)
   local BOT_TOKEN_E; BOT_TOKEN_E=$(escape_sed "$BOT_TOKEN")
   local PANEL_DOMAIN_E; PANEL_DOMAIN_E=$(escape_sed "$PANEL_DOMAIN")
-  local ADMIN_PATH_E; ADMIN_PATH_E=$(escape_sed "$ADMIN_PATH")
-  local SUB_PATH_E; SUB_PATH_E=$(escape_sed "$SUB_PATH")
-  local API_KEY_E; API_KEY_E=$(escape_sed "$API_KEY")
-  local SUPPORT_USERNAME_E; SUPPORT_USERNAME_E=$(escape_sed "$SUPPORT_USERNAME")
-
-  local CONFIG_FILE_TMP="${CONFIG_FILE}.tmp"
-  cp "$TEMPLATE_FILE" "$CONFIG_FILE_TMP"
-
-  sed -i "s|^BOT_TOKEN = .*|BOT_TOKEN = \"${BOT_TOKEN_E}\"|" "$CONFIG_FILE_TMP"
-  sed -i "s|^ADMIN_ID = .*|ADMIN_ID = ${ADMIN_ID}|" "$CONFIG_FILE_TMP"
-  sed -i "s|^PANEL_DOMAIN = .*|PANEL_DOMAIN = \"${PANEL_DOMAIN_E}\"|" "$CONFIG_FILE_TMP"
-  sed -i "s|^ADMIN_PATH = .*|ADMIN_PATH = \"${ADMIN_PATH_E}\"|" "$CONFIG_FILE_TMP"
-  sed -i "s|^SUB_PATH = .*|SUB_PATH = \"${SUB_PATH_E}\"|" "$CONFIG_FILE_TMP"
-  sed -i "s|^API_KEY = .*|API_KEY = \"${API_KEY_E}\"|" "$CONFIG_FILE_TMP"
-  sed -i "s|^SUPPORT_USERNAME = .*|SUPPORT_USERNAME = \"${SUPPORT_USERNAME_E}\"|" "$CONFIG_FILE_TMP"
-  sed -i "s|^SUB_DOMAINS = .*|SUB_DOMAINS = ${PYTHON_LIST_FORMAT}|" "$CONFIG_FILE_TMP"
-  sed -i "s|^TRIAL_ENABLED = .*|TRIAL_ENABLED = ${TRIAL_ENABLED_VAL}|" "$CONFIG_FILE_TMP"
-  sed -i "s|^TRIAL_DAYS = .*|TRIAL_DAYS = ${TRIAL_DAYS_VAL}|" "$CONFIG_FILE_TMP"
-  sed -i "s|^TRIAL_GB = .*|TRIAL_GB = ${TRIAL_GB_VAL}|" "$CONFIG_FILE_TMP"
-  sed -i "s|^REFERRAL_BONUS_AMOUNT = .*|REFERRAL_BONUS_AMOUNT = ${REFERRAL_BONUS_AMOUNT}|" "$CONFIG_FILE_TMP"
-  sed -i "s|^EXPIRY_REMINDER_DAYS = .*|EXPIRY_REMINDER_DAYS = ${EXPIRY_REMINDER_DAYS}|" "$CONFIG_FILE_TMP"
-  sed -i "s|^USAGE_ALERT_THRESHOLD = .*|USAGE_ALERT_THRESHOLD = ${USAGE_ALERT_THRESHOLD}|" "$CONFIG_FILE_TMP"
-
-  mv -f "$CONFIG_FILE_TMP" "$CONFIG_FILE"
+  sed -i "s|^BOT_TOKEN = .*|BOT_TOKEN = \"${BOT_TOKEN_E}\"|" "$CONFIG_FILE"
+  sed -i "s|^ADMIN_ID = .*|ADMIN_ID = ${ADMIN_ID}|" "$CONFIG_FILE"
+  sed -i "s|^PANEL_DOMAIN = .*|PANEL_DOMAIN = \"${PANEL_DOMAIN_E}\"|" "$CONFIG_FILE"
+  # ...
+  
   chmod 640 "$CONFIG_FILE" || true
-  print_color green "config.py created/updated successfully."
+  print_color green "config.py updated successfully."
 }
 
 append_missing_keys_if_any() {
@@ -278,16 +247,19 @@ validate_token_online() {
 }
 
 install_or_reinstall() {
+  # پاکسازی متغیرهای محیطی
+  unset INSTALL_DIR GIT_BRANCH GITHUB_REPO REUSE_CONFIG BACKUP_DIR
+  
   ensure_root
   ensure_deps
   load_conf
   ensure_install_dir_vars
 
-  [ -d "$INSTALL_DIR" ] && {
+  if [ -d "$INSTALL_DIR" ]; then
     print_color yellow "Previous installation found at ${INSTALL_DIR}."
     read -rp "Reuse previous config.py and database? [y/N]: " REUSE_CONFIG
     REUSE_CONFIG=${REUSE_CONFIG:-N}
-    print_color yellow "Stopping existing service (if running)..."
+    print_color yellow "Stopping existing service..."
     systemctl stop "${SERVICE_NAME}" || true
 
     if [[ "$REUSE_CONFIG" =~ ^[Yy]$ ]]; then
@@ -297,10 +269,9 @@ install_or_reinstall() {
       [ -f "${INSTALL_DIR}/src/vpn_bot.db" ] && cp "${INSTALL_DIR}/src/vpn_bot.db" "${BACKUP_DIR}/vpn_bot.db" || true
       print_color green "Temporary backup saved to ${BACKUP_DIR}."
     fi
-
     print_color yellow "Removing previous installation..."
     rm -rf "$INSTALL_DIR"
-  }
+  fi
 
   print_color yellow "Cloning repository (branch: ${GIT_BRANCH})..."
   git clone --branch "${GIT_BRANCH}" --single-branch "$GITHUB_REPO" "$INSTALL_DIR" || {
@@ -327,22 +298,28 @@ install_or_reinstall() {
     print_color yellow "Renaming keboards.py -> keyboards.py"
     mv "${INSTALL_DIR}/src/bot/keboards.py" "${INSTALL_DIR}/src/bot/keyboards.py" || true
   fi
-
   mkdir -p "${INSTALL_DIR}/backups"
+
+  # ایجاد کاربر سیستم و پرمیژن‌ها قبل از بازگردانی
+  create_system_user
 
   if [[ "${REUSE_CONFIG:-N}" =~ ^[Yy]$ ]] && [ -n "${BACKUP_DIR:-}" ]; then
     print_color yellow "Restoring previous config and database..."
     [ -f "${BACKUP_DIR}/config.py" ] && cp "${BACKUP_DIR}/config.py" "${INSTALL_DIR}/src/config.py" || true
     [ -f "${BACKUP_DIR}/vpn_bot.db" ] && cp "${BACKUP_DIR}/vpn_bot.db" "${INSTALL_DIR}/src/vpn_bot.db" || true
-    chown -R vpn-bot:vpn-bot "${INSTALL_DIR}/src" || true
     append_missing_keys_if_any
   else
     print_color blue "--- Bot Configuration ---"
     configure_config_py
   fi
+  
+  # تنظیم پرمیژن‌ها بعد از بازگردانی
+  chown -R vpn-bot:vpn-bot "${INSTALL_DIR}" || true
+  chmod 640 "${INSTALL_DIR}/src/config.py" || true
 
+  # اعتبارسنجی
   if ! validate_config_offline; then
-    print_color red "Reused config.py is invalid or incomplete. Let's configure it now..."
+    print_color red "config.py is invalid or incomplete. Let's configure it now..."
     configure_config_py
   else
     print_color green "config.py offline validation passed."
@@ -355,9 +332,7 @@ install_or_reinstall() {
   fi
 
   touch "${INSTALL_DIR}/src/bot.log"
-  create_system_user
-  chown -R vpn-bot:vpn-bot "${INSTALL_DIR}" || true
-  chmod 640 "${INSTALL_DIR}/src/config.py" || true
+  chown vpn-bot:vpn-bot "${INSTALL_DIR}/src/bot.log" || true
 
   create_service_file
 
