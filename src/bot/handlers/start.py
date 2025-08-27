@@ -108,6 +108,7 @@ async def show_account_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     keyboard = [
+        [InlineKeyboardButton("📊 مصرف من", callback_data="acc_usage")],
         [InlineKeyboardButton("💳 شارژ حساب", callback_data="user_start_charge")],
         [InlineKeyboardButton("📜 سوابق خرید", callback_data="acc_purchase_history"),
          InlineKeyboardButton("💸 سوابق شارژ", callback_data="acc_charge_history")],
