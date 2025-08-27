@@ -4,10 +4,11 @@ import io
 import sqlite3
 import random
 import logging
-from typing import Union, Optional, Tuple, Dict, Any
+from typing import Union, Optional, Tuple, Dict, Any, List
 from datetime import datetime, timedelta, timezone
 import math
 import re
+from urllib.parse import quote_plus
 
 import qrcode
 import database as db
@@ -19,6 +20,14 @@ try:
 except Exception:
     MULTI_SERVER_ENABLED = False
     SERVERS = []
+
+# Optional Subconverter config (for unified link)
+try:
+    from config import SUBCONVERTER_ENABLED, SUBCONVERTER_URL, SUBCONVERTER_DEFAULT_TARGET
+except Exception:
+    SUBCONVERTER_ENABLED = False
+    SUBCONVERTER_URL = ""
+    SUBCONVERTER_DEFAULT_TARGET = "v2ray"
 
 try:
     import jdatetime
@@ -117,8 +126,32 @@ def build_subscription_url(user_uuid: str, server_name: Optional[str] = None) ->
     sub_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
     return f"https://{sub_domain}/{sub_path}/{user_uuid}"
 
+def build_subconverter_link(urls: List[str], target: Optional[str] = None) -> Optional[str]:
+    """
+    ساخت لینک واحد Subconverter از چند URL اشتراک (منابع v2ray).
+    - urls باید لینک‌های اشتراک باشند (مثلاً .../{uuid}/sub)
+    - target یکی از: v2ray, clash, clashmeta, singbox, sub ...
+    """
+    try:
+        if not SUBCONVERTER_ENABLED or not SUBCONVERTER_URL or not urls:
+            return None
+        tgt = (target or SUBCONVERTER_DEFAULT_TARGET or "v2ray").strip().lower()
+        # join with | and urlencode minimally
+        src = "|".join(u.strip() for u in urls if u and u.strip())
+        if not src:
+            return None
+        # برای سازگاری با subconverterهای مختلف، معمولاً url پارامتر باید urlencoded شود
+        # اما بسیاری از پیاده‌سازی‌ها خودشان پارس می‌کنند؛ از quote_plus برای امنیت بیشتر
+        src_enc = quote_plus(src, safe=":/?&=%|")
+        base = SUBCONVERTER_URL.rstrip("/")
+        return f"{base}/sub?target={tgt}&url={src_enc}"
+    except Exception as e:
+        logger.error("build_subconverter_link failed: %s", e, exc_info=True)
+        return None
+
 def make_qr_bytes(data: str) -> io.BytesIO:
     """تولید کد QR برای یک رشته و بازگرداندن آن به صورت BytesIO"""
+    # نگه داشتن تنظیمات پیش‌فرض (برای سرعت و سادگی)
     img = qrcode.make(data)
     bio = io.BytesIO()
     bio.name = "qr.png"
@@ -178,7 +211,12 @@ def _format_expiry_and_days(user_data: dict, service_db_record: Optional[dict] =
 
     return expire_jalali, days_left
 
-def create_service_info_caption(user_data: dict, service_db_record: Optional[dict] = None, title: str = "🎉 سرویس شما!") -> str:
+def create_service_info_caption(
+    user_data: dict,
+    service_db_record: Optional[dict] = None,
+    title: str = "🎉 سرویس شما!",
+    override_sub_url: Optional[str] = None
+) -> str:
     """ایجاد متن توضیحات برای سرویس با اطلاعات کامل"""
     used_gb = round(float(user_data.get('current_usage_GB', 0.0)), 2)
     total_gb = round(float(user_data.get('usage_limit_GB', 0.0)), 2)
@@ -201,8 +239,10 @@ def create_service_info_caption(user_data: dict, service_db_record: Optional[dic
     if unlimited and isinstance(service_name, str) and "0 گیگ" in service_name:
         service_name = service_name.replace("0 گیگ", "نامحدود")
 
-    # ساخت لینک اشتراک (اولویت با sub_link ذخیره‌شده در DB برای پشتیبانی چندسرور)
-    if service_db_record and service_db_record.get("sub_link"):
+    # ساخت لینک اشتراک
+    if override_sub_url:
+        sub_url = override_sub_url
+    elif service_db_record and service_db_record.get("sub_link"):
         sub_url = service_db_record["sub_link"]
     else:
         sub_url = build_subscription_url(user_data['uuid'], server_name=(service_db_record or {}).get("server_name"))
@@ -227,9 +267,19 @@ def create_service_info_caption(user_data: dict, service_db_record: Optional[dic
     )
     return caption
 
-def create_service_info_message(user_data: dict, service_db_record: Optional[dict] = None, title: str = "🎉 سرویس شما!") -> str:
+def create_service_info_message(
+    user_data: dict,
+    service_db_record: Optional[dict] = None,
+    title: str = "🎉 سرویس شما!",
+    override_sub_url: Optional[str] = None
+) -> str:
     """این تابع برای سازگاری با کد قدیمی حفظ شده است"""
-    return create_service_info_caption(user_data, service_db_record=service_db_record, title=title)
+    return create_service_info_caption(
+        user_data,
+        service_db_record=service_db_record,
+        title=title,
+        override_sub_url=override_sub_url
+    )
 
 def get_domain_for_plan(plan: dict | None) -> str:
     """انتخاب دامنه مناسب بر اساس نوع پلن (نامحدود/حجمی)"""
