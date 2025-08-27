@@ -5,10 +5,12 @@ import httpx
 import uuid
 import random
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
+import database as db
 from config import PANEL_DOMAIN, ADMIN_PATH, API_KEY, SUB_DOMAINS, SUB_PATH
-# Optional multi-server configs
+
+# Optional multi-server configs (fallbacks if DB nodes are empty)
 try:
     from config import MULTI_SERVER_ENABLED, SERVERS, DEFAULT_SERVER_NAME, SERVER_SELECTION_POLICY
 except Exception:
@@ -32,33 +34,141 @@ def _fallback_server_dict() -> Dict[str, Any]:
         "sub_path": SUB_PATH,
         "api_key": API_KEY,
         "sub_domains": SUB_DOMAINS or [],
+        "panel_type": "hiddify",
+        "is_active": 1,
+        "capacity": 0,
+        "current_users": 0,
     }
 
 
-def _get_server_by_name(name: str) -> Optional[Dict[str, Any]]:
+def _db_server_from_node(n: dict) -> Dict[str, Any]:
+    # تبدیل رکورد دیتابیس نود به ساختار سرور
+    return {
+        "name": n["name"],
+        "panel_domain": n["panel_domain"],
+        "admin_path": n["admin_path"],
+        "sub_path": n["sub_path"],
+        "api_key": n["api_key"],
+        "sub_domains": n.get("sub_domains") or [],
+        "panel_type": n.get("panel_type", "hiddify"),
+        "is_active": n.get("is_active", 1),
+        "capacity": int(n.get("capacity") or 0),
+        "current_users": int(n.get("current_users") or 0),
+    }
+
+
+def _get_server_by_name_config(name: str) -> Optional[Dict[str, Any]]:
     for s in SERVERS or []:
         if str(s.get("name")) == str(name):
-            return s
+            # همگن‌سازی کلیدها برای سازگاری
+            return {
+                "name": s.get("name"),
+                "panel_domain": s.get("panel_domain"),
+                "admin_path": s.get("admin_path"),
+                "sub_path": s.get("sub_path") or s.get("admin_path"),
+                "api_key": s.get("api_key"),
+                "sub_domains": s.get("sub_domains") or [],
+                "panel_type": "hiddify",
+                "is_active": 1,
+                "capacity": 0,
+                "current_users": 0,
+            }
     return None
 
 
+def _db_list_active_hiddify_servers() -> List[Dict[str, Any]]:
+    try:
+        nodes = db.list_nodes(only_active=True)
+        servers: List[Dict[str, Any]] = []
+        for n in nodes:
+            if str(n.get("panel_type", "hiddify")).lower() != "hiddify":
+                continue
+            servers.append(_db_server_from_node(n))
+        return servers
+    except Exception:
+        return []
+
+
+def _db_get_server_by_name(name: str) -> Optional[Dict[str, Any]]:
+    try:
+        n = db.get_node_by_name(name)
+        if not n:
+            return None
+        if str(n.get("panel_type", "hiddify")).lower() != "hiddify":
+            return None
+        return _db_server_from_node(n)
+    except Exception:
+        return None
+
+
+def _pick_least_loaded(servers: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    انتخاب نود با بیشترین ظرفیت خالی (capacity - current_users).
+    اگر current_users در DB قدیمی باشد، برای هر نود شمارش زنده سرویس‌ها را از DB محاسبه می‌کنیم.
+    """
+    best = None
+    best_free = -1
+    for s in servers:
+        cap = int(s.get("capacity") or 0)
+        curr = int(s.get("current_users") or 0)
+        try:
+            # شمارش زنده سرویس‌های این نود
+            live = db.count_services_on_node(s["name"])
+            curr = max(curr, live)
+        except Exception:
+            pass
+        free = cap - curr if cap > 0 else 0  # اگر ظرفیت تعریف نشده بود، 0 فرض می‌کنیم
+        if free > best_free:
+            best = s
+            best_free = free
+    return best or (servers[0] if servers else _fallback_server_dict())
+
+
 def _select_server(server_name: Optional[str] = None) -> Dict[str, Any]:
-    # If explicit name provided and found
+    """
+    انتخاب نود/سرور برای عملیات:
+    1) اگر server_name مشخص باشد: ابتدا بین نودهای DB، سپس در config.SERVERS جست‌وجو می‌شود.
+    2) اگر نودهای فعال در DB موجود باشند: طبق SERVER_SELECTION_POLICY انتخاب می‌شود
+       - least_loaded: بیشترین ظرفیت خالی
+       - by_name: اگر DEFAULT_SERVER_NAME در DB موجود و فعال باشد، همان؛ وگرنه اولین نود
+       - first (پیش‌فرض): اولین نود فعال
+    3) در صورت نبود نود در DB: از config.SERVERS (اگر MULTI_SERVER_ENABLED) یا تک‌سرور fallback استفاده می‌شود.
+    """
+    # 1) نام مشخص
     if server_name:
-        srv = _get_server_by_name(server_name)
+        srv = _db_get_server_by_name(server_name)
+        if srv:
+            return srv
+        srv = _get_server_by_name_config(server_name)
         if srv:
             return srv
 
-    # If multi-server enabled, choose by policy
+    # 2) ترجیح DB
+    db_servers = _db_list_active_hiddify_servers()
+    if db_servers:
+        policy = str(SERVER_SELECTION_POLICY or "first").lower()
+        if policy in ("least_loaded", "capacity", "free"):
+            picked = _pick_least_loaded(db_servers)
+            return picked or db_servers[0]
+        if policy == "by_name" and DEFAULT_SERVER_NAME:
+            named = _db_get_server_by_name(DEFAULT_SERVER_NAME)
+            if named and int(named.get("is_active", 1)) == 1:
+                return named
+            return db_servers[0]
+        # first (default)
+        return db_servers[0]
+
+    # 3) fallback config
     if MULTI_SERVER_ENABLED and SERVERS:
-        if SERVER_SELECTION_POLICY == "by_name" and DEFAULT_SERVER_NAME:
-            srv = _get_server_by_name(DEFAULT_SERVER_NAME)
+        policy = str(SERVER_SELECTION_POLICY or "first").lower()
+        if policy == "by_name" and DEFAULT_SERVER_NAME:
+            srv = _get_server_by_name_config(DEFAULT_SERVER_NAME)
             if srv:
                 return srv
-        # default: first
-        return SERVERS[0]
+        # first
+        return _get_server_by_name_config(SERVERS[0].get("name")) or _fallback_server_dict()
 
-    # Fallback to single-server config
+    # 4) تک‌سرور
     return _fallback_server_dict()
 
 
@@ -85,67 +195,40 @@ async def _make_client(timeout: float = 20.0) -> httpx.AsyncClient:
 
 async def _make_request(method: str, url: str, server: Dict[str, Any], **kwargs) -> Optional[Dict[str, Any]]:
     """
-    اجرای درخواست HTTP با مکانیزم retry و مدیریت خطای پیشرفته.
-    404 را به صورت {"_not_found": True} برمی‌گرداند.
-    برای پاسخ‌های بدون بدنه (مثل 204) یک dict خالی {} برمی‌گرداند.
+    اجرای درخواست HTTP با retry. 404 => {"_not_found": True}. پاسخ بدون بدنه => {}.
+    از نشت کلاینت جلوگیری می‌کند.
     """
-    client: Optional[httpx.AsyncClient] = None
     retries = 0
     headers = kwargs.pop("headers", None) or _get_api_headers(server)
 
     while retries <= MAX_RETRIES:
         try:
-            if client is None:
-                client = await _make_client(timeout=kwargs.get("timeout", 20.0))
-
-            resp: httpx.Response = await getattr(client, method.lower())(url, headers=headers, **kwargs)
-            resp.raise_for_status()
-
-            try:
-                return resp.json()
-            except ValueError:
-                return {}
-
+            async with await _make_client(timeout=kwargs.get("timeout", 20.0)) as client:
+                resp: httpx.Response = await getattr(client, method.lower())(url, headers=headers, **kwargs)
+                resp.raise_for_status()
+                try:
+                    return resp.json()
+                except ValueError:
+                    return {}
         except httpx.HTTPStatusError as e:
             status = e.response.status_code if e.response is not None else None
             text = e.response.text if e.response is not None else str(e)
-
             if status == 404:
                 logger.info("%s %s -> 404 Not Found (returning _not_found)", method.upper(), url)
                 return {"_not_found": True}
-
             if status in (401, 403, 422):
-                logger.error(
-                    "%s request to %s failed with status %s: %s",
-                    method.upper(), url, status, text
-                )
+                logger.error("%s %s -> %s: %s", method.upper(), url, status, text)
                 break
-
-            logger.warning(
-                "%s request to %s failed with status %s: %s (retry %d/%d)",
-                method.upper(), url, status, text, retries + 1, MAX_RETRIES
-            )
-
+            logger.warning("%s %s -> %s: %s (retry %d/%d)", method.upper(), url, status, text, retries + 1, MAX_RETRIES)
         except (httpx.ConnectError, httpx.ReadError, httpx.WriteError, httpx.TimeoutException) as e:
-            logger.warning(
-                "%s request to %s network error: %s (retry %d/%d)",
-                method.upper(), url, str(e), retries + 1, MAX_RETRIES
-            )
-
+            logger.warning("%s %s network: %s (retry %d/%d)", method.upper(), url, str(e), retries + 1, MAX_RETRIES)
         except Exception as e:
-            logger.error(
-                "%s request to %s unexpected error: %s",
-                method.upper(), url, str(e), exc_info=True
-            )
+            logger.error("%s %s unexpected: %s", method.upper(), url, str(e), exc_info=True)
             break
-
         finally:
             retries += 1
             if retries <= MAX_RETRIES:
                 await asyncio.sleep(BASE_RETRY_DELAY * (2 ** (retries - 1)))
-
-    if client:
-        await client.aclose()
     return None
 
 
@@ -157,7 +240,9 @@ async def create_hiddify_user(
     server_name: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """
-    ایجاد کاربر در پنل. اگر plan_gb <= 0 باشد، usage_limit_GB را ارسال نمی‌کنیم تا «نامحدود» شود.
+    ساخت کاربر در هیدیفای.
+    - اگر server_name مشخص نباشد، از بین نودهای فعال DB انتخاب می‌شود (سیاست انتخاب قابل تنظیم است).
+    - اگر DB خالی باشد، به config برمی‌گردد.
     """
     server = _select_server(server_name)
     endpoint = _get_base_url(server) + "user/"
@@ -166,22 +251,18 @@ async def create_hiddify_user(
     base_name = custom_name if custom_name else f"tg-{user_telegram_id.split(':')[-1]}"
     unique_user_name = f"{base_name}-{random_suffix}"
 
-    # ساخت payload پایه
     payload = {
         "name": unique_user_name,
         "package_days": int(plan_days),
         "comment": user_telegram_id,
     }
 
-    # فقط اگر پلن حجمی باشد، usage_limit_GB را بفرست
     try:
         usage_limit_gb = float(plan_gb)
     except Exception:
         usage_limit_gb = 0.0
-
     if usage_limit_gb > 0:
         payload["usage_limit_GB"] = usage_limit_gb
-    # در غیر این صورت ارسال نمی‌کنیم تا نامحدود تلقی شود
 
     data = await _make_request("post", endpoint, server, json=payload, timeout=20.0)
     if not data or not data.get("uuid"):
@@ -192,7 +273,11 @@ async def create_hiddify_user(
     sub_path = server.get("sub_path") or server.get("admin_path")
     sub_domains = server.get("sub_domains") or []
     sub_domain = random.choice(sub_domains) if sub_domains else server["panel_domain"]
-    return {"full_link": f"https://{sub_domain}/{sub_path}/{user_uuid}/", "uuid": user_uuid, "server_name": server["name"]}
+    return {
+        "full_link": f"https://{sub_domain}/{sub_path}/{user_uuid}/",
+        "uuid": user_uuid,
+        "server_name": server["name"]
+    }
 
 
 async def get_user_info(user_uuid: str, server_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -201,34 +286,43 @@ async def get_user_info(user_uuid: str, server_name: Optional[str] = None) -> Op
     return await _make_request("get", endpoint, server, timeout=10.0)
 
 
+async def get_user_usage_gb(user_uuid: str, server_name: Optional[str] = None) -> Optional[float]:
+    """
+    دریافت مصرف کاربر (GB) به‌صورت مستقیم و امن (برای دقت بیشتر در تجمیع مصرف).
+    """
+    info = await get_user_info(user_uuid, server_name=server_name)
+    if not isinstance(info, dict) or info.get("_not_found"):
+        return None
+    try:
+        return float(info.get("current_usage_GB", 0.0) or 0.0)
+    except Exception:
+        return None
+
+
 async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float, server_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
-    تمدید سرویس کاربر. اگر plan_gb <= 0 باشد، usage_limit_GB را نمی‌فرستیم تا نامحدود باقی بماند.
+    تمدید سرویس. اگر plan_gb <= 0 باشد، usage_limit_GB ارسال نمی‌شود تا نامحدود بماند.
     """
     server = _select_server(server_name)
     endpoint = f"{_get_base_url(server)}user/{user_uuid}/"
 
-    payload = {
-        "package_days": int(plan_days),
-    }
-
+    payload = {"package_days": int(plan_days)}
     try:
         usage_limit_gb = float(plan_gb)
     except Exception:
         usage_limit_gb = 0.0
-
     if usage_limit_gb > 0:
         payload["usage_limit_GB"] = usage_limit_gb
-    # نامحدود: نفستادن این فیلد
 
     return await _make_request("patch", endpoint, server, json=payload, timeout=30.0)
 
 
 async def delete_user_from_panel(user_uuid: str, server_name: Optional[str] = None) -> bool:
     """
-    حذف کاربر از پنل هیدیفای (API v2.2.0)
-    - اگر 404 برگردد، True برمی‌گردانیم چون کاربر در پنل وجود ندارد (idempotent).
-    - اگر خطای شبکه باشد، با یک GET نهایی بررسی می‌کنیم.
+    حذف کاربر از پنل هیدیفای (idempotent):
+      - 204/بدون بدنه => True
+      - 404 => True
+      - خطای شبکه => با یک GET نهایی بررسی می‌کنیم
     """
     server = _select_server(server_name)
     endpoint = f"{_get_base_url(server)}user/{user_uuid}/"
