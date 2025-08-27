@@ -50,7 +50,6 @@ def _add_column_if_not_exists(conn, table_name, column_name, column_type):
         logger.info(f"Added column '{column_name}' to table '{table_name}'.")
 
 def _remove_device_limit_alert_column_if_exists(conn: sqlite3.Connection):
-    cur = conn.cursor
     cur = conn.cursor()
     try:
         cur.execute("PRAGMA table_info(active_services)")
@@ -217,23 +216,27 @@ def init_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_traffic_user ON user_traffic(user_id)")
 
     # nodes (Hiddify panels)
+    # Create table if not exists (may already exist with older schema)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS nodes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE,
-            panel_type TEXT NOT NULL DEFAULT 'hiddify',
-            panel_domain TEXT NOT NULL,
-            admin_path TEXT NOT NULL,
-            sub_path TEXT NOT NULL,
-            api_key TEXT NOT NULL,
-            sub_domains TEXT DEFAULT '[]', -- JSON array
-            capacity INTEGER NOT NULL DEFAULT 100,
-            current_users INTEGER NOT NULL DEFAULT 0,
-            is_active INTEGER NOT NULL DEFAULT 1,
-            location TEXT,
-            created_at TEXT NOT NULL DEFAULT (DATETIME('now'))
+            name TEXT NOT NULL UNIQUE
         )
     ''')
+    # Ensure all required columns exist (migration-friendly)
+    _add_column_if_not_exists(conn, "nodes", "panel_type", "TEXT NOT NULL DEFAULT 'hiddify'")
+    _add_column_if_not_exists(conn, "nodes", "panel_domain", "TEXT")
+    _add_column_if_not_exists(conn, "nodes", "admin_path", "TEXT")
+    _add_column_if_not_exists(conn, "nodes", "sub_path", "TEXT")
+    _add_column_if_not_exists(conn, "nodes", "api_key", "TEXT")
+    _add_column_if_not_exists(conn, "nodes", "sub_domains", "TEXT DEFAULT '[]'")
+    _add_column_if_not_exists(conn, "nodes", "capacity", "INTEGER NOT NULL DEFAULT 100")
+    _add_column_if_not_exists(conn, "nodes", "current_users", "INTEGER NOT NULL DEFAULT 0")
+    _add_column_if_not_exists(conn, "nodes", "is_active", "INTEGER NOT NULL DEFAULT 1")
+    _add_column_if_not_exists(conn, "nodes", "location", "TEXT")
+    _add_column_if_not_exists(conn, "nodes", "created_at", "TEXT DEFAULT CURRENT_TIMESTAMP")
+
+    # Indexes on nodes (after ensuring columns exist)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_nodes_active ON nodes(is_active)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_nodes_name ON nodes(name)")
 
