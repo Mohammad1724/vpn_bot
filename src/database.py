@@ -3,10 +3,18 @@
 import sqlite3
 import logging
 from datetime import datetime, timedelta
+from urllib.parse import urlparse
 
 DB_NAME = "vpn_bot.db"
 logger = logging.getLogger(__name__)
 _db_connection = None
+
+# Optional multi-server config (used to resolve server_name from sub_link)
+try:
+    from config import SERVERS
+except Exception:
+    SERVERS = []
+
 
 def _get_connection():
     global _db_connection
@@ -60,15 +68,16 @@ def _remove_device_limit_alert_column_if_exists(conn: sqlite3.Connection):
                     service_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, name TEXT,
                     sub_uuid TEXT NOT NULL UNIQUE, sub_link TEXT NOT NULL, plan_id INTEGER,
                     created_at TEXT NOT NULL, low_usage_alert_sent INTEGER DEFAULT 0,
+                    server_name TEXT,
                     FOREIGN KEY(user_id) REFERENCES users(user_id),
                     FOREIGN KEY(plan_id) REFERENCES plans(plan_id) ON DELETE SET NULL
                 )
             ''')
             cur.execute('''
                 INSERT INTO active_services_new (
-                    service_id, user_id, name, sub_uuid, sub_link, plan_id, created_at, low_usage_alert_sent
+                    service_id, user_id, name, sub_uuid, sub_link, plan_id, created_at, low_usage_alert_sent, server_name
                 )
-                SELECT service_id, user_id, name, sub_uuid, sub_link, plan_id, created_at, low_usage_alert_sent
+                SELECT service_id, user_id, name, sub_uuid, sub_link, plan_id, created_at, low_usage_alert_sent, NULL
                 FROM active_services
             ''')
             cur.execute("DROP TABLE active_services")
@@ -124,10 +133,14 @@ def init_db():
             service_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, name TEXT,
             sub_uuid TEXT NOT NULL UNIQUE, sub_link TEXT NOT NULL, plan_id INTEGER,
             created_at TEXT NOT NULL, low_usage_alert_sent INTEGER DEFAULT 0,
+            server_name TEXT,
             FOREIGN KEY(user_id) REFERENCES users(user_id),
             FOREIGN KEY(plan_id) REFERENCES plans(plan_id) ON DELETE SET NULL
         )
     ''')
+
+    # Ensure server_name column exists
+    _add_column_if_not_exists(conn, "active_services", "server_name", "TEXT")
 
     _remove_device_limit_alert_column_if_exists(conn)
 
@@ -189,9 +202,21 @@ def init_db():
         PRIMARY KEY (code, user_id)
     )""")
 
+    # Aggregated user traffic per server (snapshot)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_traffic (
+            user_id INTEGER NOT NULL,
+            server_name TEXT NOT NULL,
+            traffic_used REAL NOT NULL DEFAULT 0,
+            last_updated TEXT NOT NULL,
+            PRIMARY KEY (user_id, server_name)
+        )
+    ''')
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_traffic_user ON user_traffic(user_id)")
+
     # Default settings
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_number', '0000-0000-0000-0000'))
-    # ... (بقیه default settings)
+    # ... (other default settings)
 
     # Indexes
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_services_user ON active_services(user_id)")
@@ -204,6 +229,21 @@ def init_db():
 
     conn.commit()
     logger.info("Database initialized successfully.")
+
+def _resolve_server_name_from_link(sub_link: str) -> str | None:
+    try:
+        parsed = urlparse(sub_link)
+        host = (parsed.netloc or "").split(":")[0].lower()
+        if not host:
+            return None
+        for srv in SERVERS or []:
+            panel = str(srv.get("panel_domain", "")).lower()
+            subs = [str(d).lower() for d in (srv.get("sub_domains") or [])]
+            if host == panel or host in subs:
+                return str(srv.get("name"))
+        return None
+    except Exception:
+        return None
 
 def get_or_create_user(user_id: int, username: str = None) -> dict:
     conn = _connect_db()
@@ -371,12 +411,12 @@ def delete_plan_safe(plan_id: int):
         conn.rollback()
         return None
 
-def add_active_service(user_id: int, name: str, sub_uuid: str, sub_link: str, plan_id: int | None):
+def add_active_service(user_id: int, name: str, sub_uuid: str, sub_link: str, plan_id: int | None, server_name: str | None = None):
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn = _connect_db()
     conn.execute(
-        "INSERT INTO active_services (user_id, name, sub_uuid, sub_link, plan_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (user_id, name, sub_uuid, sub_link, plan_id, now_str)
+        "INSERT INTO active_services (user_id, name, sub_uuid, sub_link, plan_id, created_at, server_name) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (user_id, name, sub_uuid, sub_link, plan_id, now_str, server_name)
     )
     conn.commit()
 
@@ -419,29 +459,29 @@ def initiate_purchase_transaction(user_id: int, plan_id: int, final_price: float
     """آغاز تراکنش خرید با مدیریت تراکنش بهتر"""
     conn = _connect_db()
     cursor = conn.cursor()
-    
+
     try:
         conn.execute("BEGIN TRANSACTION")
-        
+
         # بررسی موجودی کافی
         cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
         user_balance = cursor.fetchone()
-        
+
         if not user_balance or user_balance['balance'] < final_price:
             conn.rollback()
             return None
-            
+
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute(
             "INSERT INTO transactions (user_id, plan_id, type, amount, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (user_id, plan_id, 'purchase', final_price, 'pending', now_str, now_str)
         )
         txn_id = cursor.lastrowid
-        
+
         # برای اطمینان از ثبت تراکنش قبل از عملیات بعدی
         conn.commit()
         return txn_id
-        
+
     except sqlite3.Error as e:
         logger.error(f"Error initiating purchase: {e}", exc_info=True)
         conn.rollback()
@@ -451,41 +491,43 @@ def finalize_purchase_transaction(transaction_id: int, sub_uuid: str, sub_link: 
     """نهایی کردن تراکنش خرید با مدیریت تراکنش بهتر"""
     conn = _connect_db()
     cursor = conn.cursor()
-    
+
     try:
         conn.execute("BEGIN TRANSACTION")
-        
+
         # بررسی وجود و وضعیت تراکنش
         cursor.execute("SELECT * FROM transactions WHERE transaction_id = ? AND status = 'pending'", (transaction_id,))
         txn = cursor.fetchone()
-        
+
         if not txn:
             conn.rollback()
             raise ValueError("Transaction not found or not pending.")
-            
+
         # کسر مبلغ از موجودی کاربر
         cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (txn['amount'], txn['user_id']))
-        
-        # ایجاد سرویس فعال
+
+        # ایجاد سرویس فعال (تشخیص سرور از لینک)
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        server_name = _resolve_server_name_from_link(sub_link)
+
         cursor.execute(
-            "INSERT INTO active_services (user_id, name, sub_uuid, sub_link, plan_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (txn['user_id'], custom_name, sub_uuid, sub_link, txn['plan_id'], now_str)
+            "INSERT INTO active_services (user_id, name, sub_uuid, sub_link, plan_id, created_at, server_name) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (txn['user_id'], custom_name, sub_uuid, sub_link, txn['plan_id'], now_str, server_name)
         )
-        
+
         # ثبت در سوابق فروش
         cursor.execute(
             "INSERT INTO sales_log (user_id, plan_id, price, sale_date) VALUES (?, ?, ?, ?)",
             (txn['user_id'], txn['plan_id'], txn['amount'], now_str)
         )
-        
+
         # به‌روزرسانی وضعیت تراکنش
         cursor.execute("UPDATE transactions SET status = 'completed', updated_at = ? WHERE transaction_id = ?", (now_str, transaction_id))
-        
+
         # ثبت تغییرات
         conn.commit()
         logger.info(f"Purchase transaction {transaction_id} successfully finalized")
-        
+
     except Exception as e:
         logger.error(f"Error finalizing purchase {transaction_id}: {e}", exc_info=True)
         conn.rollback()
@@ -508,37 +550,37 @@ def initiate_renewal_transaction(user_id: int, service_id: int, plan_id: int) ->
     """آغاز تراکنش تمدید با مدیریت تراکنش بهتر"""
     conn = _connect_db()
     cursor = conn.cursor()
-    
+
     try:
         conn.execute("BEGIN TRANSACTION")
-        
+
         # بررسی معتبر بودن سرویس و پلن
         plan = get_plan(plan_id)
         service = get_service(service_id)
-        
+
         if not plan or not service:
             conn.rollback()
             return None
-            
+
         # بررسی موجودی کافی
         cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
         user_balance = cursor.fetchone()
-        
+
         if not user_balance or user_balance['balance'] < plan['price']:
             conn.rollback()
             return None
-            
+
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute(
             "INSERT INTO transactions (user_id, plan_id, service_id, type, amount, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (user_id, plan_id, service_id, 'renewal', plan['price'], 'pending', now_str, now_str)
         )
         txn_id = cursor.lastrowid
-        
+
         # برای اطمینان از ثبت تراکنش قبل از عملیات بعدی
         conn.commit()
         return txn_id
-        
+
     except sqlite3.Error as e:
         logger.error(f"Error initiating renewal: {e}", exc_info=True)
         conn.rollback()
@@ -548,35 +590,35 @@ def finalize_renewal_transaction(transaction_id: int, new_plan_id: int):
     """نهایی کردن تراکنش تمدید با مدیریت تراکنش بهتر"""
     conn = _connect_db()
     cursor = conn.cursor()
-    
+
     try:
         conn.execute("BEGIN TRANSACTION")
-        
+
         # بررسی وجود و وضعیت تراکنش
         cursor.execute("SELECT * FROM transactions WHERE transaction_id = ? AND status = 'pending'", (transaction_id,))
         txn = cursor.fetchone()
-        
+
         if not txn:
             conn.rollback()
             raise ValueError("Renewal transaction not found or not pending.")
-            
+
         # کسر مبلغ از موجودی کاربر
         cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (txn['amount'], txn['user_id']))
-        
+
         # به‌روزرسانی سرویس
         cursor.execute("UPDATE active_services SET plan_id = ?, low_usage_alert_sent = 0 WHERE service_id = ?", (new_plan_id, txn['service_id']))
-        
+
         # ثبت در سوابق فروش
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute("INSERT INTO sales_log (user_id, plan_id, price, sale_date) VALUES (?, ?, ?, ?)", (txn['user_id'], txn['plan_id'], txn['amount'], now_str))
-        
+
         # به‌روزرسانی وضعیت تراکنش
         cursor.execute("UPDATE transactions SET status = 'completed', updated_at = ? WHERE transaction_id = ?", (now_str, transaction_id))
-        
+
         # ثبت تغییرات
         conn.commit()
         logger.info(f"Renewal transaction {transaction_id} successfully finalized")
-        
+
     except Exception as e:
         logger.error(f"Error finalizing renewal {transaction_id}: {e}", exc_info=True)
         conn.rollback()
@@ -836,3 +878,23 @@ def get_user_charge_count(user_id: int) -> int:
     except Exception as e:
         logger.error(f"Error getting charge count for user {user_id}: {e}")
         return 0
+
+# --- Aggregated user traffic helpers ---
+def upsert_user_traffic(user_id: int, server_name: str, traffic_used_gb: float):
+    conn = _connect_db()
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn.execute("""
+        INSERT INTO user_traffic (user_id, server_name, traffic_used, last_updated)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id, server_name) DO UPDATE SET
+            traffic_used = excluded.traffic_used,
+            last_updated = excluded.last_updated
+    """, (user_id, server_name or "Unknown", float(traffic_used_gb or 0), now_str))
+    conn.commit()
+
+def get_total_user_traffic(user_id: int) -> float:
+    conn = _connect_db()
+    cur = conn.cursor()
+    cur.execute("SELECT SUM(traffic_used) FROM user_traffic WHERE user_id = ?", (user_id,))
+    val = cur.fetchone()[0]
+    return float(val or 0.0)
