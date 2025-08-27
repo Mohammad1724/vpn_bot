@@ -24,6 +24,14 @@ except Exception:
     USAGE_AGGREGATION_ENABLED = False
     USAGE_UPDATE_INTERVAL_MIN = 10
 
+# Optional node health-check configs
+try:
+    from config import NODES_HEALTH_ENABLED, NODES_HEALTH_INTERVAL_MIN, NODES_AUTO_DISABLE_AFTER_FAILS
+except Exception:
+    NODES_HEALTH_ENABLED = True
+    NODES_HEALTH_INTERVAL_MIN = 10
+    NODES_AUTO_DISABLE_AFTER_FAILS = 3
+
 logger = logging.getLogger(__name__)
 
 # ========== Auto-backup (send DB file to admin) ==========
@@ -214,11 +222,10 @@ async def update_user_usage_snapshot(context: ContextTypes.DEFAULT_TYPE):
         async def fetch_usage(svc: dict):
             async with sem:
                 try:
-                    info = await hiddify_api.get_user_info(svc["sub_uuid"], server_name=svc.get("server_name"))
-                    if not info or not isinstance(info, dict) or info.get("_not_found"):
+                    usage = await hiddify_api.get_user_usage_gb(svc["sub_uuid"], server_name=svc.get("server_name"))
+                    if usage is None:
                         return None
-                    usage = float(info.get("current_usage_GB", 0.0) or 0.0)
-                    return (svc["user_id"], svc.get("server_name") or "Unknown", usage)
+                    return (svc["user_id"], svc.get("server_name") or "Unknown", float(usage))
                 except Exception:
                     return None
 
@@ -241,6 +248,76 @@ async def update_user_usage_snapshot(context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         logger.error("update_user_usage_snapshot failed: %s", e, exc_info=True)
+
+
+# ========== Node health-check and live user count ==========
+async def node_health_job(context: ContextTypes.DEFAULT_TYPE):
+    """
+    - هلس‌چک نودهای فعال (DB یا config)، با استفاده از hiddify_api.check_api_connection
+    - بروزرسانی current_users هر نود از روی active_services
+    - اختیاری: در صورت چند خطای متوالی، نود به‌صورت خودکار غیرفعال می‌شود و به ادمین اطلاع داده می‌شود.
+    """
+    try:
+        nodes = db.list_nodes()  # همه‌ی نودها (فعال/غیرفعال)
+        if not nodes:
+            return
+
+        # تنظیمات از DB یا config
+        try:
+            auto_disable_after = int(db.get_setting("nodes_auto_disable_after_fails") or NODES_AUTO_DISABLE_AFTER_FAILS)
+        except Exception:
+            auto_disable_after = NODES_AUTO_DISABLE_AFTER_FAILS
+
+        bot_data = context.application.bot_data.setdefault("node_failures", {})
+        sem = asyncio.Semaphore(6)
+
+        async def check_node(n: dict):
+            if str(n.get("panel_type", "hiddify")).lower() != "hiddify":
+                return  # فعلاً فقط هیدیفای
+            name = n["name"]
+            node_id = n["id"]
+
+            async with sem:
+                ok = False
+                try:
+                    ok = await hiddify_api.check_api_connection(server_name=name)
+                except Exception:
+                    ok = False
+
+                # به‌روزرسانی شمار کاربران زنده روی این نود
+                try:
+                    cnt = db.count_services_on_node(name)
+                    db.update_node(node_id, {"current_users": int(cnt)})
+                except Exception:
+                    pass
+
+                # مدیریت خطاهای متوالی و غیرفعال‌سازی خودکار
+                try:
+                    fails = int(bot_data.get(name, 0))
+                except Exception:
+                    fails = 0
+
+                if ok:
+                    if fails:
+                        bot_data[name] = 0
+                else:
+                    fails += 1
+                    bot_data[name] = fails
+                    if fails >= auto_disable_after and int(n.get("is_active", 1)) == 1:
+                        try:
+                            db.update_node(node_id, {"is_active": 0})
+                            await context.bot.send_message(
+                                chat_id=ADMIN_ID,
+                                text=f"⚠️ نود «{name}» به دلیل {fails} خطای متوالی در health-check غیرفعال شد."
+                            )
+                            logger.warning("Node %s auto-disabled after %d fails.", name, fails)
+                        except Exception as e:
+                            logger.error("Failed to auto-disable node %s: %s", name, e)
+
+        await asyncio.gather(*(check_node(n) for n in nodes))
+
+    except Exception as e:
+        logger.error("node_health_job failed: %s", e, exc_info=True)
 
 
 # ========== Scheduler hooks ==========
@@ -299,11 +376,11 @@ async def post_init(app: Application):
             logger.info("Expiry reminder job scheduled at %02d:00", exp_hour)
 
         # Usage aggregation job
-        if USAGE_AGGREGATION_ENABLED:
+        if _is_on(["usage_aggregation_enabled"], default="1" if USAGE_AGGREGATION_ENABLED else "0"):
             try:
-                interval_min = int(USAGE_UPDATE_INTERVAL_MIN or 10)
+                interval_min = int(db.get_setting("usage_update_interval_min") or USAGE_UPDATE_INTERVAL_MIN or 10)
             except Exception:
-                interval_min = 10
+                interval_min = USAGE_UPDATE_INTERVAL_MIN or 10
             jq.run_repeating(
                 update_user_usage_snapshot,
                 interval=timedelta(minutes=interval_min),
@@ -311,6 +388,20 @@ async def post_init(app: Application):
                 name="usage_aggregation_job",
             )
             logger.info("Usage aggregation job scheduled every %d minutes.", interval_min)
+
+        # Node health-check job
+        if _is_on(["nodes_health_enabled"], default="1" if NODES_HEALTH_ENABLED else "0"):
+            try:
+                nh_interval = int(db.get_setting("nodes_health_interval_min") or NODES_HEALTH_INTERVAL_MIN or 10)
+            except Exception:
+                nh_interval = NODES_HEALTH_INTERVAL_MIN or 10
+            jq.run_repeating(
+                node_health_job,
+                interval=timedelta(minutes=nh_interval),
+                first=timedelta(minutes=1),
+                name="node_health_job",
+            )
+            logger.info("Node health-check job scheduled every %d minutes.", nh_interval)
 
         logger.info("JobQueue: jobs scheduled.")
     except Exception as e:
