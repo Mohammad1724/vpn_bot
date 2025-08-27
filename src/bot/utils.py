@@ -13,6 +13,13 @@ import qrcode
 import database as db
 from config import PANEL_DOMAIN, ADMIN_PATH, SUB_PATH, SUB_DOMAINS
 
+# Optional multi-server import
+try:
+    from config import MULTI_SERVER_ENABLED, SERVERS
+except Exception:
+    MULTI_SERVER_ENABLED = False
+    SERVERS = []
+
 try:
     import jdatetime
 except ImportError:
@@ -49,9 +56,9 @@ def parse_date_flexible(date_str: str) -> Union[datetime, None]:
     """تجزیه انعطاف‌پذیر تاریخ در فرمت‌های مختلف"""
     if not date_str:
         return None
-    
+
     s = str(date_str).strip().replace("Z", "+00:00")
-    
+
     # تلاش با datetime.fromisoformat (پایتون 3.7+)
     try:
         dt = datetime.fromisoformat(s)
@@ -61,7 +68,7 @@ def parse_date_flexible(date_str: str) -> Union[datetime, None]:
         return dt.astimezone()
     except ValueError:
         pass
-    
+
     # تلاش با فرمت‌های مختلف
     fmts = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d")
     for fmt in fmts:
@@ -73,7 +80,7 @@ def parse_date_flexible(date_str: str) -> Union[datetime, None]:
             return dt_naive.replace(tzinfo=local_tz).astimezone()
         except ValueError:
             continue
-    
+
     # تلاش با الگو برای اعداد timestamp
     if re.match(r"^\d+$", s):
         try:
@@ -82,15 +89,30 @@ def parse_date_flexible(date_str: str) -> Union[datetime, None]:
                 return datetime.fromtimestamp(ts, tz=timezone.utc).astimezone()
         except (ValueError, OverflowError):
             pass
-    
+
     logger.error(f"Date parse failed for '{date_str}'.")
     return None
 
 # ---------------------------
 # Subscription and Service Info
 # ---------------------------
-def build_subscription_url(user_uuid: str) -> str:
-    """ساخت URL اشتراک بر اساس UUID کاربر"""
+def build_subscription_url(user_uuid: str, server_name: Optional[str] = None) -> str:
+    """ساخت URL اشتراک بر اساس UUID کاربر و سرور انتخابی (در صورت وجود)"""
+    if MULTI_SERVER_ENABLED and SERVERS:
+        # انتخاب سرور با نام یا fallback به اولی
+        server = None
+        if server_name:
+            for s in SERVERS:
+                if str(s.get("name")) == str(server_name):
+                    server = s
+                    break
+        if not server:
+            server = SERVERS[0]
+        sub_path = server.get("sub_path") or server.get("admin_path")
+        sub_domains = server.get("sub_domains") or []
+        sub_domain = random.choice(sub_domains) if sub_domains else server.get("panel_domain")
+        return f"https://{sub_domain}/{sub_path}/{user_uuid}"
+    # حالت تک‌سرور
     sub_path = SUB_PATH or ADMIN_PATH
     sub_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
     return f"https://{sub_domain}/{sub_path}/{user_uuid}"
@@ -139,7 +161,7 @@ def _format_expiry_and_days(user_data: dict, service_db_record: Optional[dict] =
     now_aware = datetime.now().astimezone()
     expire_jalali = "نامشخص"
     days_left = 0
-    
+
     if expire_dt:
         # تبدیل به تاریخ شمسی
         try:
@@ -179,8 +201,12 @@ def create_service_info_caption(user_data: dict, service_db_record: Optional[dic
     if unlimited and isinstance(service_name, str) and "0 گیگ" in service_name:
         service_name = service_name.replace("0 گیگ", "نامحدود")
 
-    # ساخت لینک اشتراک
-    sub_url = build_subscription_url(user_data['uuid'])
+    # ساخت لینک اشتراک (اولویت با sub_link ذخیره‌شده در DB برای پشتیبانی چندسرور)
+    if service_db_record and service_db_record.get("sub_link"):
+        sub_url = service_db_record["sub_link"]
+    else:
+        sub_url = build_subscription_url(user_data['uuid'], server_name=(service_db_record or {}).get("server_name"))
+
     sub_url_line = f"`{sub_url}`"
 
     # قالب‌بندی خط مربوط به ترافیک
@@ -208,7 +234,7 @@ def create_service_info_message(user_data: dict, service_db_record: Optional[dic
 def get_domain_for_plan(plan: dict | None) -> str:
     """انتخاب دامنه مناسب بر اساس نوع پلن (نامحدود/حجمی)"""
     is_unlimited = plan and plan.get('gb', 1) == 0
-    
+
     if is_unlimited:
         unlimited_domains_str = db.get_setting("unlimited_sub_domains")
         if unlimited_domains_str:
@@ -221,14 +247,14 @@ def get_domain_for_plan(plan: dict | None) -> str:
             domains = [d.strip() for d in volume_domains_str.split(',') if d.strip()]
             if domains:
                 return random.choice(domains)
-    
+
     # اگر دامنه اختصاصی یافت نشد، از دامنه‌های عمومی استفاده می‌کنیم
     general_domains_str = db.get_setting("sub_domains")
     if general_domains_str:
         domains = [d.strip() for d in general_domains_str.split(',') if d.strip()]
         if domains:
             return random.choice(domains)
-    
+
     # اگر هیچ دامنه‌ای تنظیم نشده باشد، از دامنه اصلی استفاده می‌کنیم
     return PANEL_DOMAIN
 
@@ -236,14 +262,14 @@ def get_service_status(hiddify_info: dict) -> Tuple[str, str, bool]:
     """بررسی وضعیت سرویس (فعال/منقضی) و تاریخ انقضا"""
     now = datetime.now(timezone.utc)
     is_expired = False
-    
+
     # حالت 1: سرویس غیرفعال یا محدود شده
     if hiddify_info.get('status') in ('disabled', 'limited'):
         is_expired = True
     # حالت 2: روزهای باقیمانده منفی است
     elif hiddify_info.get('days_left', 999) < 0:
         is_expired = True
-        
+
     # حالت 3: استفاده بیش از حجم مجاز
     usage_limit = hiddify_info.get('usage_limit_GB', 0)
     current_usage = hiddify_info.get('current_usage_GB', 0)
@@ -259,14 +285,14 @@ def get_service_status(hiddify_info: dict) -> Tuple[str, str, bool]:
         date_keys = ['start_date', 'last_reset_time', 'created_at']
         start_date_str = next((hiddify_info.get(k) for k in date_keys if hiddify_info.get(k)), None)
         package_days = hiddify_info.get('package_days', 0)
-        
+
         if not start_date_str:
             return "نامشخص", "N/A", True
-            
+
         start_dt = parse_date_flexible(start_date_str)
         if not start_dt:
             return "نامشخص", "N/A", True
-            
+
         expiry_dt_utc = start_dt + timedelta(days=package_days)
 
     # بررسی انقضا بر اساس زمان فعلی
