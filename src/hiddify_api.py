@@ -8,6 +8,14 @@ import logging
 from typing import Optional, Dict, Any
 
 from config import PANEL_DOMAIN, ADMIN_PATH, API_KEY, SUB_DOMAINS, SUB_PATH
+# Optional multi-server configs
+try:
+    from config import MULTI_SERVER_ENABLED, SERVERS, DEFAULT_SERVER_NAME, SERVER_SELECTION_POLICY
+except Exception:
+    MULTI_SERVER_ENABLED = False
+    SERVERS = []
+    DEFAULT_SERVER_NAME = None
+    SERVER_SELECTION_POLICY = "first"
 
 logger = logging.getLogger(__name__)
 
@@ -16,14 +24,51 @@ MAX_RETRIES = 3
 BASE_RETRY_DELAY = 1.0
 
 
-def _get_base_url() -> str:
-    # URL برای API v2.2.0
-    return f"https://{PANEL_DOMAIN}/{ADMIN_PATH}/api/v2/admin/"
-
-
-def _get_api_headers() -> dict:
+def _fallback_server_dict() -> Dict[str, Any]:
     return {
-        "Hiddify-API-Key": API_KEY,
+        "name": DEFAULT_SERVER_NAME or "Main",
+        "panel_domain": PANEL_DOMAIN,
+        "admin_path": ADMIN_PATH,
+        "sub_path": SUB_PATH,
+        "api_key": API_KEY,
+        "sub_domains": SUB_DOMAINS or [],
+    }
+
+
+def _get_server_by_name(name: str) -> Optional[Dict[str, Any]]:
+    for s in SERVERS or []:
+        if str(s.get("name")) == str(name):
+            return s
+    return None
+
+
+def _select_server(server_name: Optional[str] = None) -> Dict[str, Any]:
+    # If explicit name provided and found
+    if server_name:
+        srv = _get_server_by_name(server_name)
+        if srv:
+            return srv
+
+    # If multi-server enabled, choose by policy
+    if MULTI_SERVER_ENABLED and SERVERS:
+        if SERVER_SELECTION_POLICY == "by_name" and DEFAULT_SERVER_NAME:
+            srv = _get_server_by_name(DEFAULT_SERVER_NAME)
+            if srv:
+                return srv
+        # default: first
+        return SERVERS[0]
+
+    # Fallback to single-server config
+    return _fallback_server_dict()
+
+
+def _get_base_url(server: Dict[str, Any]) -> str:
+    return f"https://{server['panel_domain']}/{server['admin_path']}/api/v2/admin/"
+
+
+def _get_api_headers(server: Dict[str, Any]) -> dict:
+    return {
+        "Hiddify-API-Key": server["api_key"],
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
@@ -38,7 +83,7 @@ async def _make_client(timeout: float = 20.0) -> httpx.AsyncClient:
     return httpx.AsyncClient(timeout=timeout, http2=http2_support)
 
 
-async def _make_request(method: str, url: str, **kwargs) -> Optional[Dict[str, Any]]:
+async def _make_request(method: str, url: str, server: Dict[str, Any], **kwargs) -> Optional[Dict[str, Any]]:
     """
     اجرای درخواست HTTP با مکانیزم retry و مدیریت خطای پیشرفته.
     404 را به صورت {"_not_found": True} برمی‌گرداند.
@@ -46,13 +91,14 @@ async def _make_request(method: str, url: str, **kwargs) -> Optional[Dict[str, A
     """
     client: Optional[httpx.AsyncClient] = None
     retries = 0
+    headers = kwargs.pop("headers", None) or _get_api_headers(server)
 
     while retries <= MAX_RETRIES:
         try:
             if client is None:
                 client = await _make_client(timeout=kwargs.get("timeout", 20.0))
 
-            resp: httpx.Response = await getattr(client, method.lower())(url, **kwargs)
+            resp: httpx.Response = await getattr(client, method.lower())(url, headers=headers, **kwargs)
             resp.raise_for_status()
 
             try:
@@ -108,11 +154,13 @@ async def create_hiddify_user(
     plan_gb: float,
     user_telegram_id: str,
     custom_name: str = "",
+    server_name: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     ایجاد کاربر در پنل. اگر plan_gb <= 0 باشد، usage_limit_GB را ارسال نمی‌کنیم تا «نامحدود» شود.
     """
-    endpoint = _get_base_url() + "user/"
+    server = _select_server(server_name)
+    endpoint = _get_base_url(server) + "user/"
 
     random_suffix = uuid.uuid4().hex[:4]
     base_name = custom_name if custom_name else f"tg-{user_telegram_id.split(':')[-1]}"
@@ -135,27 +183,30 @@ async def create_hiddify_user(
         payload["usage_limit_GB"] = usage_limit_gb
     # در غیر این صورت ارسال نمی‌کنیم تا نامحدود تلقی شود
 
-    data = await _make_request("post", endpoint, json=payload, headers=_get_api_headers(), timeout=20.0)
+    data = await _make_request("post", endpoint, server, json=payload, timeout=20.0)
     if not data or not data.get("uuid"):
         logger.error("create_hiddify_user: failed or UUID missing")
         return None
 
     user_uuid = data.get("uuid")
-    sub_path = SUB_PATH or ADMIN_PATH
-    sub_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
-    return {"full_link": f"https://{sub_domain}/{sub_path}/{user_uuid}/", "uuid": user_uuid}
+    sub_path = server.get("sub_path") or server.get("admin_path")
+    sub_domains = server.get("sub_domains") or []
+    sub_domain = random.choice(sub_domains) if sub_domains else server["panel_domain"]
+    return {"full_link": f"https://{sub_domain}/{sub_path}/{user_uuid}/", "uuid": user_uuid, "server_name": server["name"]}
 
 
-async def get_user_info(user_uuid: str) -> Optional[Dict[str, Any]]:
-    endpoint = f"{_get_base_url()}user/{user_uuid}/"
-    return await _make_request("get", endpoint, headers=_get_api_headers(), timeout=10.0)
+async def get_user_info(user_uuid: str, server_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    server = _select_server(server_name)
+    endpoint = f"{_get_base_url(server)}user/{user_uuid}/"
+    return await _make_request("get", endpoint, server, timeout=10.0)
 
 
-async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float) -> Optional[Dict[str, Any]]:
+async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float, server_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
     تمدید سرویس کاربر. اگر plan_gb <= 0 باشد، usage_limit_GB را نمی‌فرستیم تا نامحدود باقی بماند.
     """
-    endpoint = f"{_get_base_url()}user/{user_uuid}/"
+    server = _select_server(server_name)
+    endpoint = f"{_get_base_url(server)}user/{user_uuid}/"
 
     payload = {
         "package_days": int(plan_days),
@@ -170,17 +221,18 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
         payload["usage_limit_GB"] = usage_limit_gb
     # نامحدود: نفستادن این فیلد
 
-    return await _make_request("patch", endpoint, json=payload, headers=_get_api_headers(), timeout=30.0)
+    return await _make_request("patch", endpoint, server, json=payload, timeout=30.0)
 
 
-async def delete_user_from_panel(user_uuid: str) -> bool:
+async def delete_user_from_panel(user_uuid: str, server_name: Optional[str] = None) -> bool:
     """
     حذف کاربر از پنل هیدیفای (API v2.2.0)
     - اگر 404 برگردد، True برمی‌گردانیم چون کاربر در پنل وجود ندارد (idempotent).
     - اگر خطای شبکه باشد، با یک GET نهایی بررسی می‌کنیم.
     """
-    endpoint = f"{_get_base_url()}user/{user_uuid}/"
-    data = await _make_request("delete", endpoint, headers=_get_api_headers(), timeout=15.0)
+    server = _select_server(server_name)
+    endpoint = f"{_get_base_url(server)}user/{user_uuid}/"
+    data = await _make_request("delete", endpoint, server, timeout=15.0)
 
     if data == {}:
         logger.info("Successfully deleted user %s from panel.", user_uuid)
@@ -191,7 +243,7 @@ async def delete_user_from_panel(user_uuid: str) -> bool:
         return True
 
     if data is None:
-        probe = await get_user_info(user_uuid)
+        probe = await get_user_info(user_uuid, server_name=server["name"])
         if isinstance(probe, dict) and probe.get("_not_found"):
             logger.info("Delete treated as success for %s (verified _not_found after delete).", user_uuid)
             return True
@@ -199,13 +251,14 @@ async def delete_user_from_panel(user_uuid: str) -> bool:
     return False
 
 
-async def check_api_connection() -> bool:
+async def check_api_connection(server_name: Optional[str] = None) -> bool:
     """
     بررسی اتصال به API و صحت کلید API
     """
     try:
-        endpoint = _get_base_url() + "user/?page=1&per_page=1"
-        response = await _make_request("get", endpoint, headers=_get_api_headers(), timeout=5.0)
+        server = _select_server(server_name)
+        endpoint = _get_base_url(server) + "user/?page=1&per_page=1"
+        response = await _make_request("get", endpoint, server, timeout=5.0)
         return response is not None
     except Exception as e:
         logger.error("API connection check failed: %s", e, exc_info=True)
