@@ -20,6 +20,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db.get_or_create_user(user.id, user.username)
@@ -62,15 +63,18 @@ async def user_generic_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text("عملیات لغو شد.", reply_markup=get_main_menu_keyboard(update.effective_user.id))
     return ConversationHandler.END
 
+
 async def admin_generic_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await update.message.reply_text("عملیات لغو شد.", reply_markup=get_admin_menu_keyboard())
     return ADMIN_MENU
 
+
 async def admin_conv_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await update.message.reply_text("عملیات لغو شد.", reply_markup=get_admin_menu_keyboard())
     return ConversationHandler.END
+
 
 async def show_account_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -78,6 +82,12 @@ async def show_account_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     services_count = len(db.get_user_services(user_id))
     referral_count = db.get_user_referral_count(user_id)
     join_date = user.get('join_date', 'N/A')
+
+    # مجموع مصرف روی تمام نودها (بر اساس اسنپ‌شات‌های دوره‌ای)
+    try:
+        total_usage_gb = db.get_total_user_traffic(user_id)
+    except Exception:
+        total_usage_gb = 0.0
 
     join_date_jalali = "N/A"
     if jdatetime and join_date != "N/A":
@@ -92,6 +102,7 @@ async def show_account_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"▫️ شناسه عددی: `{user_id}`\n"
         f"▫️ موجودی کیف پول: **{user['balance']:.0f} تومان**\n"
         f"▫️ تعداد سرویس‌های فعال: **{services_count}**\n"
+        f"▫️ مصرف کل روی تمام نودها: **{total_usage_gb:.2f} GB**\n"
         f"▫️ تعداد دوستان دعوت‌شده: **{referral_count}**\n"
         f"▫️ تاریخ عضویت: **{join_date_jalali}**"
     )
@@ -150,7 +161,7 @@ async def show_charge_history_callback(update: Update, context: ContextTypes.DEF
             charge_date = datetime.strptime(ch['created_at'], '%Y-%m-%d %H:%M:%S').strftime('%Y/%m/%d')
         except (ValueError, TypeError):
             charge_date = ch['created_at']
-            
+
         msg += f"🔹 {ch['amount']:.0f} تومان | {charge_date}\n"
 
     kb = [[InlineKeyboardButton("🔙 بازگشت به اطلاعات حساب", callback_data="acc_back_to_main")]]
@@ -172,6 +183,7 @@ async def show_guide(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🛍️ راهنمای خرید از ربات", callback_data="guide_buying")],
     ]
     await update.message.reply_text("📚 لطفاً موضوع راهنمای مورد نظر خود را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
+
 
 async def show_guide_content(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -213,6 +225,7 @@ async def show_guide_content(update: Update, context: ContextTypes.DEFAULT_TYPE)
             disable_web_page_preview=True
         )
 
+
 async def back_to_guide_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -228,6 +241,7 @@ async def back_to_guide_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
         [InlineKeyboardButton("🛍️ راهنمای خرید از ربات", callback_data="guide_buying")],
     ]
     await q.from_user.send_message("📚 لطفاً موضوع راهنمای مورد نظر خود را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
+
 
 async def show_referral_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
