@@ -5,6 +5,7 @@ import logging
 import shutil
 import os
 import sqlite3
+from collections import defaultdict
 from datetime import datetime, timedelta, time, timezone
 from telegram.ext import Application, ContextTypes
 from telegram.error import Forbidden, BadRequest, RetryAfter, TimedOut, NetworkError
@@ -15,6 +16,13 @@ import hiddify_api
 from config import ADMIN_ID
 from bot.utils import get_service_status
 from bot.handlers.admin.reports import send_daily_summary, send_weekly_summary
+
+# Optional usage aggregation configs
+try:
+    from config import USAGE_AGGREGATION_ENABLED, USAGE_UPDATE_INTERVAL_MIN
+except Exception:
+    USAGE_AGGREGATION_ENABLED = False
+    USAGE_UPDATE_INTERVAL_MIN = 10
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +138,7 @@ async def expiry_reminder_job(context: ContextTypes.DEFAULT_TYPE):
 
         for svc in services:
             try:
-                info = await hiddify_api.get_user_info(svc["sub_uuid"])
+                info = await hiddify_api.get_user_info(svc["sub_uuid"], server_name=svc.get("server_name"))
                 if isinstance(info, dict) and info.get("_not_found"):
                     await _remove_stale_service(svc, context)
                     continue
@@ -189,6 +197,52 @@ async def _remove_stale_service(service: dict, context: ContextTypes.DEFAULT_TYP
         logger.error("Failed to remove stale service %s: %s", service["service_id"], e, exc_info=True)
 
 
+# ========== Usage aggregation across servers ==========
+async def update_user_usage_snapshot(context: ContextTypes.DEFAULT_TYPE):
+    """
+    برای هر سرویس فعال، مصرف را از پنل مربوطه خوانده و
+    مجموع مصرف هر کاربر را به تفکیک سرور به‌روزرسانی می‌کند.
+    """
+    try:
+        services = db.get_all_active_services()
+        if not services:
+            return
+
+        # Concurrency control
+        sem = asyncio.Semaphore(8)
+
+        async def fetch_usage(svc: dict):
+            async with sem:
+                try:
+                    info = await hiddify_api.get_user_info(svc["sub_uuid"], server_name=svc.get("server_name"))
+                    if not info or not isinstance(info, dict) or info.get("_not_found"):
+                        return None
+                    usage = float(info.get("current_usage_GB", 0.0) or 0.0)
+                    return (svc["user_id"], svc.get("server_name") or "Unknown", usage)
+                except Exception:
+                    return None
+
+        tasks = [fetch_usage(s) for s in services]
+        results = await asyncio.gather(*tasks, return_exceptions=False)
+
+        # Aggregate per (user_id, server_name)
+        agg = defaultdict(float)
+        for r in results:
+            if not r:
+                continue
+            uid, srv, usage = r
+            agg[(uid, srv)] += usage
+
+        # Upsert into DB
+        for (uid, srv), total_usage in agg.items():
+            db.upsert_user_traffic(uid, srv, total_usage)
+
+        logger.info("Usage snapshot updated for %d user-server pairs.", len(agg))
+
+    except Exception as e:
+        logger.error("update_user_usage_snapshot failed: %s", e, exc_info=True)
+
+
 # ========== Scheduler hooks ==========
 def _is_on(keys: list[str], default: str = "0") -> bool:
     """
@@ -243,6 +297,20 @@ async def post_init(app: Application):
         if _is_on(["expiry_reminder_enabled"], default="1"):
             jq.run_daily(expiry_reminder_job, time=time(hour=exp_hour, minute=0), name="expiry_reminder")
             logger.info("Expiry reminder job scheduled at %02d:00", exp_hour)
+
+        # Usage aggregation job
+        if USAGE_AGGREGATION_ENABLED:
+            try:
+                interval_min = int(USAGE_UPDATE_INTERVAL_MIN or 10)
+            except Exception:
+                interval_min = 10
+            jq.run_repeating(
+                update_user_usage_snapshot,
+                interval=timedelta(minutes=interval_min),
+                first=timedelta(minutes=1),
+                name="usage_aggregation_job",
+            )
+            logger.info("Usage aggregation job scheduled every %d minutes.", interval_min)
 
         logger.info("JobQueue: jobs scheduled.")
     except Exception as e:
