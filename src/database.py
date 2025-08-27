@@ -2,6 +2,7 @@
 
 import sqlite3
 import logging
+import json
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
@@ -214,6 +215,27 @@ def init_db():
     ''')
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_traffic_user ON user_traffic(user_id)")
 
+    # nodes (Hiddify panels)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS nodes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            panel_type TEXT NOT NULL DEFAULT 'hiddify',
+            panel_domain TEXT NOT NULL,
+            admin_path TEXT NOT NULL,
+            sub_path TEXT NOT NULL,
+            api_key TEXT NOT NULL,
+            sub_domains TEXT DEFAULT '[]', -- JSON array
+            capacity INTEGER NOT NULL DEFAULT 100,
+            current_users INTEGER NOT NULL DEFAULT 0,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            location TEXT,
+            created_at TEXT NOT NULL DEFAULT (DATETIME('now'))
+        )
+    ''')
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_nodes_active ON nodes(is_active)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_nodes_name ON nodes(name)")
+
     # Default settings
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_number', '0000-0000-0000-0000'))
     # ... (other default settings)
@@ -231,11 +253,39 @@ def init_db():
     logger.info("Database initialized successfully.")
 
 def _resolve_server_name_from_link(sub_link: str) -> str | None:
+    """
+    Resolve server_name from subscription link host.
+    Priority:
+      1) DB nodes: match host against panel_domain or any sub_domains
+      2) Fallback to config.SERVERS
+    """
     try:
         parsed = urlparse(sub_link)
         host = (parsed.netloc or "").split(":")[0].lower()
         if not host:
             return None
+
+        # 1) Try DB nodes
+        try:
+            conn = _connect_db()
+            cur = conn.cursor()
+            cur.execute("SELECT name, panel_domain, sub_domains FROM nodes")
+            for row in cur.fetchall():
+                name = row["name"]
+                panel = (row["panel_domain"] or "").lower()
+                # sub_domains stored as JSON string
+                try:
+                    subs_raw = row["sub_domains"]
+                    subs = json.loads(subs_raw) if subs_raw else []
+                    subs = [str(x).lower() for x in subs if str(x).strip()]
+                except Exception:
+                    subs = []
+                if host == panel or host in subs:
+                    return name
+        except Exception:
+            pass
+
+        # 2) Fallback to config.SERVERS
         for srv in SERVERS or []:
             panel = str(srv.get("panel_domain", "")).lower()
             subs = [str(d).lower() for d in (srv.get("sub_domains") or [])]
@@ -543,7 +593,7 @@ def cancel_purchase_transaction(transaction_id: int):
         conn.commit()
         logger.info(f"Purchase transaction {transaction_id} cancelled")
     except sqlite3.Error as e:
-        logger.error(f"Error cancelling transaction {transaction_id}: {e}", exc_info=True)
+        logger.error(f"Error cancelling transaction {transaction_id}: {e}")
         conn.rollback()
 
 def initiate_renewal_transaction(user_id: int, service_id: int, plan_id: int) -> int | None:
@@ -634,7 +684,7 @@ def cancel_renewal_transaction(transaction_id: int):
         conn.commit()
         logger.info(f"Renewal transaction {transaction_id} cancelled")
     except sqlite3.Error as e:
-        logger.error(f"Error cancelling renewal transaction {transaction_id}: {e}", exc_info=True)
+        logger.error(f"Error cancelling renewal transaction {transaction_id}: {e}")
         conn.rollback()
 
 def use_gift_code(code: str, user_id: int) -> float | None:
@@ -898,3 +948,101 @@ def get_total_user_traffic(user_id: int) -> float:
     cur.execute("SELECT SUM(traffic_used) FROM user_traffic WHERE user_id = ?", (user_id,))
     val = cur.fetchone()[0]
     return float(val or 0.0)
+
+# ===================== Nodes (Hiddify) =====================
+def _parse_sub_domains(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    try:
+        val = json.loads(raw)
+        if isinstance(val, list):
+            return [str(x).strip() for x in val if str(x).strip()]
+    except Exception:
+        pass
+    # fallback: comma-separated
+    return [s.strip() for s in str(raw).split(",") if s.strip()]
+
+def _to_json_list(val) -> str:
+    if val is None:
+        return "[]"
+    if isinstance(val, list):
+        return json.dumps([str(x).strip() for x in val if str(x).strip()], ensure_ascii=False)
+    # string (comma-separated)
+    return json.dumps([s.strip() for s in str(val).split(",") if s.strip()], ensure_ascii=False)
+
+def _node_row_to_dict(row: sqlite3.Row) -> dict:
+    d = dict(row)
+    d["sub_domains"] = _parse_sub_domains(d.get("sub_domains"))
+    return d
+
+def add_node(name: str, panel_type: str, panel_domain: str, admin_path: str,
+             sub_path: str, api_key: str, sub_domains: list[str] | str | None,
+             capacity: int = 100, location: str | None = None, is_active: bool = True) -> int:
+    conn = _connect_db()
+    cur = conn.cursor()
+    cur.execute('''
+        INSERT INTO nodes (name, panel_type, panel_domain, admin_path, sub_path, api_key, sub_domains,
+                           capacity, current_users, is_active, location)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+    ''', (
+        name.strip(), panel_type.strip() or "hiddify", panel_domain.strip(),
+        admin_path.strip(), sub_path.strip(), api_key.strip(), _to_json_list(sub_domains),
+        int(capacity or 100), 1 if is_active else 0, (location.strip() if location else None)
+    ))
+    conn.commit()
+    return cur.lastrowid
+
+def list_nodes(only_active: bool = False) -> list[dict]:
+    conn = _connect_db()
+    cur = conn.cursor()
+    if only_active:
+        cur.execute("SELECT * FROM nodes WHERE is_active = 1 ORDER BY id ASC")
+    else:
+        cur.execute("SELECT * FROM nodes ORDER BY id ASC")
+    return [_node_row_to_dict(r) for r in cur.fetchall()]
+
+def get_node(node_id: int) -> dict | None:
+    conn = _connect_db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM nodes WHERE id = ?", (node_id,))
+    row = cur.fetchone()
+    return _node_row_to_dict(row) if row else None
+
+def get_node_by_name(name: str) -> dict | None:
+    conn = _connect_db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM nodes WHERE name = ? COLLATE NOCASE", (name.strip(),))
+    row = cur.fetchone()
+    return _node_row_to_dict(row) if row else None
+
+def update_node(node_id: int, data: dict):
+    if not data:
+        return
+    allowed = {"name", "panel_type", "panel_domain", "admin_path", "sub_path", "api_key",
+               "sub_domains", "capacity", "current_users", "is_active", "location"}
+    fields, params = [], []
+    for k, v in data.items():
+        if k not in allowed:
+            continue
+        if k == "sub_domains":
+            v = _to_json_list(v)
+        fields.append(f"{k} = ?")
+        params.append(v)
+    if not fields:
+        return
+    params.append(node_id)
+    q = f"UPDATE nodes SET {', '.join(fields)} WHERE id = ?"
+    conn = _connect_db()
+    conn.execute(q, tuple(params))
+    conn.commit()
+
+def delete_node(node_id: int):
+    conn = _connect_db()
+    conn.execute("DELETE FROM nodes WHERE id = ?", (node_id,))
+    conn.commit()
+
+def count_services_on_node(server_name: str) -> int:
+    conn = _connect_db()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM active_services WHERE server_name = ?", (server_name,))
+    return int(cur.fetchone()[0] or 0)
