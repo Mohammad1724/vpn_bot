@@ -67,13 +67,20 @@ async def _render_user_panel_text(target_id: int) -> tuple[str, bool]:
         username = f"@{username}"
     username = _sanitize_for_code(username)
 
+    # مجموع مصرف روی تمام نودها (در صورت فعال بودن Job به‌روزرسانی مصرف)
+    try:
+        total_usage_gb = db.get_total_user_traffic(target_id)
+    except Exception:
+        total_usage_gb = 0.0
+
     text = (
         f"👤 شناسه: `{_sanitize_for_code(str(target_id))}`\n"
         f"👥 نام کاربری: `{username}`\n"
         f"💰 موجودی: {int(info.get('balance', 0)):,} تومان\n"
         f"🧪 تست: {'استفاده کرده' if info.get('has_used_trial') else 'آزاد'}\n"
         f"🚫 وضعیت: {'مسدود' if ban_state else 'آزاد'}\n"
-        f"📋 تعداد سرویس‌ها: {len(services)}"
+        f"📋 تعداد سرویس‌ها: {len(services)}\n"
+        f"📊 مصرف کل (همه نودها): {total_usage_gb:.2f} GB"
     )
     return text, ban_state
 
@@ -170,9 +177,10 @@ async def admin_user_services_cb(update: Update, context: ContextTypes.DEFAULT_T
     for s in services:
         name = s.get('name') or f"سرویس {s.get('service_id')}"
         sid = s.get('service_id')
+        server_name = s.get('server_name') or "-"
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("🗑️ حذف سرویس", callback_data=f"admin_delete_service_{sid}_{target_id}")]])
         try:
-            await q.from_user.send_message(f"- {name} (ID: {sid})", reply_markup=kb)
+            await q.from_user.send_message(f"- {name} (ID: {sid}) | نود: {server_name}", reply_markup=kb)
         except Exception:
             pass
 
@@ -253,7 +261,7 @@ async def admin_user_amount_cancel_cb(update: Update, context: ContextTypes.DEFA
 
 async def manage_user_amount_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     em = update.effective_message
-    txt = (em.text or "").strip().replace(",", "")
+    txt = (em.text or "").strip().replace(",", "").replace("٬", "")
     try:
         amount = int(abs(float(txt)))
     except Exception:
@@ -318,16 +326,38 @@ async def admin_delete_service(update: Update, context: ContextTypes.DEFAULT_TYP
             await _send_user_panel(update, target_id)
         return
 
-    await q.edit_message_text("در حال حذف سرویس از پنل...")
-    success = await hiddify_api.delete_user_from_panel(svc['sub_uuid'])
+    # حذف سرویس از پنل با درنظرگرفتن نود مربوطه
+    server_name = svc.get('server_name')
+    try:
+        await q.edit_message_text("در حال حذف سرویس از پنل... ⏳")
+    except BadRequest:
+        pass
+
+    success = await hiddify_api.delete_user_from_panel(svc['sub_uuid'], server_name=server_name)
+
+    # اگر ناموفق، یک چک نهایی برای اطمینان از «عدم وجود» انجام بده
+    if not success:
+        try:
+            probe = await hiddify_api.get_user_info(svc['sub_uuid'], server_name=server_name)
+            if isinstance(probe, dict) and probe.get("_not_found"):
+                success = True
+        except Exception:
+            pass
+
     if success:
         db.delete_service(service_id)
         if target_id:
             await _send_user_panel(update, target_id)
         else:
-            await q.edit_message_text(f"✅ سرویس {svc.get('name') or service_id} با موفقیت از پنل و ربات حذف شد.")
+            try:
+                await q.edit_message_text(f"✅ سرویس {svc.get('name') or service_id} با موفقیت از پنل و ربات حذف شد.")
+            except BadRequest:
+                pass
     else:
-        await q.edit_message_text("❌ حذف سرویس از پنل ناموفق بود.")
+        try:
+            await q.edit_message_text("❌ حذف سرویس از پنل ناموفق بود.")
+        except BadRequest:
+            pass
 
 # -------------------------------
 # ارسال پیام (Broadcast)
@@ -484,7 +514,7 @@ async def admin_confirm_charge_callback(update: Update, context: ContextTypes.DE
 
     bonus_applied = 0
     try:
-        if hasattr(db, "get_user_charge_count") and db.get_user_charge_count(user_id) == 1: # چون همین الان یکی ثبت شد
+        if hasattr(db, "get_user_charge_count") and db.get_user_charge_count(user_id) == 1:  # چون همین الان یکی ثبت شد
             pc = (db.get_setting('first_charge_code') or '').upper()
             pct = int(db.get_setting('first_charge_bonus_percent') or 0)
             exp_raw = db.get_setting('first_charge_expires_at') or ''
@@ -502,7 +532,7 @@ async def admin_confirm_charge_callback(update: Update, context: ContextTypes.DE
     final_text = f"✅ مبلغ {amount:,} تومان برای کاربر `{user_id}` تایید شد."
     if bonus_applied > 0:
         final_text += f"\n🎁 پاداش شارژ اول به مبلغ {bonus_applied:,} تومان نیز اعمال شد."
-    
+
     await q.edit_message_caption(final_text, parse_mode=ParseMode.MARKDOWN)
 
     try:
