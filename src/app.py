@@ -190,7 +190,7 @@ def build_application():
         map_to_parent={ConversationHandler.END: constants.GIFT_CODES_MENU},
         per_user=True, per_chat=True, allow_reentry=True
     )
-    
+
     promo_create_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(r'^➕ ساخت کد تخفیف جدید$') & admin_filter, admin_gift.create_promo_start)],
         states={
@@ -253,6 +253,10 @@ def build_application():
                 CallbackQueryHandler(admin_settings.service_configs_submenu, pattern="^settings_service_configs$"),
                 CallbackQueryHandler(admin_settings.subdomains_submenu, pattern="^settings_subdomains$"),
                 CallbackQueryHandler(admin_settings.reports_and_reminders_submenu, pattern="^settings_reports_reminders$"),
+                # NEW: multi-server & usage submenu + toggle
+                CallbackQueryHandler(admin_settings.multi_server_usage_submenu, pattern="^settings_multi_server_usage$"),
+                CallbackQueryHandler(admin_settings.toggle_usage_aggregation, pattern="^toggle_usage_aggregation$"),
+
                 CallbackQueryHandler(admin_settings.edit_default_link_start, pattern="^edit_default_link_type$"),
                 CallbackQueryHandler(admin_settings.set_default_link_type, pattern="^set_default_link_"),
                 CallbackQueryHandler(admin_settings.toggle_maintenance, pattern="^toggle_maintenance$"),
@@ -355,7 +359,7 @@ def build_application():
                 MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_users.manage_user_amount_received),
                 CallbackQueryHandler(admin_users.admin_user_amount_cancel_cb, pattern=r'^admin_user_amount_cancel_\d+$'),
             ],
-            
+
             constants.GIFT_CODES_MENU: [
                 MessageHandler(filters.Regex(r'^🎁 مدیریت کدهای هدیه$'), admin_gift.admin_gift_codes_submenu),
                 MessageHandler(filters.Regex(r'^💳 مدیریت کدهای تخفیف$'), admin_gift.admin_promo_codes_submenu),
@@ -405,7 +409,7 @@ def build_application():
     application.add_handler(MessageHandler(filters.REPLY & admin_filter, support_h.admin_reply_handler))
     application.add_handler(CallbackQueryHandler(support_h.close_ticket, pattern="^close_ticket_"))
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern="^check_membership$"))
-    
+
     application.add_handler(CallbackQueryHandler(admin_users.admin_confirm_charge_callback, pattern=r'^admin_confirm_charge_'), group=1)
     application.add_handler(CallbackQueryHandler(admin_users.admin_reject_charge_callback, pattern=r'^admin_reject_charge_'), group=1)
 
