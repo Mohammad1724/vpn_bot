@@ -16,7 +16,8 @@ from bot.keyboards import get_admin_menu_keyboard
 try:
     from config import (
         MULTI_SERVER_ENABLED, SERVERS, DEFAULT_SERVER_NAME,
-        USAGE_AGGREGATION_ENABLED, USAGE_UPDATE_INTERVAL_MIN
+        USAGE_AGGREGATION_ENABLED, USAGE_UPDATE_INTERVAL_MIN,
+        SERVER_SELECTION_POLICY,
     )
 except Exception:
     MULTI_SERVER_ENABLED = False
@@ -24,6 +25,7 @@ except Exception:
     DEFAULT_SERVER_NAME = None
     USAGE_AGGREGATION_ENABLED = False
     USAGE_UPDATE_INTERVAL_MIN = 10
+    SERVER_SELECTION_POLICY = "first"
 
 logger = logging.getLogger(__name__)
 
@@ -182,26 +184,46 @@ async def reports_and_reminders_submenu(update: Update, context: ContextTypes.DE
 
 # --- Multi-server & Usage submenu ---
 async def multi_server_usage_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Usage aggregation settings (DB-driven)
     usage_agg_on = "فعال ✅" if _get_bool("usage_aggregation_enabled", USAGE_AGGREGATION_ENABLED) else "غیرفعال ❌"
     interval_min = _get("usage_update_interval_min", str(USAGE_UPDATE_INTERVAL_MIN))
 
-    # display-only info from config.py
-    nodes_on = "فعال ✅" if MULTI_SERVER_ENABLED else "غیرفعال ❌"
-    nodes_count = len(SERVERS) if isinstance(SERVERS, list) else 0
-    default_node = DEFAULT_SERVER_NAME or (SERVERS[0].get("name") if nodes_count else "-")
+    # Nodes info: config.py + DB
+    nodes_on_cfg = "فعال ✅" if MULTI_SERVER_ENABLED else "غیرفعال ❌"
+    nodes_count_cfg = len(SERVERS) if isinstance(SERVERS, list) else 0
+    default_node = DEFAULT_SERVER_NAME or (SERVERS[0].get("name") if nodes_count_cfg else "-")
+    try:
+        nodes_db_count = len(db.list_nodes() or [])
+    except Exception:
+        nodes_db_count = 0
+
+    # Node health-check settings (DB-driven)
+    nodes_h_on = "فعال ✅" if _get_bool("nodes_health_enabled", True) else "غیرفعال ❌"
+    nodes_h_interval = _get("nodes_health_interval_min", "10")
+    auto_disable_after = _get("nodes_auto_disable_after_fails", "3")
+
+    policy = str(SERVER_SELECTION_POLICY or "first")
 
     text = (
         f"**🌐 چندنودی و مصرف**\n\n"
-        f"- وضعیت چندنودی (config.py): {nodes_on}\n"
-        f"- تعداد نودها: {nodes_count}\n"
-        f"- نود پیش‌فرض: {default_node}\n\n"
+        f"- وضعیت چندنودی (config.py): {nodes_on_cfg}\n"
+        f"- تعداد نودها (config): {nodes_count_cfg}\n"
+        f"- تعداد نودها (DB): {nodes_db_count}\n"
+        f"- نود پیش‌فرض: {default_node}\n"
+        f"- سیاست انتخاب نود: {policy}\n\n"
         f"- تجمیع مصرف بین نودها: {usage_agg_on}\n"
         f"- بازه به‌روزرسانی مصرف: {interval_min} دقیقه\n\n"
-        f"_تنظیم نودها از طریق فایل config.py انجام می‌شود._"
+        f"- Health-check نودها: {nodes_h_on}\n"
+        f"- بازه Health-check: {nodes_h_interval} دقیقه\n"
+        f"- تعداد خطای متوالی تا غیرفعال‌سازی خودکار: {auto_disable_after}\n\n"
+        f"_مدیریت نودها از پنل ادمین > «🖥️ مدیریت نودها» انجام می‌شود._"
     )
     kb = _kb([
         [InlineKeyboardButton("تغییر وضعیت تجمیع مصرف", callback_data="toggle_usage_aggregation")],
-        [_admin_edit_btn("✍️ ویرایش بازه به‌روزرسانی (دقیقه)", "usage_update_interval_min")],
+        [_admin_edit_btn("✍️ بازه به‌روزرسانی مصرف (دقیقه)", "usage_update_interval_min")],
+        [InlineKeyboardButton("تغییر وضعیت Health-Check نودها", callback_data="toggle_report_nodes_health_enabled")],
+        [_admin_edit_btn("✍️ بازه Health-Check (دقیقه)", "nodes_health_interval_min"),
+         _admin_edit_btn("✍️ تعداد خطا تا غیرفعال‌سازی", "nodes_auto_disable_after_fails")],
         [_back_to_settings_btn()]
     ])
     await _send_or_edit(update, context, text, kb); return ADMIN_SETTINGS_MENU
@@ -220,7 +242,7 @@ def _infer_return_target(key: str) -> str:
         return "maintenance_join"
     if key in ("expiry_reminder_days", "expiry_reminder_min_remaining_gb"):
         return "reports_reminders"
-    if key in ("usage_update_interval_min",):
+    if key in ("usage_update_interval_min", "nodes_health_interval_min", "nodes_auto_disable_after_fails"):
         return "multi_server_usage"
     return "settings_root"
 
@@ -240,6 +262,8 @@ async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
         tip = "\n(فرمت: 2025-12-31T23:59:59+03:30)"
     elif key == "usage_update_interval_min":
         tip = "\n(یک عدد صحیح بر حسب دقیقه وارد کنید)"
+    elif key in ("nodes_health_interval_min", "nodes_auto_disable_after_fails"):
+        tip = "\n(یک عدد صحیح مثبت وارد کنید)"
 
     text = f"✍️ مقدار جدید برای **{key}** را ارسال کنید.{tip}\n/cancel برای انصراف\n\n**مقدار فعلی:**\n`{cur}`"
 
@@ -264,7 +288,7 @@ async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_T
     if val == "-":
         val = ""
 
-    # Optional: simple validation for usage interval
+    # Validation
     if key == "usage_update_interval_min":
         try:
             intval = int(float(val))
@@ -273,6 +297,16 @@ async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_T
             val = str(intval)
         except Exception:
             await update.message.reply_text("❌ مقدار نامعتبر است. یک عدد صحیح مثبت (دقیقه) وارد کنید.")
+            return AWAIT_SETTING_VALUE
+
+    if key in ("nodes_health_interval_min", "nodes_auto_disable_after_fails"):
+        try:
+            intval = int(float(val))
+            if intval <= 0:
+                raise ValueError()
+            val = str(intval)
+        except Exception:
+            await update.message.reply_text("❌ مقدار نامعتبر است. یک عدد صحیح مثبت وارد کنید.")
             return AWAIT_SETTING_VALUE
 
     db.set_setting(key, val)
@@ -315,6 +349,11 @@ async def toggle_report_setting(update: Update, context: ContextTypes.DEFAULT_TY
     q = getattr(update, "callback_query", None)
     key = (q.data if q else "").replace("toggle_report_", "").strip()
     _toggle(key)
+    # Return to appropriate submenu
+    if key in ("report_daily_enabled", "report_weekly_enabled"):
+        return await reports_and_reminders_submenu(update, context)
+    if key in ("nodes_health_enabled",):
+        return await multi_server_usage_submenu(update, context)
     return await reports_and_reminders_submenu(update, context)
 
 async def edit_default_link_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
