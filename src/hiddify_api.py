@@ -26,6 +26,7 @@ MAX_RETRIES = 3
 BASE_RETRY_DELAY = 1.0
 
 
+# ========================= Server selection (DB-first) =========================
 def _fallback_server_dict() -> Dict[str, Any]:
     return {
         "name": DEFAULT_SERVER_NAME or "Main",
@@ -65,7 +66,7 @@ def _get_server_by_name_config(name: str) -> Optional[Dict[str, Any]]:
                 "name": s.get("name"),
                 "panel_domain": s.get("panel_domain"),
                 "admin_path": s.get("admin_path"),
-                "sub_path": s.get("sub_path") or s.get("admin_path"),
+                "sub_path": (s.get("sub_path") or s.get("admin_path")),
                 "api_key": s.get("api_key"),
                 "sub_domains": s.get("sub_domains") or [],
                 "panel_type": "hiddify",
@@ -104,7 +105,7 @@ def _db_get_server_by_name(name: str) -> Optional[Dict[str, Any]]:
 def _pick_least_loaded(servers: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     انتخاب نود با بیشترین ظرفیت خالی (capacity - current_users).
-    اگر current_users در DB قدیمی باشد، برای هر نود شمارش زنده سرویس‌ها را از DB محاسبه می‌کنیم.
+    اگر current_users در DB به‌روز نباشد، شمارش زنده سرویس‌ها از active_services گرفته می‌شود.
     """
     best = None
     best_free = -1
@@ -112,12 +113,11 @@ def _pick_least_loaded(servers: List[Dict[str, Any]]) -> Dict[str, Any]:
         cap = int(s.get("capacity") or 0)
         curr = int(s.get("current_users") or 0)
         try:
-            # شمارش زنده سرویس‌های این نود
             live = db.count_services_on_node(s["name"])
             curr = max(curr, live)
         except Exception:
             pass
-        free = cap - curr if cap > 0 else 0  # اگر ظرفیت تعریف نشده بود، 0 فرض می‌کنیم
+        free = cap - curr if cap > 0 else 0
         if free > best_free:
             best = s
             best_free = free
@@ -172,6 +172,7 @@ def _select_server(server_name: Optional[str] = None) -> Dict[str, Any]:
     return _fallback_server_dict()
 
 
+# ========================= HTTP helpers =========================
 def _get_base_url(server: Dict[str, Any]) -> str:
     return f"https://{server['panel_domain']}/{server['admin_path']}/api/v2/admin/"
 
@@ -232,6 +233,102 @@ async def _make_request(method: str, url: str, server: Dict[str, Any], **kwargs)
     return None
 
 
+# ========================= Usage extraction helpers =========================
+def _to_float(val: Any, default: float = 0.0) -> float:
+    try:
+        return float(val)
+    except Exception:
+        return default
+
+
+def _bytes_to_gb(n: Any) -> float:
+    try:
+        return float(n) / (1024.0 ** 3)
+    except Exception:
+        return 0.0
+
+
+def _extract_usage_gb(payload: Dict[str, Any]) -> Optional[float]:
+    """
+    تلاش برای استخراج مصرف کاربر (GB) از پاسخ API هیدیفای با در نظر گرفتن تغییرات نسخه‌ها.
+    اولویت:
+      1) فیلدهای *_GB
+      2) upload/download (bytes یا GB)
+      3) فیلدهای کلی usage/used_* (تشخیص خودکار bytes/GB)
+    اگر نتوانست تشخیص دهد: None
+    """
+    if not isinstance(payload, dict):
+        return None
+
+    # 1) رایج‌ترین کلیدهای GB
+    direct_gb_keys = [
+        "current_usage_GB", "usage_GB", "total_usage_GB",
+        "used_GB", "used_gb", "usageGb", "currentUsageGB"
+    ]
+    for k in direct_gb_keys:
+        if k in payload:
+            return _to_float(payload.get(k), None)
+
+    # برخی APIها دیتا را در یک زیر-آبجکت می‌گذارند (مثل "stats" یا "usage")
+    for container_key in ("stats", "usage", "data"):
+        sub = payload.get(container_key)
+        if isinstance(sub, dict):
+            for k in direct_gb_keys:
+                if k in sub:
+                    return _to_float(sub.get(k), None)
+
+    # 2) upload/download
+    # تلاش برای تشخیص حتی اگر در زیر-آبجکت باشند
+    def pick_from(d: Dict[str, Any]) -> Optional[float]:
+        up = d.get("upload"); down = d.get("download")
+        up_gb = d.get("upload_GB"); down_gb = d.get("download_GB")
+        if up_gb is not None or down_gb is not None:
+            return (_to_float(up_gb or 0.0) + _to_float(down_gb or 0.0))
+        if up is not None and down is not None:
+            # اگر مقدار بزرگ بود، bytes فرض می‌کنیم
+            up_f = _to_float(up, 0.0); down_f = _to_float(down, 0.0)
+            if abs(up_f) > 1024 * 1024 or abs(down_f) > 1024 * 1024:
+                return _bytes_to_gb(up_f + down_f)
+            # در غیر اینصورت GB فرض می‌کنیم
+            return up_f + down_f
+        return None
+
+    v = pick_from(payload)
+    if v is None:
+        for container_key in ("stats", "usage", "data"):
+            sub = payload.get(container_key)
+            if isinstance(sub, dict):
+                v = pick_from(sub)
+                if v is not None:
+                    break
+    if v is not None:
+        return v
+
+    # 3) فیلدهای کلی
+    generic_keys = [
+        "current_usage", "usage", "used_traffic",
+        "total_used_bytes", "total_bytes", "bytes", "traffic", "used_bytes"
+    ]
+    for k in generic_keys:
+        if k in payload:
+            val = _to_float(payload.get(k), 0.0)
+            if abs(val) > 1024 * 1024:  # bytes
+                return _bytes_to_gb(val)
+            return val  # GB فرضی
+    for container_key in ("stats", "usage", "data"):
+        sub = payload.get(container_key)
+        if isinstance(sub, dict):
+            for k in generic_keys:
+                if k in sub:
+                    val = _to_float(sub.get(k), 0.0)
+                    if abs(val) > 1024 * 1024:  # bytes
+                        return _bytes_to_gb(val)
+                    return val
+
+    return None
+
+
+# ========================= API wrappers =========================
 async def create_hiddify_user(
     plan_days: int,
     plan_gb: float,
@@ -288,15 +385,15 @@ async def get_user_info(user_uuid: str, server_name: Optional[str] = None) -> Op
 
 async def get_user_usage_gb(user_uuid: str, server_name: Optional[str] = None) -> Optional[float]:
     """
-    دریافت مصرف کاربر (GB) به‌صورت مستقیم و امن (برای دقت بیشتر در تجمیع مصرف).
+    دریافت مصرف کاربر (GB) به‌صورت دقیق و مقاوم در برابر تغییرات API:
+      - ابتدا current_usage_GB/… را می‌خواند
+      - سپس upload/download (bytes یا GB)
+      - سپس فیلدهای کلی usage/bytes با تشخیص خودکار
     """
     info = await get_user_info(user_uuid, server_name=server_name)
     if not isinstance(info, dict) or info.get("_not_found"):
         return None
-    try:
-        return float(info.get("current_usage_GB", 0.0) or 0.0)
-    except Exception:
-        return None
+    return _extract_usage_gb(info)
 
 
 async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float, server_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
