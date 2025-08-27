@@ -22,6 +22,7 @@ from bot.handlers.admin import (
     settings as admin_settings, backup as admin_backup, users as admin_users,
     gift_codes as admin_gift
 )
+from bot.handlers.admin import nodes as admin_nodes
 import bot.handlers.admin.trial_settings_ui as trial_ui
 from bot.handlers.trial import get_trial_service as trial_get_trial_service
 from bot.handlers.admin.trial_settings import set_trial_days, set_trial_gb
@@ -278,6 +279,58 @@ def build_application():
     )
 
     # =========================
+    # Nodes Conversation (Admin)
+    # =========================
+    nodes_conv = ConversationHandler(
+        entry_points=[
+            MessageHandler(filters.Regex(r'^🖥️ مدیریت نودها$') & admin_filter, admin_nodes.nodes_menu),
+            CallbackQueryHandler(admin_nodes.nodes_menu, pattern=r'^admin_nodes$'),
+        ],
+        states={
+            admin_nodes.NODES_MENU: [
+                CallbackQueryHandler(admin_nodes.add_node_start, pattern=r'^admin_add_node$'),
+                CallbackQueryHandler(admin_nodes.list_nodes, pattern=r'^admin_list_nodes$'),
+                CallbackQueryHandler(admin_c.admin_entry, pattern=r'^admin_back_to_menu$'),
+            ],
+            admin_nodes.ADD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_name)],
+            admin_nodes.ADD_PANEL_DOMAIN: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_panel_domain)],
+            admin_nodes.ADD_ADMIN_PATH: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_admin_path)],
+            admin_nodes.ADD_SUB_PATH: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_sub_path)],
+            admin_nodes.ADD_API_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_api_key)],
+            admin_nodes.ADD_SUB_DOMAINS: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_sub_domains)],
+            admin_nodes.ADD_CAPACITY: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_capacity)],
+            admin_nodes.ADD_LOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_location)],
+            admin_nodes.ADD_CONFIRM: [
+                CallbackQueryHandler(admin_nodes.add_confirm, pattern=r'^node_add_confirm$'),
+                CallbackQueryHandler(admin_nodes.add_cancel, pattern=r'^node_add_cancel$'),
+            ],
+            admin_nodes.NODE_DETAILS: [
+                CallbackQueryHandler(admin_nodes.node_details, pattern=r'^admin_node_\d+$'),
+                CallbackQueryHandler(admin_nodes.toggle_node_active, pattern=r'^admin_toggle_node_\d+$'),
+                CallbackQueryHandler(admin_nodes.edit_node_start, pattern=r'^admin_edit_node_\d+$'),
+                CallbackQueryHandler(admin_nodes.delete_node_confirm, pattern=r'^admin_delete_node_\d+$'),
+                CallbackQueryHandler(admin_nodes.ping_node, pattern=r'^admin_node_ping_\d+$'),
+                CallbackQueryHandler(admin_nodes.update_node_usercount, pattern=r'^admin_node_update_count_\d+$'),
+                CallbackQueryHandler(admin_nodes.show_node_usage, pattern=r'^admin_node_usage_\d+$'),
+                CallbackQueryHandler(admin_nodes.list_nodes, pattern=r'^admin_list_nodes$'),
+                CallbackQueryHandler(admin_nodes.nodes_menu, pattern=r'^admin_nodes$'),
+            ],
+            admin_nodes.EDIT_FIELD_PICK: [
+                CallbackQueryHandler(admin_nodes.edit_field_pick, pattern=r'^admin_edit_field_')
+            ],
+            admin_nodes.EDIT_FIELD_VALUE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.edit_field_value_received),
+            ],
+            admin_nodes.DELETE_CONFIRM: [
+                CallbackQueryHandler(admin_nodes.delete_node_execute, pattern=r'^admin_delete_node_yes_\d+$'),
+            ],
+        },
+        fallbacks=[CommandHandler('cancel', admin_nodes.cancel)],
+        map_to_parent={ConversationHandler.END: constants.ADMIN_MENU},
+        per_user=True, per_chat=True, allow_reentry=True
+    )
+
+    # =========================
     # Main Admin Conversation
     # =========================
     admin_conv = ConversationHandler(
@@ -293,6 +346,8 @@ def build_application():
                 MessageHandler(filters.Regex('^👥 مدیریت کاربران$') & admin_filter, admin_users.user_management_menu),
                 MessageHandler(filters.Regex('^🎁 مدیریت کد هدیه$') & admin_filter, admin_gift.gift_code_management_menu),
                 MessageHandler(filters.Regex('^🛑 خاموش کردن ربات$') & admin_filter, admin_c.shutdown_bot),
+
+                # Nested conversations and callbacks
                 CallbackQueryHandler(admin_plans.plan_management_menu, pattern="^admin_plans$"),
                 CallbackQueryHandler(admin_reports.reports_menu, pattern="^admin_reports$"),
                 CallbackQueryHandler(admin_backup.backup_restore_menu, pattern="^admin_backup$"),
@@ -300,7 +355,8 @@ def build_application():
                 CallbackQueryHandler(admin_gift.gift_code_management_menu, pattern="^admin_gift$"),
                 CallbackQueryHandler(admin_c.shutdown_bot, pattern="^admin_shutdown$"),
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
-                CallbackQueryHandler(admin_users.admin_delete_service, pattern=r'^admin_delete_service_\d+(_\d+)?$'),
+
+                nodes_conv,
                 admin_settings_conv,
                 broadcast_conv,
             ],
@@ -368,7 +424,6 @@ def build_application():
                 MessageHandler(filters.Regex(r'^📋 لیست کدهای تخفیف$'), admin_gift.list_promo_codes),
                 CallbackQueryHandler(admin_gift.delete_promo_code_callback, pattern=r'^delete_promo_code_'),
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
-                MessageHandler(filters.Regex(r'^بازگشت به منوی کدها$') & admin_filter, admin_gift.gift_code_management_menu),
                 gift_code_create_conv,
                 promo_create_conv,
                 referral_bonus_conv,
