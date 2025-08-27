@@ -10,6 +10,8 @@ from bot.constants import (
 )
 from bot.handlers.start import show_account_info
 import database as db
+from bot import utils
+
 
 # ===== Transfer Balance Conversation =====
 
@@ -24,41 +26,58 @@ async def transfer_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return TRANSFER_RECIPIENT_ID
 
+
 async def transfer_recipient_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        recipient_id = int(update.message.text.strip())
+        recipient_id = int(str(update.message.text).strip())
         if recipient_id == update.effective_user.id:
             await update.message.reply_text("❌ نمی‌توانید به خودتان موجودی منتقل کنید.")
             return TRANSFER_RECIPIENT_ID
+
         recipient = db.get_user(recipient_id)
         if not recipient:
             await update.message.reply_text("❌ کاربری با این شناسه یافت نشد.")
             return TRANSFER_RECIPIENT_ID
+
         context.user_data['transfer_recipient_id'] = recipient_id
-        await update.message.reply_text(f"گیرنده: {recipient.get('username') or recipient_id}\n\nمبلغ (تومان) را وارد کنید:")
+        await update.message.reply_text(
+            f"گیرنده: {recipient.get('username') or recipient_id}\n\n"
+            "مبلغ (تومان) را وارد کنید:"
+        )
         return TRANSFER_AMOUNT
     except ValueError:
         await update.message.reply_text("❌ لطفاً شناسه عددی معتبر وارد کنید.")
         return TRANSFER_RECIPIENT_ID
 
+
 async def transfer_amount_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        amount = float(update.message.text.strip())
+        raw = str(update.message.text).strip().replace(",", "").replace("٬", "")
+        amount = float(raw)
         sender = db.get_user(update.effective_user.id)
+        if not sender:
+            await update.message.reply_text("❌ خطا در بازیابی اطلاعات شما. لطفاً مجدداً تلاش کنید.")
+            return ConversationHandler.END
+
         if amount <= 0:
             await update.message.reply_text("❌ مبلغ باید بزرگ‌تر از صفر باشد.")
             return TRANSFER_AMOUNT
         if sender['balance'] < amount:
-            await update.message.reply_text(f"❌ موجودی شما کافی نیست (موجودی: {sender['balance']:.0f} تومان).")
+            await update.message.reply_text(
+                f"❌ موجودی شما کافی نیست (موجودی: {utils.format_toman(sender['balance'], persian_digits=True)})."
+            )
             return TRANSFER_AMOUNT
 
         context.user_data['transfer_amount'] = amount
         recipient_id = context.user_data['transfer_recipient_id']
-        recipient = db.get_user(recipient_id)
-        kb = [[InlineKeyboardButton("✅ تایید", callback_data="transfer_confirm_yes"),
-               InlineKeyboardButton("❌ لغو", callback_data="transfer_confirm_no")]]
+        recipient = db.get_user(recipient_id) or {}
+        kb = [[
+            InlineKeyboardButton("✅ تایید", callback_data="transfer_confirm_yes"),
+            InlineKeyboardButton("❌ لغو", callback_data="transfer_confirm_no")
+        ]]
         await update.message.reply_text(
-            f"آیا از انتقال **{amount:,.0f} تومان** به کاربر **{recipient.get('username') or recipient_id}** مطمئن هستید؟",
+            f"آیا از انتقال **{utils.format_toman(amount, persian_digits=True)}** "
+            f"به کاربر **{recipient.get('username') or recipient_id}** مطمئن هستید؟",
             reply_markup=InlineKeyboardMarkup(kb),
             parse_mode="Markdown"
         )
@@ -67,6 +86,7 @@ async def transfer_amount_received(update: Update, context: ContextTypes.DEFAULT
         await update.message.reply_text("❌ لطفاً مبلغ را به صورت عدد وارد کنید.")
         return TRANSFER_AMOUNT
 
+
 async def transfer_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -74,19 +94,24 @@ async def transfer_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("انتقال لغو شد.")
         return ConversationHandler.END
 
-    amount = context.user_data['transfer_amount']
-    recipient_id = context.user_data['transfer_recipient_id']
+    amount = float(context.user_data.get('transfer_amount', 0))
+    recipient_id = int(context.user_data.get('transfer_recipient_id'))
     sender_id = q.from_user.id
 
+    # بروزرسانی موجودی‌ها
     db.update_balance(sender_id, -amount)
     db.update_balance(recipient_id, amount)
 
     await q.edit_message_text("✅ انتقال با موفقیت انجام شد.")
     try:
-        await context.bot.send_message(recipient_id, f"🎁 مبلغ {amount:,.0f} تومان از طرف یک کاربر به حساب شما منتقل شد.")
+        await context.bot.send_message(
+            recipient_id,
+            f"🎁 مبلغ {utils.format_toman(amount, persian_digits=True)} به حساب شما واریز شد."
+        )
     except Exception:
         pass
     return ConversationHandler.END
+
 
 async def transfer_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("عملیات انتقال لغو شد.")
@@ -107,22 +132,32 @@ async def create_gift_from_balance_start(update: Update, context: ContextTypes.D
     )
     return GIFT_FROM_BALANCE_AMOUNT
 
+
 async def create_gift_amount_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        amount = float(update.message.text.strip())
+        raw = str(update.message.text).strip().replace(",", "").replace("٬", "")
+        amount = float(raw)
         user = db.get_user(update.effective_user.id)
+        if not user:
+            await update.message.reply_text("❌ خطا در بازیابی اطلاعات شما. لطفاً مجدداً تلاش کنید.")
+            return ConversationHandler.END
+
         if amount <= 0:
             await update.message.reply_text("❌ مبلغ باید بزرگ‌تر از صفر باشد.")
             return GIFT_FROM_BALANCE_AMOUNT
         if user['balance'] < amount:
-            await update.message.reply_text(f"❌ موجودی شما کافی نیست (موجودی: {user['balance']:.0f} تومان).")
+            await update.message.reply_text(
+                f"❌ موجودی شما کافی نیست (موجودی: {utils.format_toman(user['balance'], persian_digits=True)})."
+            )
             return GIFT_FROM_BALANCE_AMOUNT
 
         context.user_data['gift_amount'] = amount
-        kb = [[InlineKeyboardButton("✅ تایید", callback_data="gift_confirm_yes"),
-               InlineKeyboardButton("❌ لغو", callback_data="gift_confirm_no")]]
+        kb = [[
+            InlineKeyboardButton("✅ تایید", callback_data="gift_confirm_yes"),
+            InlineKeyboardButton("❌ لغو", callback_data="gift_confirm_no")
+        ]]
         await update.message.reply_text(
-            f"آیا از ساخت کد هدیه به مبلغ **{amount:,.0f} تومان** مطمئن هستید؟",
+            f"آیا از ساخت کد هدیه به مبلغ **{utils.format_toman(amount, persian_digits=True)}** مطمئن هستید؟",
             reply_markup=InlineKeyboardMarkup(kb),
             parse_mode="Markdown"
         )
@@ -131,6 +166,7 @@ async def create_gift_amount_received(update: Update, context: ContextTypes.DEFA
         await update.message.reply_text("❌ لطفاً مبلغ را به صورت عدد وارد کنید.")
         return GIFT_FROM_BALANCE_AMOUNT
 
+
 async def create_gift_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -138,15 +174,32 @@ async def create_gift_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE
         await q.edit_message_text("ساخت کد هدیه لغو شد.")
         return ConversationHandler.END
 
-    amount = context.user_data['gift_amount']
+    amount = float(context.user_data.get('gift_amount', 0))
     user_id = q.from_user.id
-    code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=10))
 
+    # کسر مبلغ از کیف‌پول
     db.update_balance(user_id, -amount)
-    db.create_gift_code(code, amount)
 
-    await q.edit_message_text(f"✅ کد هدیه با موفقیت ساخته شد:\n\n`{code}`\n\nاین کد را برای دوستان خود ارسال کنید.", parse_mode="Markdown")
+    # تلاش برای ساخت کد یکتا
+    code = None
+    for _ in range(5):
+        candidate = ''.join(random.choices(string.ascii_uppercase + string.digits, k=10))
+        if db.create_gift_code(candidate, amount):
+            code = candidate
+            break
+
+    if not code:
+        # بازگشت مبلغ در صورت شکست در ساخت کد
+        db.update_balance(user_id, amount)
+        await q.edit_message_text("❌ ساخت کد هدیه ناموفق بود. لطفاً بعداً تلاش کنید.")
+        return ConversationHandler.END
+
+    await q.edit_message_text(
+        f"✅ کد هدیه با موفقیت ساخته شد:\n\n`{code}`\n\nاین کد را برای دوستان خود ارسال کنید.",
+        parse_mode="Markdown"
+    )
     return ConversationHandler.END
+
 
 async def create_gift_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("عملیات ساخت کد هدیه لغو شد.")
