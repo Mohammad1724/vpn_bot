@@ -91,6 +91,97 @@ def _remove_device_limit_alert_column_if_exists(conn: sqlite3.Connection):
     except Exception as e:
         logger.warning(f"Couldn't remove device_limit_alert_sent column: {e}")
 
+
+# ---------- Ensure/repair nodes schema (handles older tables without id) ----------
+def _ensure_nodes_schema(conn: sqlite3.Connection):
+    cur = conn.cursor()
+    try:
+        cur.execute("PRAGMA table_info(nodes)")
+        cols = [row["name"] for row in cur.fetchall()]
+    except sqlite3.Error:
+        cols = []
+
+    # If no table yet, create full schema
+    if not cols:
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS nodes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                panel_type TEXT NOT NULL DEFAULT 'hiddify',
+                panel_domain TEXT,
+                admin_path TEXT,
+                sub_path TEXT,
+                api_key TEXT,
+                sub_domains TEXT DEFAULT '[]',
+                capacity INTEGER NOT NULL DEFAULT 100,
+                current_users INTEGER NOT NULL DEFAULT 0,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                location TEXT,
+                created_at TEXT NOT NULL DEFAULT (DATETIME('now'))
+            )
+        ''')
+        conn.commit()
+        return
+
+    # If id column missing => rebuild table with full schema and migrate rows
+    if "id" not in cols:
+        logger.info("Rebuilding nodes table to add 'id' primary key and full schema...")
+        cur.execute("BEGIN")
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS nodes_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                panel_type TEXT NOT NULL DEFAULT 'hiddify',
+                panel_domain TEXT,
+                admin_path TEXT,
+                sub_path TEXT,
+                api_key TEXT,
+                sub_domains TEXT DEFAULT '[]',
+                capacity INTEGER NOT NULL DEFAULT 100,
+                current_users INTEGER NOT NULL DEFAULT 0,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                location TEXT,
+                created_at TEXT NOT NULL DEFAULT (DATETIME('now'))
+            )
+        ''')
+
+        # Determine which columns exist in old table to migrate
+        cur.execute("PRAGMA table_info(nodes)")
+        old_cols = [row["name"] for row in cur.fetchall()]
+        migratable = [c for c in old_cols if c in (
+            "name", "panel_type", "panel_domain", "admin_path", "sub_path",
+            "api_key", "sub_domains", "capacity", "current_users", "is_active",
+            "location", "created_at"
+        )]
+        if migratable:
+            cols_list = ", ".join(migratable)
+            cur.execute(f"INSERT INTO nodes_new ({cols_list}) SELECT {cols_list} FROM nodes")
+        else:
+            # Only name existed previously
+            try:
+                cur.execute("INSERT INTO nodes_new (name) SELECT name FROM nodes")
+            except Exception:
+                pass
+
+        cur.execute("DROP TABLE nodes")
+        cur.execute("ALTER TABLE nodes_new RENAME TO nodes")
+        conn.commit()
+        logger.info("Nodes table rebuild completed.")
+
+    # Ensure all required columns exist (for partial older schemas)
+    _add_column_if_not_exists(conn, "nodes", "panel_type", "TEXT NOT NULL DEFAULT 'hiddify'")
+    _add_column_if_not_exists(conn, "nodes", "panel_domain", "TEXT")
+    _add_column_if_not_exists(conn, "nodes", "admin_path", "TEXT")
+    _add_column_if_not_exists(conn, "nodes", "sub_path", "TEXT")
+    _add_column_if_not_exists(conn, "nodes", "api_key", "TEXT")
+    _add_column_if_not_exists(conn, "nodes", "sub_domains", "TEXT DEFAULT '[]'")
+    _add_column_if_not_exists(conn, "nodes", "capacity", "INTEGER NOT NULL DEFAULT 100")
+    _add_column_if_not_exists(conn, "nodes", "current_users", "INTEGER NOT NULL DEFAULT 0")
+    _add_column_if_not_exists(conn, "nodes", "is_active", "INTEGER NOT NULL DEFAULT 1")
+    _add_column_if_not_exists(conn, "nodes", "location", "TEXT")
+    _add_column_if_not_exists(conn, "nodes", "created_at", "TEXT DEFAULT CURRENT_TIMESTAMP")
+
+
 def init_db():
     conn = _connect_db()
     cursor = conn.cursor()
@@ -215,28 +306,11 @@ def init_db():
     ''')
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_traffic_user ON user_traffic(user_id)")
 
-    # nodes (Hiddify panels)
-    # Create table if not exists (may already exist with older schema)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS nodes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE
-        )
-    ''')
-    # Ensure all required columns exist (migration-friendly)
-    _add_column_if_not_exists(conn, "nodes", "panel_type", "TEXT NOT NULL DEFAULT 'hiddify'")
-    _add_column_if_not_exists(conn, "nodes", "panel_domain", "TEXT")
-    _add_column_if_not_exists(conn, "nodes", "admin_path", "TEXT")
-    _add_column_if_not_exists(conn, "nodes", "sub_path", "TEXT")
-    _add_column_if_not_exists(conn, "nodes", "api_key", "TEXT")
-    _add_column_if_not_exists(conn, "nodes", "sub_domains", "TEXT DEFAULT '[]'")
-    _add_column_if_not_exists(conn, "nodes", "capacity", "INTEGER NOT NULL DEFAULT 100")
-    _add_column_if_not_exists(conn, "nodes", "current_users", "INTEGER NOT NULL DEFAULT 0")
-    _add_column_if_not_exists(conn, "nodes", "is_active", "INTEGER NOT NULL DEFAULT 1")
-    _add_column_if_not_exists(conn, "nodes", "location", "TEXT")
-    _add_column_if_not_exists(conn, "nodes", "created_at", "TEXT DEFAULT CURRENT_TIMESTAMP")
+    # nodes: ensure schema (handles legacy tables without id)
+    cursor.execute('''CREATE TABLE IF NOT EXISTS nodes (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE)''')
+    _ensure_nodes_schema(conn)  # rebuild/upgrade if needed
 
-    # Indexes on nodes (after ensuring columns exist)
+    # Indexes on nodes
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_nodes_active ON nodes(is_active)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_nodes_name ON nodes(name)")
 
