@@ -50,6 +50,7 @@ def _add_column_if_not_exists(conn, table_name, column_name, column_type):
         logger.info(f"Added column '{column_name}' to table '{table_name}'.")
 
 def _remove_device_limit_alert_column_if_exists(conn: sqlite3.Connection):
+    cur = conn.cursor
     cur = conn.cursor()
     try:
         cur.execute("PRAGMA table_info(active_services)")
@@ -1046,3 +1047,71 @@ def count_services_on_node(server_name: str) -> int:
     cur = conn.cursor()
     cur.execute("SELECT COUNT(*) FROM active_services WHERE server_name = ?", (server_name,))
     return int(cur.fetchone()[0] or 0)
+
+# ===================== Backfill & Cleanup helpers =====================
+def backfill_active_services_server_names() -> int:
+    """
+    برای سرویس‌های فعالی که server_name ندارند، از روی sub_link و جدول nodes مقداردهی می‌کند.
+    خروجی: تعداد رکوردهای به‌روزرسانی‌شده.
+    """
+    conn = _connect_db()
+    cur = conn.cursor()
+    cur.execute("SELECT service_id, sub_link FROM active_services WHERE server_name IS NULL OR TRIM(server_name) = ''")
+    rows = cur.fetchall()
+    if not rows:
+        return 0
+    updated = 0
+    for r in rows:
+        sid = r["service_id"]
+        link = r["sub_link"]
+        name = _resolve_server_name_from_link(link)
+        if name:
+            conn.execute("UPDATE active_services SET server_name = ? WHERE service_id = ?", (name, sid))
+            updated += 1
+    conn.commit()
+    if updated:
+        logger.info("Backfilled server_name for %d active services.", updated)
+    return updated
+
+def delete_user_traffic_not_in_and_older(user_id: int, allowed_servers: list[str], older_than_minutes: int, also_delete_unknown: bool = True):
+    """
+    رکوردهای user_traffic کاربر را که:
+      - server_name در لیست allowed_servers نیست، و
+      - last_updated قدیمی‌تر از آستانه است،
+    حذف می‌کند. در صورت also_delete_unknown، رکوردهای 'Unknown' قدیمی نیز حذف می‌شوند.
+    """
+    try:
+        conn = _connect_db()
+        cur = conn.cursor()
+        threshold_dt = datetime.now() - timedelta(minutes=int(older_than_minutes or 0))
+        threshold_str = threshold_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+        # اگر allowed خالی است، فقط Unknown قدیمی را پاک کن و بقیه را دست نزن
+        if not allowed_servers:
+            if also_delete_unknown:
+                conn.execute(
+                    "DELETE FROM user_traffic WHERE user_id = ? AND server_name = 'Unknown' AND last_updated < ?",
+                    (user_id, threshold_str)
+                )
+                conn.commit()
+            return
+
+        placeholders = ",".join(["?"] * len(allowed_servers))
+        params = [user_id, threshold_str] + allowed_servers
+
+        # حذف رکوردهای غیر از allowed که قدیمی‌اند
+        conn.execute(
+            f"DELETE FROM user_traffic WHERE user_id = ? AND last_updated < ? AND server_name NOT IN ({placeholders})",
+            tuple(params)
+        )
+
+        # حذف Unknown قدیمی
+        if also_delete_unknown:
+            conn.execute(
+                "DELETE FROM user_traffic WHERE user_id = ? AND server_name = 'Unknown' AND last_updated < ?",
+                (user_id, threshold_str)
+            )
+
+        conn.commit()
+    except Exception as e:
+        logger.error("delete_user_traffic_not_in_and_older failed for user %s: %s", user_id, e, exc_info=True)
