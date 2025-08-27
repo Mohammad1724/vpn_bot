@@ -9,22 +9,23 @@ SUPPORT_USERNAME = "your_support_username"
 
 # ===============================================================
 # HIDDIFY PANEL CONFIGURATION (Single-Server defaults)
+# Used if MULTI_SERVER_ENABLED is False and no nodes are defined in DB.
 # ===============================================================
 PANEL_DOMAIN = "your_panel_domain.com"
 ADMIN_PATH = "your_admin_secret_path"
 SUB_PATH = "your_subscription_secret_path"
 API_KEY = "your_hiddify_api_key_here"
-SUB_DOMAINS = []
+SUB_DOMAINS = []  # e.g., ["sub1.example.com", "sub2.example.com"]
 
 # ===============================================================
 # MULTI-SERVER (NODES) CONFIGURATION
-# Enable if you manage multiple Hiddify panels/nodes.
-# If disabled, the bot uses the single-server configs above.
+# If disabled, the bot falls back to single-server settings above.
+# If enabled (and DB nodes are empty), the bot uses SERVERS below.
+# Note: If you add nodes from Admin Panel, those DB nodes take precedence.
 # ===============================================================
 MULTI_SERVER_ENABLED = False
 
-# List of servers. If enabled, the bot uses these for API calls and link building.
-# Keep 'name' unique per server.
+# List of servers. Keep 'name' unique per server.
 SERVERS = [
     {
         "name": "Main",
@@ -45,12 +46,29 @@ SERVERS = [
 ]
 
 # Default server selection policy for creating new users/services
+# first: pick the first active node
+# by_name: use DEFAULT_SERVER_NAME
+# least_loaded: pick the node with most free capacity (recommended)
 DEFAULT_SERVER_NAME = "Main"   # server name from SERVERS
-SERVER_SELECTION_POLICY = "first"  # first | by_name
+SERVER_SELECTION_POLICY = "least_loaded"  # first | by_name | least_loaded
 
-# Aggregation of usage across servers (per user)
+# ===============================================================
+# USAGE AGGREGATION ACROSS SERVERS (per user)
+# The JobQueue periodically fetches usage and stores snapshots in DB.
+# Interval can be edited later from Admin > Settings.
+# ===============================================================
 USAGE_AGGREGATION_ENABLED = False
 USAGE_UPDATE_INTERVAL_MIN = 10  # minutes
+
+# ===============================================================
+# NODE HEALTH-CHECK (for DB/config servers)
+# Periodically checks API connectivity and updates current_users per node.
+# Auto-disable will set node is_active=0 after consecutive failures.
+# Intervals and toggles can be edited later from Admin > Settings.
+# ===============================================================
+NODES_HEALTH_ENABLED = True
+NODES_HEALTH_INTERVAL_MIN = 10
+NODES_AUTO_DISABLE_AFTER_FAILS = 3
 
 # ===============================================================
 # FREE TRIAL SERVICE CONFIGURATION
