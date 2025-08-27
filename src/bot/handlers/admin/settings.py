@@ -12,6 +12,19 @@ from bot import utils
 from bot.constants import ADMIN_MENU, AWAIT_SETTING_VALUE, ADMIN_SETTINGS_MENU
 from bot.keyboards import get_admin_menu_keyboard
 
+# Optional multi-server/usage configs (for display-only defaults)
+try:
+    from config import (
+        MULTI_SERVER_ENABLED, SERVERS, DEFAULT_SERVER_NAME,
+        USAGE_AGGREGATION_ENABLED, USAGE_UPDATE_INTERVAL_MIN
+    )
+except Exception:
+    MULTI_SERVER_ENABLED = False
+    SERVERS = []
+    DEFAULT_SERVER_NAME = None
+    USAGE_AGGREGATION_ENABLED = False
+    USAGE_UPDATE_INTERVAL_MIN = 10
+
 logger = logging.getLogger(__name__)
 
 # --- Helpers ---
@@ -49,6 +62,7 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🛠 نگهداری و عضویت", callback_data="settings_maint_join")],
         [InlineKeyboardButton("💳 پرداخت و راهنماها", callback_data="settings_payment_guides")],
         [InlineKeyboardButton("⚙️ تنظیمات سرویس", callback_data="settings_service_configs")],
+        [InlineKeyboardButton("🌐 چندنودی و مصرف", callback_data="settings_multi_server_usage")],
         [InlineKeyboardButton("📊 گزارش‌ها و یادآورها", callback_data="settings_reports_reminders")],
         [InlineKeyboardButton("🔙 بازگشت به پنل ادمین", callback_data="admin_back_to_menu")]
     ])
@@ -115,7 +129,7 @@ async def payment_info_submenu(update: Update, context: ContextTypes.DEFAULT_TYP
         num = _get(f"payment_card_{i}_number"); name = _get(f"payment_card_{i}_name"); bank = _get(f"payment_card_{i}_bank")
         if num and name:
             lines.append(f"**کارت {i}:** `{num}` | {name} | {bank or '-'}")
-    
+
     text = f"**💳 اطلاعات پرداخت**\n\nراهنمای پرداخت:\n{instr}\n\n" + "\n".join(lines)
     rows = [[_admin_edit_btn("✍️ ویرایش راهنمای پرداخت", "payment_instruction_text")]]
     for i in slots:
@@ -166,6 +180,32 @@ async def reports_and_reminders_submenu(update: Update, context: ContextTypes.DE
     ])
     await _send_or_edit(update, context, text, kb); return ADMIN_SETTINGS_MENU
 
+# --- Multi-server & Usage submenu ---
+async def multi_server_usage_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    usage_agg_on = "فعال ✅" if _get_bool("usage_aggregation_enabled", USAGE_AGGREGATION_ENABLED) else "غیرفعال ❌"
+    interval_min = _get("usage_update_interval_min", str(USAGE_UPDATE_INTERVAL_MIN))
+
+    # display-only info from config.py
+    nodes_on = "فعال ✅" if MULTI_SERVER_ENABLED else "غیرفعال ❌"
+    nodes_count = len(SERVERS) if isinstance(SERVERS, list) else 0
+    default_node = DEFAULT_SERVER_NAME or (SERVERS[0].get("name") if nodes_count else "-")
+
+    text = (
+        f"**🌐 چندنودی و مصرف**\n\n"
+        f"- وضعیت چندنودی (config.py): {nodes_on}\n"
+        f"- تعداد نودها: {nodes_count}\n"
+        f"- نود پیش‌فرض: {default_node}\n\n"
+        f"- تجمیع مصرف بین نودها: {usage_agg_on}\n"
+        f"- بازه به‌روزرسانی مصرف: {interval_min} دقیقه\n\n"
+        f"_تنظیم نودها از طریق فایل config.py انجام می‌شود._"
+    )
+    kb = _kb([
+        [InlineKeyboardButton("تغییر وضعیت تجمیع مصرف", callback_data="toggle_usage_aggregation")],
+        [_admin_edit_btn("✍️ ویرایش بازه به‌روزرسانی (دقیقه)", "usage_update_interval_min")],
+        [_back_to_settings_btn()]
+    ])
+    await _send_or_edit(update, context, text, kb); return ADMIN_SETTINGS_MENU
+
 # --- Edit Logic ---
 def _infer_return_target(key: str) -> str:
     if key == "payment_instruction_text" or key.startswith("payment_card_"):
@@ -180,6 +220,8 @@ def _infer_return_target(key: str) -> str:
         return "maintenance_join"
     if key in ("expiry_reminder_days", "expiry_reminder_min_remaining_gb"):
         return "reports_reminders"
+    if key in ("usage_update_interval_min",):
+        return "multi_server_usage"
     return "settings_root"
 
 async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -196,6 +238,8 @@ async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
         tip = "\n(دامنه‌ها را با کاما جدا کنید)"
     elif key == "first_charge_expires_at":
         tip = "\n(فرمت: 2025-12-31T23:59:59+03:30)"
+    elif key == "usage_update_interval_min":
+        tip = "\n(یک عدد صحیح بر حسب دقیقه وارد کنید)"
 
     text = f"✍️ مقدار جدید برای **{key}** را ارسال کنید.{tip}\n/cancel برای انصراف\n\n**مقدار فعلی:**\n`{cur}`"
 
@@ -220,6 +264,17 @@ async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_T
     if val == "-":
         val = ""
 
+    # Optional: simple validation for usage interval
+    if key == "usage_update_interval_min":
+        try:
+            intval = int(float(val))
+            if intval <= 0:
+                raise ValueError()
+            val = str(intval)
+        except Exception:
+            await update.message.reply_text("❌ مقدار نامعتبر است. یک عدد صحیح مثبت (دقیقه) وارد کنید.")
+            return AWAIT_SETTING_VALUE
+
     db.set_setting(key, val)
     await update.message.reply_text(f"✅ مقدار «{key}» ذخیره شد.")
 
@@ -238,6 +293,8 @@ async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_T
         return await maintenance_and_join_submenu(update, context)
     if dest == "reports_reminders":
         return await reports_and_reminders_submenu(update, context)
+    if dest == "multi_server_usage":
+        return await multi_server_usage_submenu(update, context)
 
     return await settings_menu(update, context)
 
@@ -285,6 +342,11 @@ async def set_default_link_type(update: Update, context: ContextTypes.DEFAULT_TY
         else:
             await update.effective_message.reply_text(f"✅ نوع پیش‌فرض روی «{link_type}» تنظیم شد.")
     return await service_configs_submenu(update, context)
+
+# Multi-server usage toggles
+async def toggle_usage_aggregation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _toggle("usage_aggregation_enabled", USAGE_AGGREGATION_ENABLED)
+    return await multi_server_usage_submenu(update, context)
 
 async def back_to_admin_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = getattr(update, "callback_query", None)
