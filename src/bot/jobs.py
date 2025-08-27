@@ -210,11 +210,19 @@ async def update_user_usage_snapshot(context: ContextTypes.DEFAULT_TYPE):
     """
     برای هر سرویس فعال، مصرف را از پنل مربوطه خوانده و
     مجموع مصرف هر کاربر را به تفکیک سرور به‌روزرسانی می‌کند.
+    سپس رکوردهای قدیمی و بلااستفاده را پاکسازی می‌کند تا دقت تجمیع بالا برود.
     """
     try:
         services = db.get_all_active_services()
         if not services:
             return
+
+        # تعیین بازه پاکسازی: 2 برابر بازه به‌روزرسانی مصرف، حداقل 15 دقیقه
+        try:
+            interval_min = int(db.get_setting("usage_update_interval_min") or USAGE_UPDATE_INTERVAL_MIN or 10)
+        except Exception:
+            interval_min = USAGE_UPDATE_INTERVAL_MIN or 10
+        cleanup_after_min = max(2 * int(interval_min), 15)
 
         # Concurrency control
         sem = asyncio.Semaphore(8)
@@ -222,29 +230,61 @@ async def update_user_usage_snapshot(context: ContextTypes.DEFAULT_TYPE):
         async def fetch_usage(svc: dict):
             async with sem:
                 try:
-                    usage = await hiddify_api.get_user_usage_gb(svc["sub_uuid"], server_name=svc.get("server_name"))
+                    server_name = svc.get("server_name") or ""
+                    # اگر server_name خالی است و لینک داریم، تلاش برای resolve سریع (در صورت عدم backfill)
+                    if not server_name and svc.get("sub_link"):
+                        try:
+                            resolved = db._resolve_server_name_from_link(svc["sub_link"])  # internal helper
+                            if resolved:
+                                # به‌روز کردن رکورد سرویس برای دفعات بعدی
+                                conn = db._connect_db()
+                                conn.execute("UPDATE active_services SET server_name = ? WHERE service_id = ?", (resolved, svc["service_id"]))
+                                conn.commit()
+                                server_name = resolved
+                        except Exception:
+                            pass
+
+                    usage = await hiddify_api.get_user_usage_gb(svc["sub_uuid"], server_name=server_name or None)
                     if usage is None:
                         return None
-                    return (svc["user_id"], svc.get("server_name") or "Unknown", float(usage))
+                    return (svc["user_id"], server_name or "Unknown", float(usage))
                 except Exception:
                     return None
 
         tasks = [fetch_usage(s) for s in services]
         results = await asyncio.gather(*tasks, return_exceptions=False)
 
-        # Aggregate per (user_id, server_name)
+        # Aggregate per (user_id, server_name) and collect seen servers per user
         agg = defaultdict(float)
+        seen_servers_by_user: dict[int, set[str]] = defaultdict(set)
+
         for r in results:
             if not r:
                 continue
             uid, srv, usage = r
             agg[(uid, srv)] += usage
+            seen_servers_by_user[uid].add(srv)
 
         # Upsert into DB
         for (uid, srv), total_usage in agg.items():
             db.upsert_user_traffic(uid, srv, total_usage)
 
-        logger.info("Usage snapshot updated for %d user-server pairs.", len(agg))
+        # Cleanup old/stale user_traffic entries per user
+        for uid, servers in seen_servers_by_user.items():
+            try:
+                db.delete_user_traffic_not_in_and_older(
+                    user_id=uid,
+                    allowed_servers=list(servers),
+                    older_than_minutes=cleanup_after_min,
+                    also_delete_unknown=True
+                )
+            except Exception as e:
+                logger.debug("cleanup user_traffic failed for user %s: %s", uid, e)
+
+        logger.info(
+            "Usage snapshot updated for %d user-server pairs; cleaned user_traffic older than %d minutes.",
+            len(agg), cleanup_after_min
+        )
 
     except Exception as e:
         logger.error("update_user_usage_snapshot failed: %s", e, exc_info=True)
@@ -320,6 +360,19 @@ async def node_health_job(context: ContextTypes.DEFAULT_TYPE):
         logger.error("node_health_job failed: %s", e, exc_info=True)
 
 
+# ========== One-time Backfill ==========
+async def initial_backfill_job(context: ContextTypes.DEFAULT_TYPE):
+    """
+    یک‌بار پس از استارت: server_name سرویس‌های فاقد مقدار را از روی لینک و جدول نودها پر می‌کند.
+    """
+    try:
+        updated = db.backfill_active_services_server_names()
+        if updated:
+            logger.info("Initial backfill: updated server_name for %d services.", updated)
+    except Exception as e:
+        logger.error("Initial backfill failed: %s", e, exc_info=True)
+
+
 # ========== Scheduler hooks ==========
 def _is_on(keys: list[str], default: str = "0") -> bool:
     """
@@ -340,6 +393,9 @@ async def post_init(app: Application):
     """
     try:
         jq = app.job_queue  # JobQueue داخلی اپلیکیشن
+
+        # Backfill یک‌باره‌ی server_name سرویس‌های قدیمی
+        jq.run_once(initial_backfill_job, when=timedelta(seconds=2), name="initial_backfill")
 
         # گزارش‌ها (حمایت از نام کلید قدیمی و جدید)
         if _is_on(["report_daily_enabled", "daily_report_enabled"], default="0"):
