@@ -12,8 +12,9 @@ from telegram.constants import ParseMode
 
 import database as db
 import hiddify_api
-from config import ADMIN_ID, SUB_PATH
-from bot.utils import get_domain_for_plan, create_service_info_message, get_service_status
+from config import ADMIN_ID
+from bot import utils
+from bot.utils import create_service_info_message, get_service_status
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,18 @@ def _link_label(link_type: str) -> str:
         "clash": "Clash",
         "clashmeta": "Clash Meta",
     }.get(lt, "V2Ray (sub)")
+
+
+def _compute_base_link(service: dict, user_uuid: str) -> str:
+    """
+    ساخت base_link برای اشتراک:
+    - در اولویت از sub_link ذخیره‌شده در DB استفاده می‌کند (که دقیقاً مربوط به همان سرور است).
+    - در غیر این صورت از utils.build_subscription_url با server_name استفاده می‌کند.
+    """
+    sub_link = (service or {}).get("sub_link")
+    if isinstance(sub_link, str) and sub_link.strip():
+        return sub_link.strip().rstrip("/")
+    return utils.build_subscription_url(user_uuid, server_name=(service or {}).get("server_name")).rstrip("/")
 
 
 async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -85,7 +98,7 @@ async def send_service_details(
             await context.bot.send_message(chat_id=chat_id, text=text)
         return
     try:
-        info = await hiddify_api.get_user_info(service['sub_uuid'])
+        info = await hiddify_api.get_user_info(service['sub_uuid'], server_name=service.get("server_name"))
         if not info or (isinstance(info, dict) and info.get('_not_found')):
             kb = [
                 [InlineKeyboardButton("🗑️ حذف سرویس از ربات", callback_data=f"delete_service_{service['service_id']}")],
@@ -111,7 +124,7 @@ async def send_service_details(
             ])
             plan = db.get_plan(service.get('plan_id')) if service.get('plan_id') else None
             if plan:
-                keyboard_rows.append([InlineKeyboardButton(f"⏳ تمدید سرویس ({plan['price']:.0f} تومان)", callback_data=f"renew_{service['service_id']}")])
+                keyboard_rows.append([InlineKeyboardButton(f"⏳ تمدید سرویس ({int(plan['price']):,} تومان)", callback_data=f"renew_{service['service_id']}")])
             keyboard_rows.append([InlineKeyboardButton("🗑️ حذف سرویس", callback_data=f"delete_service_{service['service_id']}")])
             if is_from_menu:
                 keyboard_rows.append([InlineKeyboardButton("⬅️ بازگشت به لیست سرویس‌ها", callback_data="back_to_services")])
@@ -186,25 +199,26 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     link_type, user_uuid = parts[1], parts[2]
 
     service = db.get_service_by_uuid(user_uuid)
-    plan = db.get_plan(service.get('plan_id')) if service else None
-    sub_domain = get_domain_for_plan(plan)
-
-    # تغییر: استفاده مستقیم از SUB_PATH به جای استفاده از ADMIN_PATH به عنوان جایگزین
-    if not SUB_PATH:
-        await q.edit_message_text("❌ خطا: مسیر اشتراک (SUB_PATH) در فایل config.py تنظیم نشده است. لطفاً با مدیر سیستم تماس بگیرید.")
+    if not service:
+        await q.edit_message_text("❌ سرویس یافت نشد.")
         return
 
-    base_link = f"https://{sub_domain}/{SUB_PATH}/{user_uuid}"
-    info = await hiddify_api.get_user_info(user_uuid)
-    config_name = info.get('name', 'config') if info else 'config'
+    # Base link (prefer stored sub_link for correct node; otherwise build from server_name)
+    base_link = _compute_base_link(service, user_uuid)
+
+    # Fetch service name for display
+    info = await hiddify_api.get_user_info(user_uuid, server_name=service.get("server_name"))
+    config_name = (info.get('name', 'config') if isinstance(info, dict) else 'config') or 'config'
+    safe_name = config_name.replace(' ', '_')
 
     if link_type == "full":
+        # Send all single configs as file
         try:
-            await q.edit_message_text("در حال دریافت کانفیگ‌های تکی... ⏳")
-        except BadRequest:
-            pass
-        full_config_link = f"{base_link}/all.txt"
-        try:
+            try:
+                await q.edit_message_text("در حال دریافت کانفیگ‌های تکی... ⏳")
+            except BadRequest:
+                pass
+            full_config_link = f"{base_link}/all.txt"
             async with httpx.AsyncClient(timeout=20) as client:
                 response = await client.get(full_config_link)
                 response.raise_for_status()
@@ -215,7 +229,7 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             await context.bot.send_document(
                 chat_id=q.from_user.id,
-                document=InputFile(io.BytesIO(configs_bytes), filename=f"{config_name}_configs.txt"),
+                document=InputFile(io.BytesIO(configs_bytes), filename=f"{safe_name}_configs.txt"),
                 caption="📄 کانفیگ‌های تکی شما به صورت فایل ارسال شد."
             )
         except Exception as e:
@@ -226,8 +240,9 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(chat_id=q.from_user.id, text="❌ دریافت کانفیگ‌های تکی با خطا مواجه شد.")
         return
 
-    url_link_type = link_type.replace('clashmeta', 'clash-meta')
-    final_link = f"{base_link}/{url_link_type}/?name={config_name.replace(' ', '_')}"
+    # Normalize endpoint and build final link
+    url_link_type = _normalize_link_type(link_type).replace('clashmeta', 'clash-meta')
+    final_link = f"{base_link}/{url_link_type}/?name={safe_name}"
 
     img = qrcode.make(final_link)
     bio = io.BytesIO()
@@ -274,7 +289,7 @@ async def refresh_service_details(update: Update, context: ContextTypes.DEFAULT_
 
     if q.from_user.id == ADMIN_ID:
         try:
-            info = await hiddify_api.get_user_info(service['sub_uuid'])
+            info = await hiddify_api.get_user_info(service['sub_uuid'], server_name=service.get("server_name"))
             if info:
                 debug_text = json.dumps(info, indent=2, ensure_ascii=False)
                 await q.from_user.send_message(f"-- DEBUG INFO --\n<pre>{debug_text}</pre>", parse_mode="HTML")
@@ -343,11 +358,11 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
         pass
 
     try:
-        success_on_panel = await hiddify_api.delete_user_from_panel(service['sub_uuid'])
+        success_on_panel = await hiddify_api.delete_user_from_panel(service['sub_uuid'], server_name=service.get("server_name"))
 
         # اگر ناموفق، یک چک نهایی برای اطمینان از «عدم وجود» انجام بده
         if not success_on_panel:
-            probe = await hiddify_api.get_user_info(service['sub_uuid'])
+            probe = await hiddify_api.get_user_info(service['sub_uuid'], server_name=service.get("server_name"))
             if isinstance(probe, dict) and probe.get("_not_found"):
                 success_on_panel = True
 
@@ -406,10 +421,10 @@ async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TY
 
     user = db.get_or_create_user(user_id)
     if user['balance'] < plan['price']:
-        await context.bot.send_message(chat_id=user_id, text=f"موجودی برای تمدید کافی نیست! (نیاز به {plan['price']:.0f} تومان)")
+        await context.bot.send_message(chat_id=user_id, text=f"موجودی برای تمدید کافی نیست! (نیاز به {int(plan['price']):,} تومان)")
         return
 
-    info = await hiddify_api.get_user_info(service['sub_uuid'])
+    info = await hiddify_api.get_user_info(service['sub_uuid'], server_name=service.get("server_name"))
     if not info:
         await context.bot.send_message(chat_id=user_id, text="❌ امکان دریافت اطلاعات سرویس از پنل وجود ندارد. لطفاً بعداً تلاش کنید.")
         return
@@ -438,7 +453,7 @@ async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TY
 مشخصات تمدید:
 - مدت: {plan['days']} روز
 - حجم: {plan['gb']} گیگابایت
-- قیمت: {plan['price']:,} تومان
+- قیمت: {int(plan['price']):,} تومان
 
 آیا تایید می‌کنید؟
     """.strip()
@@ -497,7 +512,8 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
         new_info = await hiddify_api.renew_user_subscription(
             user_uuid=service['sub_uuid'],
             plan_days=plan['days'],
-            plan_gb=plan['gb']
+            plan_gb=plan['gb'],
+            server_name=service.get("server_name")
         )
 
         if not new_info:
