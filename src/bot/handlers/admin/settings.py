@@ -46,16 +46,42 @@ def _kb(rows): return InlineKeyboardMarkup(rows)
 def _admin_edit_btn(title: str, key: str): return InlineKeyboardButton(title, callback_data=f"admin_edit_setting_{key}")
 def _back_to_settings_btn(): return InlineKeyboardButton("🔙 بازگشت به تنظیمات", callback_data="back_to_settings")
 
-async def _send_or_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup=None, parse_mode=ParseMode.MARKDOWN):
+async def _send_or_edit(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    text: str,
+    reply_markup=None,
+    parse_mode=ParseMode.MARKDOWN
+):
+    """
+    ارسال/ویرایش پیام با fallback خودکار در صورت خطای Markdown:
+    اگر BadRequest: can't parse entities رخ دهد، بدون parse_mode ارسال می‌شود.
+    """
     q = getattr(update, "callback_query", None)
     if q:
         await q.answer()
         try:
             await q.edit_message_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+        except BadRequest as e:
+            # Fallback: بدون parse_mode
+            if "can't parse entities" in str(e).lower():
+                try:
+                    await q.edit_message_text(text, reply_markup=reply_markup, parse_mode=None)
+                except Exception:
+                    await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=reply_markup)
+            else:
+                # ارسال به‌جای ویرایش
+                await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=reply_markup, parse_mode=parse_mode)
         except Exception:
             await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=reply_markup, parse_mode=parse_mode)
     else:
-        await update.effective_message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+        try:
+            await update.effective_message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+        except BadRequest as e:
+            if "can't parse entities" in str(e).lower():
+                await update.effective_message.reply_text(text, reply_markup=reply_markup, parse_mode=None)
+            else:
+                await update.effective_message.reply_text(text, reply_markup=reply_markup, parse_mode=None)
 
 # --- Main Settings Menu ---
 async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -68,7 +94,7 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📊 گزارش‌ها و یادآورها", callback_data="settings_reports_reminders")],
         [InlineKeyboardButton("🔙 بازگشت به پنل ادمین", callback_data="admin_back_to_menu")]
     ])
-    await _send_or_edit(update, context, text, keyboard)
+    await _send_or_edit(update, context, text, keyboard, parse_mode=ParseMode.MARKDOWN)
     return ADMIN_SETTINGS_MENU
 
 # --- Submenus ---
@@ -84,7 +110,7 @@ async def maintenance_and_join_submenu(update: Update, context: ContextTypes.DEF
         [_admin_edit_btn("✍️ ویرایش کانال عضویت", "force_join_channel")],
         [_back_to_settings_btn()]
     ])
-    await _send_or_edit(update, context, text, kb); return ADMIN_SETTINGS_MENU
+    await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN); return ADMIN_SETTINGS_MENU
 
 async def payment_and_guides_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "**💳 پرداخت و راهنماها**\n\nاز گزینه‌های زیر برای ویرایش استفاده کنید."
@@ -96,7 +122,7 @@ async def payment_and_guides_submenu(update: Update, context: ContextTypes.DEFAU
         [_admin_edit_btn("✍️ راهنمای شارژ", "guide_charging")],
         [_back_to_settings_btn()]
     ])
-    await _send_or_edit(update, context, text, kb); return ADMIN_SETTINGS_MENU
+    await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN); return ADMIN_SETTINGS_MENU
 
 async def first_charge_promo_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     code = _get("first_charge_code", "ثبت نشده")
@@ -121,7 +147,7 @@ async def first_charge_promo_submenu(update: Update, context: ContextTypes.DEFAU
         [_admin_edit_btn("✍️ ویرایش تاریخ انقضا", "first_charge_expires_at")],
         [InlineKeyboardButton("🔙 بازگشت", callback_data="settings_payment_guides")]
     ])
-    await _send_or_edit(update, context, text, kb); return ADMIN_SETTINGS_MENU
+    await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN); return ADMIN_SETTINGS_MENU
 
 async def payment_info_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     instr = _get("payment_instruction_text", "راهنمایی ثبت نشده است.")
@@ -141,7 +167,7 @@ async def payment_info_submenu(update: Update, context: ContextTypes.DEFAULT_TYP
             _admin_edit_btn(f"بانک {i}", f"payment_card_{i}_bank"),
         ])
     rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="settings_payment_guides")])
-    await _send_or_edit(update, context, text, _kb(rows)); return ADMIN_SETTINGS_MENU
+    await _send_or_edit(update, context, text, _kb(rows), parse_mode=ParseMode.MARKDOWN); return ADMIN_SETTINGS_MENU
 
 async def service_configs_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     default_link = _get("default_sub_link_type", "sub")
@@ -152,7 +178,7 @@ async def service_configs_submenu(update: Update, context: ContextTypes.DEFAULT_
         [InlineKeyboardButton("🌐 ویرایش دامنه‌های ساب", callback_data="settings_subdomains")],
         [_back_to_settings_btn()]
     ])
-    await _send_or_edit(update, context, text, kb); return ADMIN_SETTINGS_MENU
+    await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN); return ADMIN_SETTINGS_MENU
 
 async def subdomains_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     vol = _get("volume_based_sub_domains", "(خالی)"); unlim = _get("unlimited_sub_domains", "(خالی)"); gen = _get("sub_domains", "(خالی)")
@@ -163,7 +189,7 @@ async def subdomains_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE)
         [_admin_edit_btn("✍️ ویرایش دامنه‌های عمومی", "sub_domains")],
         [InlineKeyboardButton("🔙 بازگشت", callback_data="settings_service_configs")]
     ])
-    await _send_or_edit(update, context, text, kb); return ADMIN_SETTINGS_MENU
+    await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN); return ADMIN_SETTINGS_MENU
 
 async def reports_and_reminders_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     daily_on = "فعال ✅" if _get_bool("report_daily_enabled") else "غیرفعال ❌"
@@ -180,53 +206,35 @@ async def reports_and_reminders_submenu(update: Update, context: ContextTypes.DE
          _admin_edit_btn("✍️ ویرایش حداقل حجم یادآور", "expiry_reminder_min_remaining_gb")],
         [_back_to_settings_btn()]
     ])
-    await _send_or_edit(update, context, text, kb); return ADMIN_SETTINGS_MENU
+    await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN); return ADMIN_SETTINGS_MENU
 
 # --- Multi-server & Usage submenu ---
 async def multi_server_usage_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Usage aggregation settings (DB-driven)
     usage_agg_on = "فعال ✅" if _get_bool("usage_aggregation_enabled", USAGE_AGGREGATION_ENABLED) else "غیرفعال ❌"
     interval_min = _get("usage_update_interval_min", str(USAGE_UPDATE_INTERVAL_MIN))
 
-    # Nodes info: config.py + DB
-    nodes_on_cfg = "فعال ✅" if MULTI_SERVER_ENABLED else "غیرفعال ❌"
-    nodes_count_cfg = len(SERVERS) if isinstance(SERVERS, list) else 0
-    default_node = DEFAULT_SERVER_NAME or (SERVERS[0].get("name") if nodes_count_cfg else "-")
-    try:
-        nodes_db_count = len(db.list_nodes() or [])
-    except Exception:
-        nodes_db_count = 0
-
-    # Node health-check settings (DB-driven)
-    nodes_h_on = "فعال ✅" if _get_bool("nodes_health_enabled", True) else "غیرفعال ❌"
-    nodes_h_interval = _get("nodes_health_interval_min", "10")
-    auto_disable_after = _get("nodes_auto_disable_after_fails", "3")
-
-    policy = str(SERVER_SELECTION_POLICY or "first")
+    # display-only info from config.py
+    nodes_on = "فعال ✅" if MULTI_SERVER_ENABLED else "غیرفعال ❌"
+    nodes_count = len(SERVERS) if isinstance(SERVERS, list) else 0
+    default_node = DEFAULT_SERVER_NAME or (SERVERS[0].get("name") if nodes_count else "-")
 
     text = (
         f"**🌐 چندنودی و مصرف**\n\n"
-        f"- وضعیت چندنودی (config.py): {nodes_on_cfg}\n"
-        f"- تعداد نودها (config): {nodes_count_cfg}\n"
-        f"- تعداد نودها (DB): {nodes_db_count}\n"
+        f"- وضعیت چندنودی (config.py): {nodes_on}\n"
+        f"- تعداد نودها (config): {nodes_count}\n"
         f"- نود پیش‌فرض: {default_node}\n"
-        f"- سیاست انتخاب نود: {policy}\n\n"
+        f"- سیاست انتخاب نود: {SERVER_SELECTION_POLICY}\n\n"
         f"- تجمیع مصرف بین نودها: {usage_agg_on}\n"
         f"- بازه به‌روزرسانی مصرف: {interval_min} دقیقه\n\n"
-        f"- Health-check نودها: {nodes_h_on}\n"
-        f"- بازه Health-check: {nodes_h_interval} دقیقه\n"
-        f"- تعداد خطای متوالی تا غیرفعال‌سازی خودکار: {auto_disable_after}\n\n"
         f"_مدیریت نودها از پنل ادمین > «🖥️ مدیریت نودها» انجام می‌شود._"
     )
     kb = _kb([
         [InlineKeyboardButton("تغییر وضعیت تجمیع مصرف", callback_data="toggle_usage_aggregation")],
-        [_admin_edit_btn("✍️ بازه به‌روزرسانی مصرف (دقیقه)", "usage_update_interval_min")],
-        [InlineKeyboardButton("تغییر وضعیت Health-Check نودها", callback_data="toggle_report_nodes_health_enabled")],
-        [_admin_edit_btn("✍️ بازه Health-Check (دقیقه)", "nodes_health_interval_min"),
-         _admin_edit_btn("✍️ تعداد خطا تا غیرفعال‌سازی", "nodes_auto_disable_after_fails")],
+        [_admin_edit_btn("✍️ بازه به‌روزرسانی (دقیقه)", "usage_update_interval_min")],
         [_back_to_settings_btn()]
     ])
-    await _send_or_edit(update, context, text, kb); return ADMIN_SETTINGS_MENU
+    # نکته: به‌صورت صریح parse_mode=None تا از مشکلات Markdown (underscore) جلوگیری شود.
+    await _send_or_edit(update, context, text, kb, parse_mode=None); return ADMIN_SETTINGS_MENU
 
 # --- Edit Logic ---
 def _infer_return_target(key: str) -> str:
@@ -242,7 +250,7 @@ def _infer_return_target(key: str) -> str:
         return "maintenance_join"
     if key in ("expiry_reminder_days", "expiry_reminder_min_remaining_gb"):
         return "reports_reminders"
-    if key in ("usage_update_interval_min", "nodes_health_interval_min", "nodes_auto_disable_after_fails"):
+    if key in ("usage_update_interval_min",):
         return "multi_server_usage"
     return "settings_root"
 
@@ -262,8 +270,6 @@ async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
         tip = "\n(فرمت: 2025-12-31T23:59:59+03:30)"
     elif key == "usage_update_interval_min":
         tip = "\n(یک عدد صحیح بر حسب دقیقه وارد کنید)"
-    elif key in ("nodes_health_interval_min", "nodes_auto_disable_after_fails"):
-        tip = "\n(یک عدد صحیح مثبت وارد کنید)"
 
     text = f"✍️ مقدار جدید برای **{key}** را ارسال کنید.{tip}\n/cancel برای انصراف\n\n**مقدار فعلی:**\n`{cur}`"
 
@@ -288,7 +294,7 @@ async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_T
     if val == "-":
         val = ""
 
-    # Validation
+    # Optional: simple validation for usage interval
     if key == "usage_update_interval_min":
         try:
             intval = int(float(val))
@@ -297,16 +303,6 @@ async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_T
             val = str(intval)
         except Exception:
             await update.message.reply_text("❌ مقدار نامعتبر است. یک عدد صحیح مثبت (دقیقه) وارد کنید.")
-            return AWAIT_SETTING_VALUE
-
-    if key in ("nodes_health_interval_min", "nodes_auto_disable_after_fails"):
-        try:
-            intval = int(float(val))
-            if intval <= 0:
-                raise ValueError()
-            val = str(intval)
-        except Exception:
-            await update.message.reply_text("❌ مقدار نامعتبر است. یک عدد صحیح مثبت وارد کنید.")
             return AWAIT_SETTING_VALUE
 
     db.set_setting(key, val)
@@ -349,11 +345,6 @@ async def toggle_report_setting(update: Update, context: ContextTypes.DEFAULT_TY
     q = getattr(update, "callback_query", None)
     key = (q.data if q else "").replace("toggle_report_", "").strip()
     _toggle(key)
-    # Return to appropriate submenu
-    if key in ("report_daily_enabled", "report_weekly_enabled"):
-        return await reports_and_reminders_submenu(update, context)
-    if key in ("nodes_health_enabled",):
-        return await multi_server_usage_submenu(update, context)
     return await reports_and_reminders_submenu(update, context)
 
 async def edit_default_link_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
