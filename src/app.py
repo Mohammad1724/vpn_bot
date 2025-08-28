@@ -15,7 +15,7 @@ from bot import jobs, constants
 from bot.handlers import (
     start as start_h, gift as gift_h, charge as charge_h, buy as buy_h,
     user_services as us_h, account_actions as acc_act, support as support_h,
-    usage as usage_h  # NEW: usage menu (aggregate traffic)
+    usage as usage_h  # نمایش مصرف تجمیعی
 )
 from bot.handlers.common_handlers import check_channel_membership
 from bot.handlers.admin import (
@@ -23,7 +23,9 @@ from bot.handlers.admin import (
     settings as admin_settings, backup as admin_backup, users as admin_users,
     gift_codes as admin_gift
 )
+# اگر مدیریت نودها را فعال دارید، این ایمپورت را نگه دارید
 from bot.handlers.admin import nodes as admin_nodes
+
 import bot.handlers.admin.trial_settings_ui as trial_ui
 from bot.handlers.trial import get_trial_service as trial_get_trial_service
 from bot.handlers.admin.trial_settings import set_trial_days, set_trial_gb
@@ -255,7 +257,6 @@ def build_application():
                 CallbackQueryHandler(admin_settings.service_configs_submenu, pattern="^settings_service_configs$"),
                 CallbackQueryHandler(admin_settings.subdomains_submenu, pattern="^settings_subdomains$"),
                 CallbackQueryHandler(admin_settings.reports_and_reminders_submenu, pattern="^settings_reports_reminders$"),
-                # NEW: multi-server & usage submenu + toggle
                 CallbackQueryHandler(admin_settings.multi_server_usage_submenu, pattern="^settings_multi_server_usage$"),
                 CallbackQueryHandler(admin_settings.toggle_usage_aggregation, pattern="^toggle_usage_aggregation$"),
 
@@ -280,7 +281,7 @@ def build_application():
     )
 
     # =========================
-    # Nodes Conversation (Admin)
+    # Nodes Conversation (Admin) - در صورت نیاز
     # =========================
     nodes_conv = ConversationHandler(
         entry_points=[
@@ -466,7 +467,7 @@ def build_application():
     application.add_handler(CallbackQueryHandler(support_h.close_ticket, pattern="^close_ticket_"))
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern="^check_membership$"))
 
-    # NEW: usage aggregate menu (in Account info)
+    # Usage aggregate menu (in Account info)
     application.add_handler(CallbackQueryHandler(usage_h.show_usage_menu, pattern="^acc_usage$"))
     application.add_handler(CallbackQueryHandler(usage_h.show_usage_menu, pattern="^acc_usage_refresh$"))
 
