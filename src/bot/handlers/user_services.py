@@ -5,6 +5,8 @@ import json
 import logging
 import httpx
 import qrcode
+from typing import List
+
 from telegram.ext import ContextTypes
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Message, InputFile
 from telegram.error import BadRequest
@@ -15,6 +17,13 @@ import hiddify_api
 from config import ADMIN_ID
 from bot import utils
 from bot.utils import create_service_info_message, get_service_status
+
+# Optional Subconverter config
+try:
+    from config import SUBCONVERTER_ENABLED, SUBCONVERTER_DEFAULT_TARGET
+except Exception:
+    SUBCONVERTER_ENABLED = False
+    SUBCONVERTER_DEFAULT_TARGET = "v2ray"
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +45,23 @@ def _link_label(link_type: str) -> str:
     }.get(lt, "V2Ray (sub)")
 
 
+def _link_type_to_subconv_target(link_type: str) -> str:
+    """
+    نگاشت نوع لینک در UI به target در Subconverter
+    - sub/sub64 → v2ray
+    - auto → SUBCONVERTER_DEFAULT_TARGET
+    - بقیه هم‌نام با targetهای رایج Subconverter
+    """
+    lt = _normalize_link_type(link_type)
+    if lt in ("sub", "sub64"):
+        return "v2ray"
+    if lt == "auto":
+        return (SUBCONVERTER_DEFAULT_TARGET or "v2ray").strip().lower()
+    if lt in ("xray", "singbox", "clash", "clashmeta", "sub"):
+        return lt
+    return "v2ray"
+
+
 def _compute_base_link(service: dict, user_uuid: str) -> str:
     """
     ساخت base_link برای اشتراک:
@@ -46,6 +72,54 @@ def _compute_base_link(service: dict, user_uuid: str) -> str:
     if isinstance(sub_link, str) and sub_link.strip():
         return sub_link.strip().rstrip("/")
     return utils.build_subscription_url(user_uuid, server_name=(service or {}).get("server_name")).rstrip("/")
+
+
+def _collect_subscription_bases(service: dict) -> List[str]:
+    """
+    جمع‌آوری baseهای اشتراک برای ساخت لینک واحد:
+    - پایه سرویس اصلی (base_link)
+    - پایه endpointهای ذخیره‌شده در DB (service_endpoints)
+    خروجی: لیست base بدون نوع (بدون /sub, /xray, ...)
+    """
+    bases: List[str] = []
+    main_base = _compute_base_link(service, service["sub_uuid"])
+    if main_base:
+        bases.append(main_base)
+
+    # اضافه‌کردن endpointهای اضافی
+    try:
+        endpoints = db.list_service_endpoints(service["service_id"])
+        for ep in endpoints:
+            ep_link = (ep.get("sub_link") or "").strip().rstrip("/")
+            if ep_link:
+                bases.append(ep_link)
+    except Exception as e:
+        logger.debug("list_service_endpoints failed for service %s: %s", service.get("service_id"), e)
+
+    # حذف تکراری‌ها
+    dedup = []
+    for b in bases:
+        if b not in dedup:
+            dedup.append(b)
+    return dedup
+
+
+def _build_unified_link_for_type(service: dict, link_type: str) -> str | None:
+    """
+    ساخت لینک واحد برای نوع لینک انتخاب‌شده با Subconverter
+    - منابع را همیشه به صورت /sub به Subconverter می‌دهیم (ورودی v2ray)
+    - target را از نوع لینک نگاشت می‌کنیم
+    """
+    if not SUBCONVERTER_ENABLED:
+        return None
+    bases = _collect_subscription_bases(service)
+    if not bases or len(bases) < 1:
+        return None
+
+    # منابع ورودی به Subconverter: v2ray sub urls
+    sources = [f"{b}/sub" for b in bases]
+    target = _link_type_to_subconv_target(link_type)
+    return utils.build_subconverter_link(sources, target=target)
 
 
 async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -115,7 +189,24 @@ async def send_service_details(
                 await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=InlineKeyboardMarkup(kb))
             return
 
-        caption = create_service_info_message(info, service_db_record=service)
+        # اگر Subconverter فعال است، لینک واحد پیش‌فرض (با target پیش‌فرض) را بساز
+        unified_default_link = None
+        if SUBCONVERTER_ENABLED:
+            try:
+                bases = _collect_subscription_bases(service)
+                if bases:
+                    sources = [f"{b}/sub" for b in bases]
+                    unified_default_link = utils.build_subconverter_link(sources, target=SUBCONVERTER_DEFAULT_TARGET)
+            except Exception as e:
+                logger.debug("build unified_default_link failed for service %s: %s", service_id, e)
+
+        caption = create_service_info_message(
+            info,
+            service_db_record=service,
+            # اگر لینک واحد داریم، در کپشن نمایش بده
+            override_sub_url=unified_default_link
+        )
+
         keyboard_rows = []
         if not minimal:
             keyboard_rows.append([
@@ -240,9 +331,20 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(chat_id=q.from_user.id, text="❌ دریافت کانفیگ‌های تکی با خطا مواجه شد.")
         return
 
-    # Normalize endpoint and build final link
-    url_link_type = _normalize_link_type(link_type).replace('clashmeta', 'clash-meta')
-    final_link = f"{base_link}/{url_link_type}/?name={safe_name}"
+    # اگر Subconverter فعال است و endpoint اضافی داریم، لینک واحد بساز
+    unified_link = None
+    if SUBCONVERTER_ENABLED:
+        try:
+            unified_link = _build_unified_link_for_type(service, link_type)
+        except Exception as e:
+            logger.debug("unified link build failed: %s", e)
+
+    # اگر لینک واحد آماده است از همان استفاده کن؛ در غیر این صورت لینک قبلی (تکی) را بساز
+    if unified_link:
+        final_link = unified_link
+    else:
+        url_link_type = _normalize_link_type(link_type).replace('clashmeta', 'clash-meta')
+        final_link = f"{base_link}/{url_link_type}/?name={safe_name}"
 
     img = qrcode.make(final_link)
     bio = io.BytesIO()
@@ -358,6 +460,7 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
         pass
 
     try:
+        # حذف در پنل اصلی
         success_on_panel = await hiddify_api.delete_user_from_panel(service['sub_uuid'], server_name=service.get("server_name"))
 
         # اگر ناموفق، یک چک نهایی برای اطمینان از «عدم وجود» انجام بده
@@ -373,7 +476,22 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
                 pass
             return
 
-        # حذف رکورد DB
+        # حذف سرویس‌های endpoint (در صورت وجود)
+        try:
+            endpoints = db.list_service_endpoints(service_id)
+            for ep in endpoints or []:
+                ep_uuid = (ep.get("sub_uuid") or "").strip()
+                ep_server = (ep.get("server_name") or "").strip() or None
+                if ep_uuid:
+                    try:
+                        await hiddify_api.delete_user_from_panel(ep_uuid, server_name=ep_server)
+                    except Exception:
+                        pass
+            db.delete_service_endpoints(service_id)
+        except Exception as e:
+            logger.debug("delete endpoints for service %s failed: %s", service_id, e)
+
+        # حذف رکورد DB اصلی
         db.delete_service(service_id)
 
         try:
@@ -509,15 +627,34 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     try:
+        # تمدید روی پنل اصلی
         new_info = await hiddify_api.renew_user_subscription(
             user_uuid=service['sub_uuid'],
             plan_days=plan['days'],
             plan_gb=plan['gb'],
             server_name=service.get("server_name")
         )
-
         if not new_info:
             raise ValueError("پاسخ API نامعتبر است")
+
+        # تمدید endpointها (در صورت وجود)
+        try:
+            endpoints = db.list_service_endpoints(service_id)
+            for ep in endpoints or []:
+                ep_uuid = (ep.get("sub_uuid") or "").strip()
+                ep_server = (ep.get("server_name") or "").strip() or None
+                if ep_uuid:
+                    try:
+                        await hiddify_api.renew_user_subscription(
+                            user_uuid=ep_uuid,
+                            plan_days=plan['days'],
+                            plan_gb=plan['gb'],
+                            server_name=ep_server
+                        )
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.debug("renew endpoints for service %s failed: %s", service_id, e)
 
         db.finalize_renewal_transaction(txn_id, plan_id)
 
