@@ -2,6 +2,8 @@
 
 import logging
 from datetime import datetime
+from typing import List, Optional
+
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, InputFile
 from telegram.constants import ParseMode
@@ -20,6 +22,14 @@ except Exception:
     MULTI_SERVER_ENABLED = False
     SERVERS = []
     DEFAULT_SERVER_NAME = None
+
+# Subconverter (unified link) configs
+try:
+    from config import SUBCONVERTER_ENABLED, SUBCONVERTER_DEFAULT_TARGET, SUBCONVERTER_EXTRA_SERVERS
+except Exception:
+    SUBCONVERTER_ENABLED = False
+    SUBCONVERTER_DEFAULT_TARGET = "v2ray"
+    SUBCONVERTER_EXTRA_SERVERS = []  # e.g., ["Main"] or ["Node-2","Node-3"]
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +112,31 @@ def _get_selected_server_name(context: ContextTypes.DEFAULT_TYPE) -> str | None:
     return None
 
 
+def _pick_extra_servers(primary_name: Optional[str]) -> List[str]:
+    """
+    انتخاب سرورهای اضافه برای ساخت همزمان سرویس جهت لینک واحد (حالت Subconverter).
+    - ابتدا از SUBCONVERTER_EXTRA_SERVERS (config) استفاده می‌کند.
+    - اگر خالی بود و MULTI_SERVER_ENABLED فعال است، یکی از سرورهای دیگر (مثل DEFAULT) را انتخاب می‌کند.
+    - خروجی همیشه بدون تکرار و بدون primary است.
+    """
+    extra = []
+    try:
+        # از config
+        for n in (SUBCONVERTER_EXTRA_SERVERS or []):
+            n = str(n).strip()
+            if n and n != primary_name and n not in extra:
+                extra.append(n)
+    except Exception:
+        pass
+
+    # fallback: اگر هیچ چیزی تنظیم نبود، و چند سرور داریم، از DEFAULT یا اولی استفاده کن
+    if not extra and MULTI_SERVER_ENABLED and SERVERS:
+        cand = DEFAULT_SERVER_NAME or (SERVERS[0].get("name") if SERVERS else None)
+        if cand and cand != primary_name:
+            extra = [str(cand)]
+    return extra
+
+
 # --- لیست دسته‌بندی و پلن‌ها ---
 async def buy_service_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -176,10 +211,6 @@ async def buy_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.message.delete()
     except Exception:
         pass
-
-    # فعلاً انتخاب سرور را به تنظیمات پیش‌فرض واگذار می‌کنیم (در صورت تمایل، می‌توان مرحله انتخاب سرور را هم اضافه کرد)
-    # server_name = _get_selected_server_name(context)
-    # context.user_data['buy_server_name'] = server_name
 
     await context.bot.send_message(
         chat_id=q.from_user.id,
@@ -339,23 +370,64 @@ async def _do_purchase_confirmed(q, context: ContextTypes.DEFAULT_TYPE, custom_n
     try:
         await _notify_purchase_started(q, context, user_id)
 
-        # ایجاد سرویس در پنل هیدیفای
-        new_uuid, sub_link = await _create_service_in_panel(
-            context, user_id, username, plan, custom_name, data.get('server_name')
+        # ایجاد سرویس در پنل انتخاب‌شده (اصلی)
+        provision = await hiddify_api.create_hiddify_user(
+            plan_days=plan['days'],
+            plan_gb=float(plan['gb']),
+            user_telegram_id=f"tg:@{username}|id:{user_id}" if username else f"tg:id:{user_id}",
+            custom_name=(custom_name or ("سرویس نامحدود" if int(plan['gb']) == 0 else f"سرویس {utils.to_persian_digits(str(plan['gb']))} گیگ")),
+            server_name=data.get('server_name')  # ممکن است None باشد
         )
 
-        if not new_uuid:
-            raise RuntimeError("Failed to create service in panel")
+        if not provision or not provision.get("uuid"):
+            raise RuntimeError("Failed to create service in primary panel")
 
-        # نهایی کردن تراکنش در پایگاه داده (server_name در finalize با sub_link نیز ذخیره/تشخیص داده می‌شود)
-        db.finalize_purchase_transaction(txn_id, new_uuid, sub_link, custom_name)
+        main_uuid = provision["uuid"]
+        main_sublink = provision.get("full_link", "")
+        main_server_name = provision.get("server_name")
+
+        # نهایی کردن تراکنش در پایگاه داده
+        db.finalize_purchase_transaction(txn_id, main_uuid, main_sublink, custom_name)
+
+        # endpointهای اضافه برای لینک واحد (اختیاری)
+        extra_sub_links: List[str] = []
+        if SUBCONVERTER_ENABLED:
+            try:
+                # رکورد اصلی سرویس را بگیر (برای service_id)
+                main_service_rec = db.get_service_by_uuid(main_uuid)
+                service_id = (main_service_rec or {}).get("service_id")
+
+                if service_id:
+                    # انتخاب سرورهای اضافه
+                    extra_servers = _pick_extra_servers(primary_name=main_server_name)
+                    for name in extra_servers:
+                        try:
+                            extra_prov = await hiddify_api.create_hiddify_user(
+                                plan_days=plan['days'],
+                                plan_gb=float(plan['gb']),
+                                user_telegram_id=f"tg:@{username}|id:{user_id}" if username else f"tg:id:{user_id}",
+                                custom_name=(custom_name or "config"),
+                                server_name=name
+                            )
+                            if extra_prov and extra_prov.get("uuid"):
+                                ep_uuid = extra_prov["uuid"]
+                                ep_link = extra_prov.get("full_link", "")
+                                ep_server = extra_prov.get("server_name")
+                                # ثبت endpoint در DB
+                                db.add_service_endpoint(service_id, ep_server, ep_uuid, ep_link)
+                                if ep_link:
+                                    extra_sub_links.append(ep_link)
+                        except Exception as e:
+                            logger.warning("Extra endpoint creation failed on %s: %s", name, e)
+            except Exception as e:
+                logger.debug("extra endpoints flow failed: %s", e)
 
         # اعمال کد تخفیف در صورت استفاده
         if promo_code:
             db.mark_promo_code_as_used(user_id, promo_code)
 
-        # ارسال اطلاعات سرویس به کاربر
-        await _send_service_info_to_user(context, user_id, new_uuid)
+        # ارسال اطلاعات سرویس به کاربر (با لینک واحد اگر ممکن باشد)
+        await _send_service_info_to_user(context, user_id, main_uuid)
 
     except Exception as e:
         logger.error("Purchase failed for user %s plan %s: %s", user_id, plan_id, e, exc_info=True)
@@ -389,42 +461,46 @@ async def _notify_purchase_started(q, context, user_id):
         await context.bot.send_message(chat_id=user_id, text="⏳ در حال ایجاد سرویس شما...")
 
 
-async def _create_service_in_panel(context, user_id, username, plan, custom_name, server_name: str | None):
-    """ایجاد سرویس در پنل هیدیفای (با پشتیبانی چندسرور)"""
-    gb_i = int(plan['gb'])
-    default_name = "سرویس نامحدود" if gb_i == 0 else f"سرویس {utils.to_persian_digits(str(gb_i))} گیگ"
-    final_name = custom_name or default_name
-
-    note = f"tg:@{username}|id:{user_id}" if username else f"tg:id:{user_id}"
-
-    provision = await hiddify_api.create_hiddify_user(
-        plan_days=plan['days'],
-        plan_gb=float(plan['gb']),
-        user_telegram_id=note,
-        custom_name=final_name,
-        server_name=server_name  # ممکن است None باشد و در این صورت سرور پیش‌فرض انتخاب می‌شود
-    )
-
-    if not provision or not provision.get("uuid"):
-        return None, None
-
-    return provision["uuid"], provision.get('full_link', '')
-
-
 async def _send_service_info_to_user(context, user_id, new_uuid):
-    """ارسال اطلاعات سرویس به کاربر"""
+    """ارسال اطلاعات سرویس به کاربر (با لینک واحد در صورت فعال بودن Subconverter)"""
     new_service_record = db.get_service_by_uuid(new_uuid)
     server_name = (new_service_record or {}).get("server_name")
+
+    # اطلاعات از پنل
     user_data = await hiddify_api.get_user_info(new_uuid, server_name=server_name)
 
     if user_data:
-        # ترجیح لینک ذخیره‌شده در DB (که دقیقاً مربوط به سرور ساخته‌شده است)
-        sub_url = (new_service_record or {}).get('sub_link') or utils.build_subscription_url(new_uuid, server_name=server_name)
+        # 1) پایه لینک اصلی
+        base_main = (new_service_record or {}).get('sub_link') or utils.build_subscription_url(new_uuid, server_name=server_name)
+        sources = [f"{base_main}/sub"]
+
+        # 2) اضافه کردن endpointها (در صورت وجود)
+        try:
+            endpoints = db.list_service_endpoints((new_service_record or {}).get("service_id"))
+            for ep in endpoints or []:
+                ep_link = (ep.get("sub_link") or "").strip().rstrip("/")
+                if ep_link:
+                    sources.append(f"{ep_link}/sub")
+        except Exception:
+            pass
+
+        # 3) ساخت لینک واحد (اگر فعال است)
+        unified_url = None
+        if SUBCONVERTER_ENABLED and sources:
+            try:
+                unified_url = utils.build_subconverter_link(sources, target=SUBCONVERTER_DEFAULT_TARGET)
+            except Exception:
+                unified_url = None
+
+        # ترجیح لینک واحد (اگر ساخته شد)
+        sub_url = unified_url or base_main
+
         qr_bio = utils.make_qr_bytes(sub_url)
         caption = utils.create_service_info_caption(
             user_data,
             service_db_record=new_service_record,
-            title="🎉 سرویس شما با موفقیت ساخته شد!"
+            title="🎉 سرویس شما با موفقیت ساخته شد!",
+            override_sub_url=sub_url
         )
 
         inline_kb = InlineKeyboardMarkup([
@@ -452,16 +528,4 @@ async def _send_service_info_to_user(context, user_id, new_uuid):
             chat_id=user_id,
             text="✅ خرید انجام شد، اما دریافت اطلاعات سرویس با خطا مواجه شد. از «📋 سرویس‌های من» استفاده کنید.",
             reply_markup=get_main_menu_keyboard(user_id)
-        )
-
-
-async def _send_error_message(q, context, error_message):
-    """ارسال پیام خطا به کاربر"""
-    try:
-        await q.edit_message_text(f"❌ {error_message}")
-    except BadRequest:
-        await context.bot.send_message(
-            chat_id=q.from_user.id,
-            text=f"❌ {error_message}",
-            reply_markup=get_main_menu_keyboard(q.from_user.id)
         )
