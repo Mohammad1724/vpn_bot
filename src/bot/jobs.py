@@ -138,7 +138,7 @@ async def expiry_reminder_job(context: ContextTypes.DEFAULT_TYPE):
 
         template = db.get_setting("expiry_reminder_message") or (
             "⏰ سرویس «{service_name}» شما {days} روز دیگر منقضی می‌شود.\n"
-            "برای جلوگیری از قطعی، از «📋 سرویس‌های من» تمدید کنید."
+            "برای جلوگیری از قطع، از «📋 سرویس‌های من» تمدید کنید."
         )
 
         services = db.get_all_active_services()
@@ -205,59 +205,48 @@ async def _remove_stale_service(service: dict, context: ContextTypes.DEFAULT_TYP
         logger.error("Failed to remove stale service %s: %s", service["service_id"], e, exc_info=True)
 
 
-# ========== Usage aggregation across servers ==========
+# ========== Usage aggregation across servers (+ endpoints for Subconverter) ==========
 async def update_user_usage_snapshot(context: ContextTypes.DEFAULT_TYPE):
     """
     برای هر سرویس فعال، مصرف را از پنل مربوطه خوانده و
     مجموع مصرف هر کاربر را به تفکیک سرور به‌روزرسانی می‌کند.
-    سپس رکوردهای قدیمی و بلااستفاده را پاکسازی می‌کند تا دقت تجمیع بالا برود.
+    - شامل service_endpoints نیز می‌شود (برای حالت Subconverter/چندنودی)
     """
     try:
-        services = db.get_all_active_services()
-        if not services:
-            return
+        base_services = db.get_all_active_services() or []
+        endpoints = db.list_all_endpoints_with_user() or []
 
-        # تعیین بازه پاکسازی: 2 برابر بازه به‌روزرسانی مصرف، حداقل 15 دقیقه
-        try:
-            interval_min = int(db.get_setting("usage_update_interval_min") or USAGE_UPDATE_INTERVAL_MIN or 10)
-        except Exception:
-            interval_min = USAGE_UPDATE_INTERVAL_MIN or 10
-        cleanup_after_min = max(2 * int(interval_min), 15)
+        # Normalize both lists into unified tasks: (user_id, sub_uuid, server_name)
+        tasks_data = []
+        for s in base_services:
+            tasks_data.append((s["user_id"], s.get("server_name") or "Unknown", s["sub_uuid"]))
+        for ep in endpoints:
+            tasks_data.append((ep["user_id"], ep.get("server_name") or "Unknown", ep.get("sub_uuid")))
+
+        if not tasks_data:
+            return
 
         # Concurrency control
         sem = asyncio.Semaphore(8)
 
-        async def fetch_usage(svc: dict):
+        async def fetch_usage(user_id: int, server_name: str, sub_uuid: str):
             async with sem:
+                if not sub_uuid:
+                    return None
                 try:
-                    server_name = svc.get("server_name") or ""
-                    # اگر server_name خالی است و لینک داریم، تلاش برای resolve سریع (در صورت عدم backfill)
-                    if not server_name and svc.get("sub_link"):
-                        try:
-                            resolved = db._resolve_server_name_from_link(svc["sub_link"])  # internal helper
-                            if resolved:
-                                # به‌روز کردن رکورد سرویس برای دفعات بعدی
-                                conn = db._connect_db()
-                                conn.execute("UPDATE active_services SET server_name = ? WHERE service_id = ?", (resolved, svc["service_id"]))
-                                conn.commit()
-                                server_name = resolved
-                        except Exception:
-                            pass
-
-                    usage = await hiddify_api.get_user_usage_gb(svc["sub_uuid"], server_name=server_name or None)
+                    usage = await hiddify_api.get_user_usage_gb(sub_uuid, server_name=server_name)
                     if usage is None:
                         return None
-                    return (svc["user_id"], server_name or "Unknown", float(usage))
+                    return (user_id, server_name or "Unknown", float(usage))
                 except Exception:
                     return None
 
-        tasks = [fetch_usage(s) for s in services]
-        results = await asyncio.gather(*tasks, return_exceptions=False)
+        coros = [fetch_usage(uid, srv, uuid) for (uid, srv, uuid) in tasks_data]
+        results = await asyncio.gather(*coros, return_exceptions=False)
 
-        # Aggregate per (user_id, server_name) and collect seen servers per user
+        # Aggregate per (user_id, server_name)
         agg = defaultdict(float)
-        seen_servers_by_user: dict[int, set[str]] = defaultdict(set)
-
+        seen_servers_by_user = defaultdict(set)
         for r in results:
             if not r:
                 continue
@@ -270,6 +259,12 @@ async def update_user_usage_snapshot(context: ContextTypes.DEFAULT_TYPE):
             db.upsert_user_traffic(uid, srv, total_usage)
 
         # Cleanup old/stale user_traffic entries per user
+        try:
+            interval_min = int(db.get_setting("usage_update_interval_min") or USAGE_UPDATE_INTERVAL_MIN or 10)
+        except Exception:
+            interval_min = USAGE_UPDATE_INTERVAL_MIN or 10
+        cleanup_after_min = max(2 * int(interval_min), 15)
+
         for uid, servers in seen_servers_by_user.items():
             try:
                 db.delete_user_traffic_not_in_and_older(
@@ -281,10 +276,8 @@ async def update_user_usage_snapshot(context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.debug("cleanup user_traffic failed for user %s: %s", uid, e)
 
-        logger.info(
-            "Usage snapshot updated for %d user-server pairs; cleaned user_traffic older than %d minutes.",
-            len(agg), cleanup_after_min
-        )
+        logger.info("Usage snapshot updated: %d user-server pairs; cleaned older than %d minutes.",
+                    len(agg), cleanup_after_min)
 
     except Exception as e:
         logger.error("update_user_usage_snapshot failed: %s", e, exc_info=True)
