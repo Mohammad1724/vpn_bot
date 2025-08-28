@@ -213,6 +213,38 @@ configure_config_py() {
   sed -i "s|^EXPIRY_REMINDER_DAYS = .*|EXPIRY_REMINDER_DAYS = ${EXPIRY_REMINDER_DAYS}|" "$CONFIG_FILE"
   sed -i "s|^USAGE_ALERT_THRESHOLD = .*|USAGE_ALERT_THRESHOLD = ${USAGE_ALERT_THRESHOLD}|" "$CONFIG_FILE"
 
+  # ---------------- Subconverter (Unified link) ----------------
+  echo
+  print_color blue "--- Subconverter (Unified Link) ---"
+  read -rp "Enable Subconverter unified link? [y/N]: " EN_SUB
+  EN_SUB=${EN_SUB:-N}
+  local SUBCONVERTER_ENABLED_VAL="False"
+  local SUBCONVERTER_URL_VAL="http://127.0.0.1:25500"
+  local SUBCONVERTER_DEFAULT_TARGET_VAL="v2ray"
+  local SUBCONVERTER_EXTRA_SERVERS_VAL="[]"
+
+  if [[ "$EN_SUB" =~ ^[Yy]$ ]]; then
+    SUBCONVERTER_ENABLED_VAL="True"
+    read -rp "Subconverter URL [http://127.0.0.1:25500]: " SUBC_URL_IN
+    SUBCONVERTER_URL_VAL="${SUBC_URL_IN:-http://127.0.0.1:25500}"
+    read -rp "Default target (v2ray|clash|clashmeta|singbox) [v2ray]: " SUBC_TGT_IN
+    SUBCONVERTER_DEFAULT_TARGET_VAL="${SUBC_TGT_IN:-v2ray}"
+    echo "Enter extra server names to include in unified link (comma-separated), e.g., Main,Node-2"
+    read -rp "Extra servers: " SUBC_EXTRA_IN
+    if [ -n "$SUBC_EXTRA_IN" ]; then
+      SUBCONVERTER_EXTRA_SERVERS_VAL="[\"$(echo "$SUBC_EXTRA_IN" | sed 's/,/\", \"/g')\"]"
+    fi
+  fi
+
+  local SUBC_URL_E; SUBC_URL_E=$(escape_sed "$SUBCONVERTER_URL_VAL")
+  local SUBC_TGT_E; SUBC_TGT_E=$(escape_sed "$SUBCONVERTER_DEFAULT_TARGET_VAL")
+
+  # These keys exist in template; replace them
+  sed -i "s|^SUBCONVERTER_ENABLED = .*|SUBCONVERTER_ENABLED = ${SUBCONVERTER_ENABLED_VAL}|" "$CONFIG_FILE"
+  sed -i "s|^SUBCONVERTER_URL = .*|SUBCONVERTER_URL = \"${SUBC_URL_E}\"|" "$CONFIG_FILE"
+  sed -i "s|^SUBCONVERTER_DEFAULT_TARGET = .*|SUBCONVERTER_DEFAULT_TARGET = \"${SUBC_TGT_E}\"|" "$CONFIG_FILE"
+  sed -i "s|^SUBCONVERTER_EXTRA_SERVERS = .*|SUBCONVERTER_EXTRA_SERVERS = ${SUBCONVERTER_EXTRA_SERVERS_VAL}|" "$CONFIG_FILE"
+
   # Permissions
   chmod 640 "$CONFIG_FILE" || true
 
@@ -231,6 +263,16 @@ append_missing_keys_if_any() {
   fi
   if ! grep -q '^USAGE_ALERT_THRESHOLD' "$CONFIG_FILE"; then
     echo 'USAGE_ALERT_THRESHOLD = 0.8' >> "$CONFIG_FILE"; changed=1
+  fi
+  # Subconverter defaults (if template older / keys missing)
+  if ! grep -q '^SUBCONVERTER_ENABLED' "$CONFIG_FILE"; then
+    cat >> "$CONFIG_FILE" <<'EOF'
+SUBCONVERTER_ENABLED = False
+SUBCONVERTER_URL = "http://127.0.0.1:25500"
+SUBCONVERTER_DEFAULT_TARGET = "v2ray"
+SUBCONVERTER_EXTRA_SERVERS = []
+EOF
+    changed=1
   fi
   if [ "$changed" -eq 1 ]; then
     print_color yellow "Added missing config keys to config.py."
@@ -254,6 +296,29 @@ needs_config_setup() {
   fi
 
   return 1
+}
+
+install_subconverter_docker() {
+  # Install & run Subconverter via Docker (optional helper)
+  local URL="$1"
+  local PORT
+  PORT="$(echo "$URL" | sed -n 's/.*:KATEX_INLINE_OPEN[0-9]\{2,5\}KATEX_INLINE_CLOSE.*/\1/p')"
+  [ -n "$PORT" ] || PORT="25500"
+
+  print_color yellow "Preparing Docker for Subconverter (port ${PORT})..."
+  if ! command -v docker >/dev/null 2>&1; then
+    apt-get update -y >/dev/null 2>&1 || true
+    apt-get install -y docker.io >/dev/null 2>&1 || true
+    systemctl enable docker >/dev/null 2>&1 || true
+    systemctl start docker >/dev/null 2>&1 || true
+  fi
+
+  docker rm -f subconverter >/dev/null 2>&1 || true
+  docker run -d --name subconverter --restart=always -p "${PORT}:${PORT}" tindy2013/subconverter:latest >/dev/null 2>&1 || {
+    print_color red "Failed to start Subconverter Docker container."
+    return 1
+  }
+  print_color green "Subconverter is running on ${URL}"
 }
 
 install_or_reinstall() {
@@ -335,6 +400,20 @@ install_or_reinstall() {
     EDIT_NOW=${EDIT_NOW:-N}
     if [[ "$EDIT_NOW" =~ ^[Yy]$ ]]; then
       configure_config_py
+    fi
+  fi
+
+  # Optional: Deploy Subconverter Docker if enabled and localhost URL
+  local CONFIG_FILE="${INSTALL_DIR}/src/config.py"
+  if grep -qE '^\s*SUBCONVERTER_ENABLED\s*=\s*True' "$CONFIG_FILE"; then
+    local SUBC_URL
+    SUBC_URL="$(grep -E '^\s*SUBCONVERTER_URL\s*=' "$CONFIG_FILE" | sed -E 's/^[^"]*"([^"]+)".*/\1/')"
+    if echo "$SUBC_URL" | grep -qiE '127\.0\.0\.1|localhost'; then
+      read -rp "Deploy local Subconverter via Docker on ${SUBC_URL}? [y/N]: " DEPLOY_SUBC
+      DEPLOY_SUBC=${DEPLOY_SUBC:-N}
+      if [[ "$DEPLOY_SUBC" =~ ^[Yy]$ ]]; then
+        install_subconverter_docker "$SUBC_URL" || print_color red "Subconverter deployment failed."
+      fi
     fi
   fi
 
