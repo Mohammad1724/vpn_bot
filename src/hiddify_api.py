@@ -267,7 +267,10 @@ def _extract_usage_gb(payload: Dict[str, Any]) -> Optional[float]:
     ]
     for k in direct_gb_keys:
         if k in payload:
-            return _to_float(payload.get(k), None)
+            try:
+                return _to_float(payload.get(k), None)
+            except Exception:
+                pass
 
     # برخی APIها دیتا را در یک زیر-آبجکت می‌گذارند (مثل "stats" یا "usage")
     for container_key in ("stats", "usage", "data"):
@@ -275,21 +278,21 @@ def _extract_usage_gb(payload: Dict[str, Any]) -> Optional[float]:
         if isinstance(sub, dict):
             for k in direct_gb_keys:
                 if k in sub:
-                    return _to_float(sub.get(k), None)
+                    try:
+                        return _to_float(sub.get(k), None)
+                    except Exception:
+                        pass
 
     # 2) upload/download
-    # تلاش برای تشخیص حتی اگر در زیر-آبجکت باشند
     def pick_from(d: Dict[str, Any]) -> Optional[float]:
         up = d.get("upload"); down = d.get("download")
         up_gb = d.get("upload_GB"); down_gb = d.get("download_GB")
         if up_gb is not None or down_gb is not None:
             return (_to_float(up_gb or 0.0) + _to_float(down_gb or 0.0))
         if up is not None and down is not None:
-            # اگر مقدار بزرگ بود، bytes فرض می‌کنیم
             up_f = _to_float(up, 0.0); down_f = _to_float(down, 0.0)
             if abs(up_f) > 1024 * 1024 or abs(down_f) > 1024 * 1024:
                 return _bytes_to_gb(up_f + down_f)
-            # در غیر اینصورت GB فرض می‌کنیم
             return up_f + down_f
         return None
 
