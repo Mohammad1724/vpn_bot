@@ -91,7 +91,6 @@ def _remove_device_limit_alert_column_if_exists(conn: sqlite3.Connection):
     except Exception as e:
         logger.warning(f"Couldn't remove device_limit_alert_sent column: {e}")
 
-
 # ---------- Ensure/repair nodes schema (handles older tables without id) ----------
 def _ensure_nodes_schema(conn: sqlite3.Connection):
     cur = conn.cursor()
@@ -313,6 +312,22 @@ def init_db():
     # Indexes on nodes
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_nodes_active ON nodes(is_active)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_nodes_name ON nodes(name)")
+
+    # service_endpoints: extra endpoints per service (for Subconverter unified link)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS service_endpoints (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            service_id INTEGER NOT NULL,
+            server_name TEXT,
+            sub_uuid TEXT,
+            sub_link TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(service_id) REFERENCES active_services(service_id) ON DELETE CASCADE
+        )
+    ''')
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_endpoints_service ON service_endpoints(service_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_endpoints_uuid ON service_endpoints(sub_uuid)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_endpoints_server ON service_endpoints(server_name)")
 
     # Default settings
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_number', '0000-0000-0000-0000'))
@@ -606,7 +621,6 @@ def initiate_purchase_transaction(user_id: int, plan_id: int, final_price: float
         )
         txn_id = cursor.lastrowid
 
-        # برای اطمینان از ثبت تراکنش قبل از عملیات بعدی
         conn.commit()
         return txn_id
 
@@ -705,7 +719,6 @@ def initiate_renewal_transaction(user_id: int, service_id: int, plan_id: int) ->
         )
         txn_id = cursor.lastrowid
 
-        # برای اطمینان از ثبت تراکنش قبل از عملیات بعدی
         conn.commit()
         return txn_id
 
@@ -743,7 +756,6 @@ def finalize_renewal_transaction(transaction_id: int, new_plan_id: int):
         # به‌روزرسانی وضعیت تراکنش
         cursor.execute("UPDATE transactions SET status = 'completed', updated_at = ? WHERE transaction_id = ?", (now_str, transaction_id))
 
-        # ثبت تغییرات
         conn.commit()
         logger.info(f"Renewal transaction {transaction_id} successfully finalized")
 
@@ -1192,3 +1204,44 @@ def delete_user_traffic_not_in_and_older(user_id: int, allowed_servers: list[str
         conn.commit()
     except Exception as e:
         logger.error("delete_user_traffic_not_in_and_older failed for user %s: %s", user_id, e, exc_info=True)
+
+# ===================== Service Endpoints (for multi-panel unified link) =====================
+def add_service_endpoint(service_id: int, server_name: str | None, sub_uuid: str | None, sub_link: str) -> int:
+    """
+    افزودن endpoint اضافه برای یک سرویس (مثلا سرویس روی پنل دوم).
+    """
+    conn = _connect_db()
+    cur = conn.cursor()
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cur.execute(
+        "INSERT INTO service_endpoints (service_id, server_name, sub_uuid, sub_link, created_at) VALUES (?, ?, ?, ?, ?)",
+        (service_id, server_name, sub_uuid, sub_link, now_str)
+    )
+    conn.commit()
+    return cur.lastrowid
+
+def list_service_endpoints(service_id: int) -> list:
+    conn = _connect_db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM service_endpoints WHERE service_id = ? ORDER BY id ASC", (service_id,))
+    return [dict(r) for r in cur.fetchall()]
+
+def delete_service_endpoints(service_id: int):
+    conn = _connect_db()
+    conn.execute("DELETE FROM service_endpoints WHERE service_id = ?", (service_id,))
+    conn.commit()
+
+def list_all_endpoints_with_user() -> list:
+    """
+    برمی‌گرداند: [{user_id, service_id, server_name, sub_uuid, sub_link, id}, ...]
+    برای استفاده در جاب‌های مصرف یا عملیات گروهی.
+    """
+    conn = _connect_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT se.id, se.service_id, se.server_name, se.sub_uuid, se.sub_link, s.user_id
+        FROM service_endpoints se
+        JOIN active_services s ON s.service_id = se.service_id
+        ORDER BY se.id ASC
+    """)
+    return [dict(r) for r in cur.fetchall()]
