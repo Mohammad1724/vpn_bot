@@ -71,6 +71,23 @@ NODES_HEALTH_INTERVAL_MIN = 10
 NODES_AUTO_DISABLE_AFTER_FAILS = 3
 
 # ===============================================================
+# SUBCONVERTER (Unified subscription link for multiple panels)
+# If enabled, the bot will merge multiple sub-links into one link and
+# give that to the user (e.g., combining Main + a Node).
+# Example docker: docker run -d -p 25500:25500 tindy2013/subconverter:latest
+# ===============================================================
+SUBCONVERTER_ENABLED = False
+SUBCONVERTER_URL = "http://127.0.0.1:25500"
+# Default target for merged link: v2ray | clash | clashmeta | singbox | sub (raw)
+SUBCONVERTER_DEFAULT_TARGET = "v2ray"
+# Optional: which extra servers (by name) to provision alongside the primary
+# to include in the unified link (if empty, the bot may pick a default fallback).
+SUBCONVERTER_EXTRA_SERVERS = [
+    # "Main",
+    # "Node-2",
+]
+
+# ===============================================================
 # FREE TRIAL SERVICE CONFIGURATION
 # ===============================================================
 TRIAL_ENABLED = True
