@@ -12,6 +12,7 @@ from bot.keyboards import get_main_menu_keyboard, get_admin_menu_keyboard
 from bot.constants import ADMIN_MENU
 from bot.handlers.charge import _get_payment_info_text
 from config import SUPPORT_USERNAME, REFERRAL_BONUS_AMOUNT
+from bot.ui import nav_row, chunk, btn  # UI helpers
 
 try:
     import jdatetime
@@ -46,7 +47,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if update.callback_query:
         q = update.callback_query
-        await q.answer("عضویت شما تایید شد. خوش آمدید!")
+        # برای حالت «☰ منوی اصلی»، فقط پیام قبلی را پاک می‌کنیم
+        await q.answer()
         try:
             await q.message.delete()
         except Exception:
@@ -108,13 +110,11 @@ async def show_account_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     keyboard = [
-        [InlineKeyboardButton("📊 مصرف من", callback_data="acc_usage")],
-        [InlineKeyboardButton("💳 شارژ حساب", callback_data="user_start_charge")],
-        [InlineKeyboardButton("📜 سوابق خرید", callback_data="acc_purchase_history"),
-         InlineKeyboardButton("💸 سوابق شارژ", callback_data="acc_charge_history")],
-        [InlineKeyboardButton("🤝 انتقال موجودی", callback_data="acc_transfer_start"),
-         InlineKeyboardButton("🎁 ساخت کد هدیه", callback_data="acc_gift_from_balance_start")],
-        [InlineKeyboardButton("📚 منوی راهنما", callback_data="guide_back_to_menu")],
+        [btn("📊 مصرف من", "acc_usage"), btn("💳 شارژ حساب", "user_start_charge")],
+        [btn("📜 سوابق خرید", "acc_purchase_history"), btn("💸 سوابق شارژ", "acc_charge_history")],
+        [btn("🤝 انتقال موجودی", "acc_transfer_start"), btn("🎁 ساخت کد هدیه", "acc_gift_from_balance_start")],
+        [btn("📚 منوی راهنما", "guide_back_to_menu")],
+        nav_row(home_cb="home_menu")
     ]
 
     if update.callback_query:
@@ -144,7 +144,7 @@ async def show_purchase_history_callback(update: Update, context: ContextTypes.D
 
         msg += f"🔹 {sale['plan_name'] or 'پلن حذف شده'} | {sale['price']:.0f} تومان | {sale_date}\n"
 
-    kb = [[InlineKeyboardButton("🔙 بازگشت به اطلاعات حساب", callback_data="acc_back_to_main")]]
+    kb = [nav_row(back_cb="acc_back_to_main", home_cb="home_menu")]
     await q.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
 
@@ -165,7 +165,7 @@ async def show_charge_history_callback(update: Update, context: ContextTypes.DEF
 
         msg += f"🔹 {ch['amount']:.0f} تومان | {charge_date}\n"
 
-    kb = [[InlineKeyboardButton("🔙 بازگشت به اطلاعات حساب", callback_data="acc_back_to_main")]]
+    kb = [nav_row(back_cb="acc_back_to_main", home_cb="home_menu")]
     await q.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
 
@@ -173,17 +173,19 @@ async def show_charging_guide_callback(update: Update, context: ContextTypes.DEF
     q = update.callback_query
     await q.answer()
     guide = _get_payment_info_text()
-    kb = [[InlineKeyboardButton("🔙 بازگشت", callback_data="acc_back_to_main")]]
+    kb = [nav_row(back_cb="acc_back_to_main", home_cb="home_menu")]
     await q.edit_message_text(guide, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
 
 async def show_guide(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("📱 راهنمای اتصال", callback_data="guide_connection")],
-        [InlineKeyboardButton("💳 راهنمای شارژ حساب", callback_data="guide_charging")],
-        [InlineKeyboardButton("🛍️ راهنمای خرید از ربات", callback_data="guide_buying")],
+    buttons = [
+        btn("📱 راهنمای اتصال", "guide_connection"),
+        btn("💳 راهنمای شارژ حساب", "guide_charging"),
+        btn("🛍️ راهنمای خرید از ربات", "guide_buying"),
     ]
-    await update.message.reply_text("📚 لطفاً موضوع راهنمای مورد نظر خود را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
+    rows = chunk(buttons, cols=2)
+    rows.append(nav_row(home_cb="home_menu"))
+    await update.message.reply_text("📚 لطفاً موضوع راهنمای مورد نظر خود را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(rows))
 
 
 async def show_guide_content(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -195,7 +197,7 @@ async def show_guide_content(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not guide_text:
         guide_text = "متاسفانه هنوز راهنمایی برای این بخش ثبت نشده است."
 
-    kb = [[InlineKeyboardButton("🔙 بازگشت به منوی راهنما", callback_data="guide_back_to_menu")]]
+    kb = [nav_row(back_cb="guide_back_to_menu", home_cb="home_menu")]
 
     if q.message and q.message.photo:
         try:
@@ -236,12 +238,14 @@ async def back_to_guide_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except Exception:
         pass
 
-    keyboard = [
-        [InlineKeyboardButton("📱 راهنمای اتصال", callback_data="guide_connection")],
-        [InlineKeyboardButton("💳 راهنمای شارژ حساب", callback_data="guide_charging")],
-        [InlineKeyboardButton("🛍️ راهنمای خرید از ربات", callback_data="guide_buying")],
+    buttons = [
+        btn("📱 راهنمای اتصال", "guide_connection"),
+        btn("💳 راهنمای شارژ حساب", "guide_charging"),
+        btn("🛍️ راهنمای خرید از ربات", "guide_buying"),
     ]
-    await q.from_user.send_message("📚 لطفاً موضوع راهنمای مورد نظر خود را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
+    rows = chunk(buttons, cols=2)
+    rows.append(nav_row(home_cb="home_menu"))
+    await q.from_user.send_message("📚 لطفاً موضوع راهنمای مورد نظر خود را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(rows))
 
 
 async def show_referral_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
