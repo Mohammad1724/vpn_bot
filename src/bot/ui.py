@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from typing import Iterable, List, Optional, Sequence, Tuple, Union, Callable
+from typing import Sequence, List
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 # متن‌های یکسان و شیک
@@ -19,7 +19,7 @@ def row(*buttons: InlineKeyboardButton) -> List[InlineKeyboardButton]:
 def markup(rows: Sequence[Sequence[InlineKeyboardButton]]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
-def nav_row(back_cb: Optional[str] = None, home_cb: str = "home_menu") -> List[InlineKeyboardButton]:
+def nav_row(back_cb: str | None = None, home_cb: str = "home_menu") -> List[InlineKeyboardButton]:
     """
     دکمه‌های ناوبری استاندارد:
     - اگر back_cb داده شود: «↩️ بازگشت»
@@ -39,12 +39,12 @@ def chunk(buttons: Sequence[InlineKeyboardButton], cols: int = 2) -> List[List[I
     چیدن دکمه‌ها بصورت شبکه‌ای یکدست (۲ ستونه پیش‌فرض)
     """
     rows: List[List[InlineKeyboardButton]] = []
-    row: List[InlineKeyboardButton] = []
+    cur: List[InlineKeyboardButton] = []
     for b in buttons:
-        row.append(b)
-        if len(row) == cols:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
+        cur.append(b)
+        if len(cur) == cols:
+            rows.append(cur)
+            cur = []
+    if cur:
+        rows.append(cur)
     return rows
