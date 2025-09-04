@@ -1,219 +1,181 @@
 # -*- coding: utf-8 -*-
 
-from functools import wraps
-import logging
+from __future__ import annotations
+
 import re
-from datetime import datetime, timedelta
+import logging
+from functools import wraps
+from typing import Callable, Awaitable, Optional, Tuple
+
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import BadRequest, Forbidden
 from telegram.constants import ChatMemberStatus
+
 import database as db
-from config import ADMIN_ID
 
 logger = logging.getLogger(__name__)
 
-# کش ساده برای کاهش فراخوانی‌های get_chat_member
-_MEMBERSHIP_CACHE: dict[tuple[int, str], tuple[bool, datetime]] = {}
-_CACHE_TTL = timedelta(minutes=10)
 
-def _cache_get(user_id: int, channel_key: str) -> tuple[bool, bool]:
-    key = (user_id, channel_key)
-    data = _MEMBERSHIP_CACHE.get(key)
-    if not data:
-        return False, False
-    ok, exp = data
-    if datetime.now() > exp:
-        _MEMBERSHIP_CACHE.pop(key, None)
-        return False, False
-    return True, ok
-
-def _cache_set(user_id: int, channel_key: str, is_member: bool, ttl: timedelta = _CACHE_TTL):
-    _MEMBERSHIP_CACHE[(user_id, channel_key)] = (is_member, datetime.now() + ttl)
-
-def _is_enabled() -> bool:
-    # پشتیبانی از هر دو کلید: جدید (force_join_enabled) و قدیمی (force_channel_enabled)
-    v = db.get_setting("force_join_enabled")
+def _get_bool_setting(key: str, default: bool = False) -> bool:
+    v = db.get_setting(key)
     if v is None:
-        v = db.get_setting("force_channel_enabled")
-    return str(v or "0").lower() in ("1", "true", "on", "yes")
+        return default
+    return str(v).lower() in ("1", "true", "on", "yes")
 
-def _parse_single_channel_token(token: str):
+
+def _parse_force_join_target(raw: str | None) -> Tuple[Optional[str], Optional[str]]:
     """
-    یک توکن کانال را به یکی از این‌ها تبدیل می‌کند:
-      - chat_id عددی (int) مثل -1001234567890
-      - نام کاربری با @ (str) مثل @mychannel
-    از قالب‌های زیر پشتیبانی می‌کند:
-      - -1001234567890
+    ورودی: مقدار تنظیم force_join_channel
+    پشتیبانی:
       - @username
-      - username
-      - https://t.me/username
-      - t.me/username
-      - https://t.me/c/1234567890  -> -1001234567890
-      - t.me/c/1234567890          -> -1001234567890
+      - -100XXXXXXXXXX (شناسه عددی)
+      - t.me/username یا https://t.me/username
+      - t.me/+inviteCode (فقط برای دکمه Join؛ برای چک عضویت باید Bot ادمین باشد و chat_id درست ست شود)
+    خروجی:
+      (chat_id, join_url)
+      - chat_id: یکی از @username یا -100... ، اگر نتوانستیم تشخیص دهیم: None
+      - join_url: لینکی که در دکمه «عضویت» استفاده می‌شود
     """
-    t = (token or "").strip()
-    if not t:
-        return None
+    if not raw:
+        return None, None
 
-    # اگر عددی است
-    try:
-        return int(t)
-    except ValueError:
-        pass
+    s = raw.strip()
+    # numeric chat id
+    if re.match(r"^-100\d{10,}$", s):
+        return s, None  # برای دکمه join نمی‌توان URL ساخت؛ باید admin لینکش را بدهد
 
-    # اگر با @ شروع شده
-    if t.startswith("@"):
-        uname = t[1:].strip()
-        if re.fullmatch(r"[A-Za-z0-9_]{4,}", uname):
-            return f"@{uname}"
-        return None
+    # @username
+    if s.startswith("@"):
+        uname = s[1:]
+        return s, f"https://t.me/{uname}"
 
-    # اگر لینک t.me است
-    if "t.me/" in t:
-        # استخراج بخش بعد از t.me/
-        m = re.search(r"(?:https?://)?t\.me/([^/\s]+)", t)
-        if m:
-            rest = m.group(1)  # ممکن است c/123456789 یا username باشد
-            # حالت /c/ID
-            if rest.startswith("c/"):
-                inner = rest[2:]
-                # ممکن است انتها / یا پارامتر داشته باشد
-                inner = re.split(r"[/?#]", inner)[0]
-                if inner.isdigit():
-                    return int(f"-100{inner}")
-                return None
-            # حالت username
-            uname = re.split(r"[/?#]", rest)[0]
-            if re.fullmatch(r"[A-Za-z0-9_]{4,}", uname):
-                return f"@{uname}"
-            return None
-
-    # اگر فقط username بدون @ است
-    if re.fullmatch(r"[A-Za-z0-9_]{4,}", t):
-        return f"@{t}"
-
-    return None
-
-def _get_channels() -> list[object]:
-    """
-    خروجی لیستی از آیتم‌ها:
-      - اعداد (chat_id های عددی)
-      - رشته‌های شروع‌شده با @ برای username
-    پشتیبانی از هر دو کلید: جدید (force_join_channel) و قدیمی (force_channel_id)
-    چند مقدار با کاما جدا می‌شوند.
-    """
-    raw = db.get_setting("force_join_channel") or db.get_setting("force_channel_id") or ""
-    items = [s.strip() for s in raw.split(",") if s.strip()]
-    result = []
-    invalid = []
-    for it in items:
-        parsed = _parse_single_channel_token(it)
-        if parsed is None:
-            invalid.append(it)
+    # t.me/...
+    if s.startswith("http://") or s.startswith("https://") or s.startswith("t.me/"):
+        # normalize
+        if s.startswith("t.me/"):
+            join_url = "https://" + s
         else:
-            result.append(parsed)
-    if invalid:
-        # یک بار به‌صورت مجتمع هشدار بدهیم نه برای هر بار
-        logger.warning("Invalid channel identifiers in settings ignored: %s", ", ".join(repr(i) for i in invalid))
-    return result
+            join_url = s
+        try:
+            # t.me/username
+            m = re.search(r"t\.me/(@?)([A-Za-z0-9_]{5,})", join_url)
+            if m:
+                uname = m.group(2)
+                return f"@{uname}", join_url
+            # t.me/+inviteCode → chat_id نامشخص؛ فقط join_url
+            if "t.me/+" in join_url or "/joinchat/" in join_url:
+                return None, join_url
+        except Exception:
+            pass
+        return None, join_url
 
-# مجوزهای معتبر عضویت (سازگار با نسخه‌های مختلف PTB)
-_ALLOWED_STATUSES = set(
-    x for x in (
-        getattr(ChatMemberStatus, "MEMBER", "member"),
-        getattr(ChatMemberStatus, "ADMINISTRATOR", "administrator"),
-        getattr(ChatMemberStatus, "OWNER", "owner"),      # PTB 20+
-        getattr(ChatMemberStatus, "CREATOR", None),       # سازگاری با قدیمی‌ها
-    )
-    if x
-)
+    # fallback: شاید فقط username بدون @ وارد شده
+    if re.match(r"^[A-Za-z0-9_]{5,}$", s):
+        return f"@{s}", f"https://t.me/{s}"
 
-async def _is_member(bot, channel: object, user_id: int) -> bool:
-    channel_key = str(channel).lstrip()
-    found, cached_val = _cache_get(user_id, channel_key)
-    if found:
-        return cached_val
+    return None, None
+
+
+async def _is_user_member(context: ContextTypes.DEFAULT_TYPE, chat_id: str | int, user_id: int) -> bool:
+    """
+    چک عضویت کاربر:
+      - True اگر status در {creator, administrator, member} یا ChatMemberRestricted با is_member=True
+      - False در غیر این صورت
+    نکات:
+      - برای کانال خصوصی، Bot باید ادمین باشد؛ در غیر این صورت ممکن است Forbidden/BadRequest بدهد.
+    """
     try:
-        member = await bot.get_chat_member(chat_id=channel, user_id=user_id)
-        is_ok = member.status in _ALLOWED_STATUSES
-        _cache_set(user_id, channel_key, is_ok)
-        return is_ok
+        member = await context.bot.get_chat_member(chat_id, user_id)
+        status = getattr(member, "status", None)
+        # PTB v20: status رشته است؛ ChatMemberRestricted دارای is_member
+        if status in (ChatMemberStatus.CREATOR, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.MEMBER):
+            return True
+        # Restricted ولی عضو است
+        if status == ChatMemberStatus.RESTRICTED and getattr(member, "is_member", False):
+            return True
+        return False
+    except Forbidden as e:
+        # Bot دسترسی ندارد (برای کانال خصوصی باید ادمین شود)
+        logger.warning("get_chat_member Forbidden for chat_id=%s: %s", chat_id, e)
+        return False
+    except BadRequest as e:
+        # مثال: chat not found یا user not found
+        logger.warning("get_chat_member BadRequest for chat_id=%s: %s", chat_id, e)
+        return False
     except Exception as e:
-        logger.warning("Could not check membership for user %s in channel %s: %s", user_id, channel, e)
-        _cache_set(user_id, channel_key, False, ttl=timedelta(minutes=1))
+        logger.error("get_chat_member unexpected for chat_id=%s: %s", chat_id, e, exc_info=True)
         return False
 
-def check_channel_membership(func):
-    """
-    قبل از اجرای تابع، عضویت کاربر در کانال‌های اجباری را چک می‌کند.
-    - ادمین از بررسی معاف است.
-    - از هر دو فرمت کانال (@username و chat_id عددی) و لینک t.me پشتیبانی می‌کند.
-    - از OWNER به‌جای CREATOR استفاده می‌کند (سازگار با نسخه‌های جدید PTB).
-    """
-    @wraps(func)
-    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
-        user_id = update.effective_user.id
 
-        # ادمین را معاف کن
+def _join_prompt_markup(join_url: Optional[str] = None) -> InlineKeyboardMarkup:
+    rows = []
+    if join_url:
+        rows.append([InlineKeyboardButton("🔗 عضویت در کانال", url=join_url)])
+    rows.append([InlineKeyboardButton("✅ بررسی مجدد عضویت", callback_data="check_membership")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def _send_force_join_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE, join_url: Optional[str]):
+    text = (
+        "برای استفاده از ربات، باید عضو کانال شوید.\n\n"
+        "1) روی «عضویت در کانال» بزنید و عضو شوید.\n"
+        "2) چند ثانیه صبر کنید، سپس «بررسی مجدد عضویت» را بزنید.\n\n"
+        "اگر کانال خصوصی است، مطمئن شوید ربات در کانال ادمین است."
+    )
+    kb = _join_prompt_markup(join_url)
+    q = getattr(update, "callback_query", None)
+    if q:
+        await q.answer()
         try:
-            admin_id_int = int(ADMIN_ID)
-        except Exception:
-            admin_id_int = ADMIN_ID
-        if user_id == admin_id_int:
-            return await func(update, context, *args, **kwargs)
+            await q.edit_message_text(text=text, reply_markup=kb)
+        except BadRequest:
+            await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=kb)
+    else:
+        await update.effective_message.reply_text(text=text, reply_markup=kb)
 
-        if not _is_enabled():
-            return await func(update, context, *args, **kwargs)
 
-        channels = _get_channels()
-        if not channels:
-            return await func(update, context, *args, **kwargs)
+def check_channel_membership(handler: Callable[[Update, ContextTypes.DEFAULT_TYPE], Awaitable[None]]):
+    """
+    دکوراتور چک عضویت کانال.
+    - اگر force_join_enabled خاموش بود: عبور.
+    - اگر روشن بود: عضویت کاربر در کانال config/setting چک می‌شود.
+      پشتیبانی از @username، -100..., یا t.me/username (برای دکمه Join).
+    """
+    @wraps(handler)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            # خاموش؟
+            if not _get_bool_setting("force_join_enabled", False):
+                return await handler(update, context)
 
-        not_joined = []
-        for ch in channels:
-            if not await _is_member(context.bot, ch, user_id):
-                not_joined.append(ch)
+            # کانال تنظیم نشده؟
+            raw = db.get_setting("force_join_channel")
+            chat_id, join_url = _parse_force_join_target(raw)
+            if not raw:
+                # چیزی تنظیم نشده؛ اجازه ورود بده ولی لاگ کن
+                logger.warning("force_join_enabled is ON but force_join_channel is empty.")
+                return await handler(update, context)
 
-        if not not_joined:
-            return await func(update, context, *args, **kwargs)
+            # بدون chat_id نمی‌توان چک کرد (مثلا invite link خصوصی) → دکمه Join بده
+            if chat_id is None:
+                await _send_force_join_prompt(update, context, join_url)
+                return
 
-        # ساخت دکمه‌های عضویت
-        keyboard = []
-        for ch in not_joined:
-            try:
-                chat = await context.bot.get_chat(ch)
-                url = None
-                if getattr(chat, "invite_link", None):
-                    url = chat.invite_link
-                elif getattr(chat, "username", None):
-                    url = f"https://t.me/{chat.username}"
-                elif isinstance(ch, int):
-                    url = f"https://t.me/c/{str(ch).replace('-100', '')}"
-                else:
-                    url = "https://t.me/"
-                title = getattr(chat, "title", str(ch))
-                keyboard.append([InlineKeyboardButton(f"📢 عضویت در کانال {title}", url=url)])
-            except Exception:
-                if isinstance(ch, int):
-                    url = f"https://t.me/c/{str(ch).replace('-100','')}"
-                    label = f"📢 عضویت در کانال ({ch})"
-                else:
-                    url = f"https://t.me/{str(ch).lstrip('@')}"
-                    label = f"📢 عضویت در کانال {ch}"
-                keyboard.append([InlineKeyboardButton(label, url=url)])
+            user_id = update.effective_user.id if update.effective_user else None
+            if not user_id:
+                return  # آپدیت نامعتبر
 
-        keyboard.append([InlineKeyboardButton("✅ بررسی عضویت", callback_data="check_membership")])
+            is_member = await _is_user_member(context, chat_id, user_id)
+            if is_member:
+                return await handler(update, context)
 
-        text = "لطفاً برای استفاده از ربات، ابتدا در کانال(های) زیر عضو شوید و سپس دکمه «بررسی عضویت» را بزنید:"
+            # عضو نیست → پیام راهنما
+            await _send_force_join_prompt(update, context, join_url)
 
-        if update.callback_query:
-            await update.callback_query.answer("شما هنوز عضو کانال نشده‌اید.", show_alert=True)
-            try:
-                await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
-            except Exception:
-                await context.bot.send_message(chat_id=user_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard))
-        else:
-            await update.effective_message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
-        return
+        except Exception as e:
+            logger.error("check_channel_membership failed: %s", e, exc_info=True)
+            # در صورت خطا، بهتر است کاربر را بلاک نکنیم
+            return await handler(update, context)
 
     return wrapper
