@@ -18,6 +18,9 @@ from config import ADMIN_ID
 from bot import utils
 from bot.utils import create_service_info_message, get_service_status
 
+# UI helpers (یکدست‌سازی دکمه‌ها)
+from bot.ui import nav_row, markup, chunk, btn
+
 # Optional Subconverter config
 try:
     from config import SUBCONVERTER_ENABLED, SUBCONVERTER_DEFAULT_TARGET
@@ -42,6 +45,7 @@ def _link_label(link_type: str) -> str:
         "xray": "Xray",
         "clash": "Clash",
         "clashmeta": "Clash Meta",
+        "unified": "لینک واحد (Subconverter)",
     }.get(lt, "V2Ray (sub)")
 
 
@@ -132,6 +136,9 @@ async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton(f"⚙️ {s['name'] or 'سرویس بدون نام'}", callback_data=f"view_service_{s['service_id']}")]
         for s in services
     ]
+    # ردیف ناوبری ثابت
+    keyboard.append(nav_row(home_cb="home_menu"))
+
     await context.bot.send_message(
         chat_id=user_id,
         text="لطفاً سرویسی که می‌خواهید مدیریتش کنید را انتخاب نمایید:",
@@ -177,7 +184,7 @@ async def send_service_details(
             kb = [
                 [InlineKeyboardButton("🗑️ حذف سرویس از ربات", callback_data=f"delete_service_{service['service_id']}")],
                 [InlineKeyboardButton("🔄 تلاش مجدد", callback_data=f"refresh_{service['service_id']}")],
-                [InlineKeyboardButton("⬅️ بازگشت به لیست سرویس‌ها", callback_data="back_to_services")]
+                nav_row(back_cb="back_to_services", home_cb="home_menu")
             ]
             text = "❌ اطلاعات این سرویس در پنل یافت نشد. احتمالاً حذف شده است.\nمی‌خواهید این سرویس از ربات هم حذف شود؟"
             if original_message:
@@ -207,18 +214,28 @@ async def send_service_details(
             override_sub_url=unified_default_link
         )
 
-        keyboard_rows = []
+        # دکمه‌های عملیاتی + ناوبری استاندارد
+        action_rows = []
+
         if not minimal:
-            keyboard_rows.append([
+            # اگر لینک واحد داریم، یک دکمه اختصاصی
+            if unified_default_link:
+                action_rows.append([InlineKeyboardButton("🔗 لینک واحد (پیشنهادی)", callback_data=f"getlink_unified_{service['sub_uuid']}")])
+
+            row1 = [
                 InlineKeyboardButton("🔄 به‌روزرسانی اطلاعات", callback_data=f"refresh_{service['service_id']}"),
                 InlineKeyboardButton("🔗 لینک‌های بیشتر", callback_data=f"more_links_{service['sub_uuid']}"),
-            ])
+            ]
+            action_rows.append(row1)
+
             plan = db.get_plan(service.get('plan_id')) if service.get('plan_id') else None
             if plan:
-                keyboard_rows.append([InlineKeyboardButton(f"⏳ تمدید سرویس ({int(plan['price']):,} تومان)", callback_data=f"renew_{service['service_id']}")])
-            keyboard_rows.append([InlineKeyboardButton("🗑️ حذف سرویس", callback_data=f"delete_service_{service['service_id']}")])
-            if is_from_menu:
-                keyboard_rows.append([InlineKeyboardButton("⬅️ بازگشت به لیست سرویس‌ها", callback_data="back_to_services")])
+                action_rows.append([InlineKeyboardButton(f"⏳ تمدید سرویس ({int(plan['price']):,} تومان)", callback_data=f"renew_{service['service_id']}")])
+
+            action_rows.append([InlineKeyboardButton("🗑️ حذف سرویس", callback_data=f"delete_service_{service['service_id']}")])
+
+            # ناوبری استاندارد
+            action_rows.append(nav_row(back_cb="back_to_services", home_cb="home_menu"))
 
         if original_message:
             try:
@@ -229,7 +246,7 @@ async def send_service_details(
             chat_id=chat_id,
             text=caption,
             parse_mode=ParseMode.MARKDOWN,
-            reply_markup=InlineKeyboardMarkup(keyboard_rows)
+            reply_markup=InlineKeyboardMarkup(action_rows)
         )
     except Exception as e:
         logger.error("send_service_details error for service_id %s: %s", service_id, e, exc_info=True)
@@ -255,14 +272,41 @@ async def more_links_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def show_link_options_menu(message: Message, user_uuid: str, service_id: int, is_edit: bool = True, context: ContextTypes.DEFAULT_TYPE = None):
-    keyboard = [
-        [InlineKeyboardButton("لینک V2ray (sub)", callback_data=f"getlink_sub_{user_uuid}"), InlineKeyboardButton("لینک هوشمند (Auto)", callback_data=f"getlink_auto_{user_uuid}")],
-        [InlineKeyboardButton("لینک Base64 (sub64)", callback_data=f"getlink_sub64_{user_uuid}"), InlineKeyboardButton("لینک SingBox", callback_data=f"getlink_singbox_{user_uuid}")],
-        [InlineKeyboardButton("لینک Xray", callback_data=f"getlink_xray_{user_uuid}"), InlineKeyboardButton("لینک Clash", callback_data=f"getlink_clash_{user_uuid}")],
-        [InlineKeyboardButton("لینک Clash Meta", callback_data=f"getlink_clashmeta_{user_uuid}")],
-        [InlineKeyboardButton("📄 نمایش کانفیگ‌های تکی", callback_data=f"getlink_full_{user_uuid}")],
-        [InlineKeyboardButton("⬅️ بازگشت به جزئیات سرویس", callback_data=f"refresh_{service_id}")]
+    # گزینه‌های لینک
+    links_buttons = [
+        btn("لینک V2ray (sub)", f"getlink_sub_{user_uuid}"),
+        btn("لینک هوشمند (Auto)", f"getlink_auto_{user_uuid}"),
+        btn("لینک Base64 (sub64)", f"getlink_sub64_{user_uuid}"),
+        btn("لینک SingBox", f"getlink_singbox_{user_uuid}"),
+        btn("لینک Xray", f"getlink_xray_{user_uuid}"),
+        btn("لینک Clash", f"getlink_clash_{user_uuid}"),
+        btn("لینک Clash Meta", f"getlink_clashmeta_{user_uuid}"),
+        btn("📄 نمایش کانفیگ‌های تکی", f"getlink_full_{user_uuid}"),
     ]
+
+    rows = chunk(links_buttons, cols=2)
+
+    # اگر Subconverter فعال است و حداقل دو منبع داریم، دکمه لینک واحد را اضافه کن
+    try:
+        service = db.get_service_by_uuid(user_uuid)
+        base_link = _compute_base_link(service, user_uuid)
+        sources = [f"{base_link}/sub"] if base_link else []
+        try:
+            endpoints = db.list_service_endpoints(service_id)
+            for ep in endpoints or []:
+                sl = (ep.get("sub_link") or "").strip().rstrip("/")
+                if sl:
+                    sources.append(f"{sl}/sub")
+        except Exception:
+            pass
+        if SUBCONVERTER_ENABLED and len(sources) >= 2:
+            rows.insert(0, [btn("🔗 لینک واحد (پیشنهادی)", f"getlink_unified_{user_uuid}")])
+    except Exception:
+        pass
+
+    # ناوبری استاندارد: بازگشت به جزئیات سرویس + منوی اصلی
+    rows.append(nav_row(back_cb=f"refresh_{service_id}", home_cb="home_menu"))
+
     text = "لطفاً نوع لینک اشتراک مورد نظر را انتخاب کنید:"
     try:
         if is_edit:
@@ -272,11 +316,11 @@ async def show_link_options_menu(message: Message, user_uuid: str, service_id: i
                 except BadRequest:
                     pass
                 if context:
-                    await context.bot.send_message(chat_id=message.chat_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard))
+                    await context.bot.send_message(chat_id=message.chat_id, text=text, reply_markup=markup(rows))
             else:
-                await message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+                await message.edit_text(text, reply_markup=markup(rows))
         else:
-            await message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+            await message.reply_text(text, reply_markup=markup(rows))
     except BadRequest as e:
         if "message is not modified" not in str(e):
             logger.error("show_link_options_menu error: %s", e)
@@ -302,6 +346,44 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     config_name = (info.get('name', 'config') if isinstance(info, dict) else 'config') or 'config'
     safe_name = config_name.replace(' ', '_')
 
+    # حالت لینک واحد (Subconverter)
+    if link_type == "unified":
+        if not SUBCONVERTER_ENABLED:
+            await q.edit_message_text("❌ لینک واحد فعال نیست.")
+            return
+        bases = _collect_subscription_bases(service)
+        sources = [f"{b}/sub" for b in bases]
+        unified_link = utils.build_subconverter_link(sources)
+        if not unified_link:
+            await q.edit_message_text("❌ امکان ساخت لینک واحد نیست (منابع کافی نیست).")
+            return
+
+        # ساخت QR و ارسال + دکمه ناوبری
+        img = qrcode.make(unified_link)
+        bio = io.BytesIO()
+        bio.name = 'qrcode.png'
+        img.save(bio, 'PNG')
+        bio.seek(0)
+
+        caption = (
+            f"نام کانفیگ: **{config_name}**\n"
+            f"نوع لینک: **{_link_label('unified')}**\n\n"
+            "با اسکن QR یا استفاده از لینک زیر متصل شوید:\n\n"
+            f"`{unified_link}`"
+        )
+        try:
+            await q.message.delete()
+        except BadRequest:
+            pass
+        await context.bot.send_photo(
+            chat_id=q.message.chat_id,
+            photo=bio,
+            caption=caption,
+            parse_mode="Markdown",
+            reply_markup=markup([nav_row(back_cb=f"more_links_{user_uuid}", home_cb="home_menu")])
+        )
+        return
+
     if link_type == "full":
         # Send all single configs as file
         try:
@@ -321,7 +403,8 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_document(
                 chat_id=q.from_user.id,
                 document=InputFile(io.BytesIO(configs_bytes), filename=f"{safe_name}_configs.txt"),
-                caption="📄 کانفیگ‌های تکی شما به صورت فایل ارسال شد."
+                caption="📄 کانفیگ‌های تکی شما به صورت فایل ارسال شد.",
+                reply_markup=markup([nav_row(back_cb=f"more_links_{user_uuid}", home_cb="home_menu")])
             )
         except Exception as e:
             logger.error("Failed to fetch/send full configs: %s", e, exc_info=True)
@@ -331,20 +414,9 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(chat_id=q.from_user.id, text="❌ دریافت کانفیگ‌های تکی با خطا مواجه شد.")
         return
 
-    # اگر Subconverter فعال است و endpoint اضافی داریم، لینک واحد بساز
-    unified_link = None
-    if SUBCONVERTER_ENABLED:
-        try:
-            unified_link = _build_unified_link_for_type(service, link_type)
-        except Exception as e:
-            logger.debug("unified link build failed: %s", e)
-
-    # اگر لینک واحد آماده است از همان استفاده کن؛ در غیر این صورت لینک قبلی (تکی) را بساز
-    if unified_link:
-        final_link = unified_link
-    else:
-        url_link_type = _normalize_link_type(link_type).replace('clashmeta', 'clash-meta')
-        final_link = f"{base_link}/{url_link_type}/?name={safe_name}"
+    # سایر انواع لینک‌ها
+    url_link_type = _normalize_link_type(link_type).replace('clashmeta', 'clash-meta')
+    final_link = f"{base_link}/{url_link_type}/?name={safe_name}"
 
     img = qrcode.make(final_link)
     bio = io.BytesIO()
@@ -368,7 +440,8 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id=q.message.chat_id,
         photo=bio,
         caption=caption,
-        parse_mode="Markdown"
+        parse_mode="Markdown",
+        reply_markup=markup([nav_row(back_cb=f"more_links_{user_uuid}", home_cb="home_menu")])
     )
 
 
@@ -445,7 +518,8 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
             [
                 InlineKeyboardButton("❌ انصراف", callback_data=f"delete_service_cancel_{service_id}"),
                 InlineKeyboardButton("✅ تایید حذف", callback_data=f"delete_service_confirm_{service_id}")
-            ]
+            ],
+            nav_row(back_cb=f"refresh_{service_id}", home_cb="home_menu")
         ])
         await q.edit_message_text(
             "آیا از حذف این سرویس مطمئن هستید؟ این عمل سرویس را از پنل اصلی نیز حذف می‌کند و قابل بازگشت نیست.",
@@ -460,7 +534,6 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
         pass
 
     try:
-        # حذف در پنل اصلی
         success_on_panel = await hiddify_api.delete_user_from_panel(service['sub_uuid'], server_name=service.get("server_name"))
 
         # اگر ناموفق، یک چک نهایی برای اطمینان از «عدم وجود» انجام بده
@@ -500,7 +573,7 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
             pass
 
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔙 بازگشت به سرویس‌ها", callback_data="back_to_services")]
+            nav_row(back_cb="back_to_services", home_cb="home_menu")
         ])
         try:
             await context.bot.send_message(chat_id=q.from_user.id, text="عملیات حذف کامل شد.", reply_markup=kb)
@@ -578,7 +651,8 @@ async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TY
 
     keyboard = [
         [InlineKeyboardButton("✅ بله، تمدید کن", callback_data="confirmrenew")],
-        [InlineKeyboardButton("❌ خیر، لغو کن", callback_data="cancelrenew")]
+        [InlineKeyboardButton("❌ خیر، لغو کن", callback_data="cancelrenew")],
+        nav_row(back_cb=f"refresh_{service_id}", home_cb="home_menu")
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
