@@ -466,13 +466,12 @@ def build_application():
     application.add_handler(MessageHandler(filters.REPLY & admin_filter, support_h.admin_reply_handler))
     application.add_handler(CallbackQueryHandler(support_h.close_ticket, pattern="^close_ticket_"))
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern="^check_membership$"))
+    # «☰ منوی اصلی» اینلاین
+    application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern="^home_menu$"))
 
     # Usage aggregate menu (in Account info)
     application.add_handler(CallbackQueryHandler(usage_h.show_usage_menu, pattern="^acc_usage$"))
     application.add_handler(CallbackQueryHandler(usage_h.show_usage_menu, pattern="^acc_usage_refresh$"))
-
-# نزدیک سایر Global handlers:
-application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern="^home_menu$"))
 
     application.add_handler(CallbackQueryHandler(admin_users.admin_confirm_charge_callback, pattern=r'^admin_confirm_charge_'), group=1)
     application.add_handler(CallbackQueryHandler(admin_users.admin_reject_charge_callback, pattern=r'^admin_reject_charge_'), group=1)
