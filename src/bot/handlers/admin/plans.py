@@ -11,6 +11,7 @@ from bot.constants import (
     BTN_BACK_TO_ADMIN_MENU
 )
 import database as db
+from bot.ui import nav_row, confirm_row  # UI helpers
 
 
 def _plan_menu_keyboard() -> ReplyKeyboardMarkup:
