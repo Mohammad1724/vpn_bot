@@ -213,7 +213,7 @@ async def toggle_node_active(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not n:
         await q.edit_message_text("نود پیدا نشد."); return NODES_MENU
     db.update_node(node_id, {"is_active": 0 if n["is_active"] else 1})
-    q.data = f"admin_node_{node_id}" # Trick to reuse node_details
+    q.data = f"admin_node_{node_id}"
     return await node_details(update, context)
 
 
@@ -313,8 +313,10 @@ async def edit_field_value_received(update: Update, context: ContextTypes.DEFAUL
     db.update_node(node_id, {field: value})
     await update.message.reply_text("✅ تغییرات اعمال شد.")
     # Trick to re-call node_details
-    update.callback_query = type('obj', (), {'data': f"admin_node_{node_id}", 'answer': (lambda *a, **kw: None), 'message': update.message})()
-    return await node_details(update, context)
+    # Create a new dummy update object to avoid modifying the original
+    q = type('obj', (), {'data': f"admin_node_{node_id}", 'answer': (lambda *a, **kw: None), 'message': update.message})()
+    dummy_update = Update(update.update_id, callback_query=q)
+    return await node_details(dummy_update, context)
 
 
 # ========== Delete ==========
