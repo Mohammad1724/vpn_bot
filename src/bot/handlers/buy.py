@@ -256,37 +256,43 @@ async def _send_service_info_to_user(context, user_id, new_uuid):
     user_data = await hiddify_api.get_user_info(new_uuid, server_name=server_name)
 
     if user_data:
-        # 1) نوع لینک پیش‌فرض
         default_link_type = db.get_setting("default_sub_link_type") or "sub"
 
-        # 2) لینک پایه: اول تلاش برای لینک «اصلی/تجمیعی»، سپس در صورت نبود، لینک ذخیره‌شده‌ی نود
-        # قبلاً برعکس بود و باعث می‌شد همیشه لینک نود (معمولاً نود ۱) استفاده شود.
-        built_main = utils.build_subscription_url(new_uuid, server_name=server_name)
-        base_main = built_main or new_service_record.get('sub_link')
+        # ابتدا لینک «اصلی/تجمیعی» را تلاش کن (بدون server_name تا روی دامنه اصلی برود)
+        preferred_main = utils.build_subscription_url(new_uuid) \
+                          or new_service_record.get('sub_link') \
+                          or utils.build_subscription_url(new_uuid, server_name=server_name)
 
         sub_url = ""
-        # 3) اگر Subconverter روشن است، تلاش برای ساخت لینک واحد
-        if SUBCONVERTER_ENABLED and base_main:
-            sources = [f"{base_main.rstrip('/')}/sub"]
+
+        if SUBCONVERTER_ENABLED:
+            sources: List[str] = []
+            # لینک نود اصلی
+            main_direct = new_service_record.get('sub_link') or utils.build_subscription_url(new_uuid, server_name=server_name)
+            if isinstance(main_direct, str) and main_direct.strip():
+                sources.append(main_direct.strip())
+
+            # لینک نودهای اضافه (از دیتابیس service_endpoints)
             try:
                 endpoints = db.list_service_endpoints(new_service_record.get("service_id"))
                 for ep in endpoints or []:
-                    if ep_link := (ep.get("sub_link") or "").strip().rstrip("/"):
-                        sources.append(f"{ep_link}/sub")
-            except Exception: pass
+                    ep_link = (ep.get("sub_link") or "").strip()
+                    if ep_link and ep_link not in sources:
+                        sources.append(ep_link)
+            except Exception:
+                pass
 
+            # اگر حداقل دو منبع داریم، ادغام کن
             if len(sources) > 1:
                 target = utils.link_type_to_subconverter_target(default_link_type)
                 unified_url = utils.build_subconverter_link(sources, target=target)
                 if unified_url:
                     sub_url = unified_url
 
-        # 4) اگر لینک واحد ساخته نشد (یا Subconverter خاموش بود)، لینک تکی را بساز
-        if not sub_url and base_main:
-            link_endpoint = utils.normalize_link_type(default_link_type)
-            sub_url = f"{base_main.rstrip('/')}/{link_endpoint}"
+        # اگر ادغام نشد یا Subconverter خاموش بود، از لینک اصلی/ترجیحی استفاده کن
+        if not sub_url:
+            sub_url = preferred_main
 
-        # 5) ارسال خروجی به کاربر
         qr_bio = utils.make_qr_bytes(sub_url)
         caption = utils.create_service_info_caption(
             user_data, service_db_record=new_service_record, title="🎉 سرویس شما با موفقیت ساخته شد!", override_sub_url=sub_url
