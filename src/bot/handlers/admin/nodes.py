@@ -144,7 +144,7 @@ async def add_get_capacity(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text("عدد معتبر وارد کنید:")
         return ADD_CAPACITY
     context.user_data["node_add"]["capacity"] = int(txt)
-    await update.message.reply_text("محل/لوکیشن نود را وارد کنید (مثال: DE یا Germany). اگر نمی‌خواهید: خالی بفرستید")
+    await update.message.reply_text("محل/لوکیشن نود را وارد کنید (مثلا DE یا Germany). اگر نمی‌خواهید: خالی بفرستید")
     return ADD_LOCATION
 
 
@@ -204,7 +204,7 @@ async def add_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def list_nodes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.callback_query:
         await update.callback_query.answer()
-    nodes = db.list_nodes()  # dicts with id, name, ...
+    nodes = db.list_nodes()
     if not nodes:
         kb = markup([nav_row(back_cb="admin_nodes", home_cb="home_menu")])
         await update.callback_query.edit_message_text("هیچ نودی ثبت نشده است.", reply_markup=kb)
@@ -257,7 +257,7 @@ async def toggle_node_active(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def ping_node(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.callback_query.answer()
+    await update.callback_query.answer("در حال تست اتصال...")
     node_id = int(update.callback_query.data.split("_")[-1])
     n = db.get_node(node_id)
     if not n:
@@ -266,14 +266,10 @@ async def ping_node(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     ok = await hiddify_api.check_api_connection(server_name=n["name"])
     status = "موفق ✅" if ok else "ناموفق ❌"
     await update.callback_query.answer(f"تست اتصال: {status}", show_alert=True)
-    update.callback_query.data = f"admin_node_{node_id}"
-    return await node_details(update, context)
+    return NODE_DETAILS
 
 
 async def update_node_usercount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    شمار کاربران فعلی (سرویس‌های فعال) روی این نود را از active_services شمرده و در DB نود ذخیره می‌کند.
-    """
     await update.callback_query.answer()
     node_id = int(update.callback_query.data.split("_")[-1])
     n = db.get_node(node_id)
@@ -291,9 +287,6 @@ async def update_node_usercount(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def show_node_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    نمایش مصرف snapshot این نود (از جدول user_traffic).
-    """
     await update.callback_query.answer()
     node_id = int(update.callback_query.data.split("_")[-1])
     n = db.get_node(node_id)
@@ -337,7 +330,6 @@ async def edit_node_start(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def edit_field_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.callback_query.answer()
     parts = update.callback_query.data.split("_")
-    # admin_edit_field_<field>_<id>
     field = "_".join(parts[3:-1])
     context.user_data["edit_field"] = field
     prompts = {
@@ -376,7 +368,7 @@ async def edit_field_value_received(update: Update, context: ContextTypes.DEFAUL
 
     db.update_node(node_id, {field: value})
     await update.message.reply_text("✅ تغییرات اعمال شد.")
-    update.callback_query = type("obj", (), {"data": f"admin_node_{node_id}"})
+    update.callback_query = type("obj", (), {"data": f"admin_node_{node_id}", "answer": (lambda *args, **kwargs: None)})()
     return await node_details(update, context)
 
 
