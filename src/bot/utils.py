@@ -102,9 +102,7 @@ def link_type_to_subconverter_target(link_type: str) -> str:
     lt = normalize_link_type(link_type)
     if lt in ("sub", "sub64"):
         return "v2ray"
-    if lt == "auto":
-        return (SUBCONVERTER_DEFAULT_TARGET or "v2ray").strip().lower()
-    if lt == "unified":
+    if lt in ("auto", "unified"):
         return (SUBCONVERTER_DEFAULT_TARGET or "v2ray").strip().lower()
     if lt in ("xray", "singbox", "clash", "clashmeta"):
         return lt
@@ -114,11 +112,11 @@ def link_type_to_subconverter_target(link_type: str) -> str:
 def build_subscription_url(user_uuid: str, server_name: Optional[str] = None) -> str:
     """
     ساخت URL اشتراک:
-    - اگر server_name مشخص نباشد: همیشه از دامنه/مسیر اصلی (SUB_DOMAINS یا PANEL_DOMAIN + SUB_PATH/ADMIN_PATH) استفاده کن.
-      این رفتار حتی در حالت MULTI_SERVER_ENABLED هم برقرار است تا لینک «اصلی/تجمیعی» تولید شود.
+    - همیشه از SUB_PATH واقعی استفاده کن (اگر خالی بود 'sub') و هرگز به ADMIN_PATH فالبک نکن.
     - اگر server_name مشخص باشد و MULTI_SERVER_ENABLED فعال باشد: لینک اختصاصی همان نود ساخته می‌شود.
     """
-    main_sub_path = _clean_path(SUB_PATH or ADMIN_PATH)
+    # مسیر اشتراک: اگر SUB_PATH تنظیم نشده بود، پیش‌فرض 'sub'
+    main_sub_path = _clean_path(SUB_PATH) or "sub"
     main_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
     if isinstance(main_domain, str):
         main_domain = main_domain.strip()
@@ -127,20 +125,20 @@ def build_subscription_url(user_uuid: str, server_name: Optional[str] = None) ->
     if not server_name:
         return f"https://{main_domain}/{main_sub_path}/{user_uuid}"
 
-    # اگر سرور مشخص است و چندنودی فعال است → لینک اختصاصی نود
+    # لینک اختصاصی نود
     if MULTI_SERVER_ENABLED and SERVERS:
         server = next((s for s in SERVERS if str(s.get("name")) == str(server_name)), None)
         if not server:
             # اگر نود یافت نشد، به دامنه اصلی برگرد
             return f"https://{main_domain}/{main_sub_path}/{user_uuid}"
-        sub_path = _clean_path(server.get("sub_path") or server.get("admin_path") or main_sub_path)
+        sub_path = _clean_path(server.get("sub_path")) or main_sub_path  # فقط sub_path؛ نه admin_path
         sub_domains = [d.strip() for d in (server.get("sub_domains") or []) if isinstance(d, str) and d.strip()]
         sub_domain = random.choice(sub_domains) if sub_domains else (server.get("panel_domain") or main_domain)
         if isinstance(sub_domain, str):
             sub_domain = sub_domain.strip()
         return f"https://{sub_domain}/{sub_path}/{user_uuid}"
 
-    # حالت تک‌سروره یا عدم پیکربندی درست → از دامنه اصلی استفاده کن
+    # حالت تک‌سروره
     return f"https://{main_domain}/{main_sub_path}/{user_uuid}"
 
 
