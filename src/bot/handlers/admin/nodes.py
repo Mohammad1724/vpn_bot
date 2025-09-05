@@ -144,7 +144,7 @@ async def add_get_capacity(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text("عدد معتبر وارد کنید:")
         return ADD_CAPACITY
     context.user_data["node_add"]["capacity"] = int(txt)
-    await update.message.reply_text("محل/لوکیشن نود را وارد کنید (مثلا DE یا Germany). اگر نمی‌خواهید: خالی بفرستید")
+    await update.message.reply_text("محل/لوکیشن نود را وارد کنید (مثال: DE یا Germany). اگر نمی‌خواهید: خالی بفرستید")
     return ADD_LOCATION
 
 
@@ -245,45 +245,51 @@ async def node_details(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 # ========== Actions on Node ==========
 async def toggle_node_active(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.callback_query.answer()
-    node_id = int(update.callback_query.data.split("_")[-1])
+    q = update.callback_query
+    await q.answer()
+    node_id = int(q.data.split("_")[-1])
     n = db.get_node(node_id)
     if not n:
-        await update.callback_query.edit_message_text("نود پیدا نشد.")
+        await q.edit_message_text("نود پیدا نشد.")
         return NODES_MENU
     db.update_node(node_id, {"is_active": 0 if n["is_active"] else 1})
-    update.callback_query.data = f"admin_node_{node_id}"
-    return await node_details(update, context)
+    
+    # Create a dummy update object to re-call node_details
+    new_update = Update(update.update_id, callback_query=type('obj', (object,), {'data': f"admin_node_{node_id}", 'answer': (lambda *args, **kwargs: None), 'message': q.message})())
+    return await node_details(new_update, context)
 
 
 async def ping_node(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.callback_query.answer("در حال تست اتصال...")
-    node_id = int(update.callback_query.data.split("_")[-1])
+    q = update.callback_query
+    await q.answer("در حال تست اتصال...")
+    node_id = int(q.data.split("_")[-1])
     n = db.get_node(node_id)
     if not n:
-        await update.callback_query.edit_message_text("نود پیدا نشد.")
+        await q.edit_message_text("نود پیدا نشد.")
         return NODES_MENU
     ok = await hiddify_api.check_api_connection(server_name=n["name"])
     status = "موفق ✅" if ok else "ناموفق ❌"
-    await update.callback_query.answer(f"تست اتصال: {status}", show_alert=True)
+    await q.answer(f"تست اتصال: {status}", show_alert=True)
     return NODE_DETAILS
 
 
 async def update_node_usercount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.callback_query.answer()
-    node_id = int(update.callback_query.data.split("_")[-1])
+    q = update.callback_query
+    await q.answer()
+    node_id = int(q.data.split("_")[-1])
     n = db.get_node(node_id)
     if not n:
-        await update.callback_query.edit_message_text("نود پیدا نشد.")
+        await q.edit_message_text("نود پیدا نشد.")
         return NODES_MENU
     try:
         cnt = db.count_services_on_node(n["name"])
         db.update_node(node_id, {"current_users": int(cnt)})
-        await update.callback_query.answer(f"به‌روزرسانی شمار کاربران: {cnt}", show_alert=True)
+        await q.answer(f"به‌روزرسانی شمار کاربران: {cnt}", show_alert=True)
     except Exception:
-        await update.callback_query.answer("خطا در بروزرسانی شمار کاربران", show_alert=True)
-    update.callback_query.data = f"admin_node_{node_id}"
-    return await node_details(update, context)
+        await q.answer("خطا در بروزرسانی شمار کاربران", show_alert=True)
+    
+    new_update = Update(update.update_id, callback_query=type('obj', (object,), {'data': f"admin_node_{node_id}", 'answer': (lambda *args, **kwargs: None), 'message': q.message})())
+    return await node_details(new_update, context)
 
 
 async def show_node_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -368,8 +374,8 @@ async def edit_field_value_received(update: Update, context: ContextTypes.DEFAUL
 
     db.update_node(node_id, {field: value})
     await update.message.reply_text("✅ تغییرات اعمال شد.")
-    update.callback_query = type("obj", (), {"data": f"admin_node_{node_id}", "answer": (lambda *args, **kwargs: None)})()
-    return await node_details(update, context)
+    new_update = Update(update.update_id, callback_query=type('obj', (object,), {'data': f"admin_node_{node_id}", 'answer': (lambda *args, **kwargs: None), 'message': update.message})())
+    return await node_details(new_update, context)
 
 
 # ========== Delete ==========
