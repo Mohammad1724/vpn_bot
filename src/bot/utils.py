@@ -1,3 +1,4 @@
+# filename: bot/utils.py
 # -*- coding: utf-8 -*-
 
 import io
@@ -36,6 +37,11 @@ logger = logging.getLogger(__name__)
 
 _PERSIAN_DIGIT_MAP = str.maketrans("0123456789,-", "۰۱۲۳۴۵۶۷۸۹،-")
 
+
+def _clean_path(seg: Optional[str]) -> str:
+    return (seg or "").strip().strip("/")
+
+
 def to_persian_digits(s: str) -> str:
     if not s:
         return ""
@@ -43,6 +49,7 @@ def to_persian_digits(s: str) -> str:
         return s.translate(_PERSIAN_DIGIT_MAP)
     except Exception:
         return s
+
 
 def format_toman(amount: Union[int, float, str], persian_digits: bool = False) -> str:
     try:
@@ -53,6 +60,7 @@ def format_toman(amount: Union[int, float, str], persian_digits: bool = False) -
     if persian_digits:
         s = to_persian_digits(s)
     return s
+
 
 def parse_date_flexible(date_str: str) -> Union[datetime, None]:
     if not date_str:
@@ -85,15 +93,23 @@ def parse_date_flexible(date_str: str) -> Union[datetime, None]:
     logger.error(f"Date parse failed for '{date_str}'.")
     return None
 
+
 def normalize_link_type(t: str) -> str:
     return (t or "sub").strip().lower().replace("clash-meta", "clashmeta")
 
+
 def link_type_to_subconverter_target(link_type: str) -> str:
     lt = normalize_link_type(link_type)
-    if lt in ("sub", "sub64"): return "v2ray"
-    if lt == "auto": return (SUBCONVERTER_DEFAULT_TARGET or "v2ray").strip().lower()
-    if lt in ("xray", "singbox", "clash", "clashmeta"): return lt
+    if lt in ("sub", "sub64"):
+        return "v2ray"
+    if lt == "auto":
+        return (SUBCONVERTER_DEFAULT_TARGET or "v2ray").strip().lower()
+    if lt == "unified":
+        return (SUBCONVERTER_DEFAULT_TARGET or "v2ray").strip().lower()
+    if lt in ("xray", "singbox", "clash", "clashmeta"):
+        return lt
     return "v2ray"
+
 
 def build_subscription_url(user_uuid: str, server_name: Optional[str] = None) -> str:
     """
@@ -102,9 +118,12 @@ def build_subscription_url(user_uuid: str, server_name: Optional[str] = None) ->
       این رفتار حتی در حالت MULTI_SERVER_ENABLED هم برقرار است تا لینک «اصلی/تجمیعی» تولید شود.
     - اگر server_name مشخص باشد و MULTI_SERVER_ENABLED فعال باشد: لینک اختصاصی همان نود ساخته می‌شود.
     """
-    # لینک روی دامنه اصلی (ترجیحاً SUB_DOMAINS، در غیر این صورت PANEL_DOMAIN)
-    main_sub_path = SUB_PATH or ADMIN_PATH
+    main_sub_path = _clean_path(SUB_PATH or ADMIN_PATH)
     main_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
+    if isinstance(main_domain, str):
+        main_domain = main_domain.strip()
+
+    # لینک اصلی (بدون server_name)
     if not server_name:
         return f"https://{main_domain}/{main_sub_path}/{user_uuid}"
 
@@ -114,26 +133,44 @@ def build_subscription_url(user_uuid: str, server_name: Optional[str] = None) ->
         if not server:
             # اگر نود یافت نشد، به دامنه اصلی برگرد
             return f"https://{main_domain}/{main_sub_path}/{user_uuid}"
-        sub_path = server.get("sub_path") or server.get("admin_path") or main_sub_path
-        sub_domains = server.get("sub_domains") or []
+        sub_path = _clean_path(server.get("sub_path") or server.get("admin_path") or main_sub_path)
+        sub_domains = [d.strip() for d in (server.get("sub_domains") or []) if isinstance(d, str) and d.strip()]
         sub_domain = random.choice(sub_domains) if sub_domains else (server.get("panel_domain") or main_domain)
+        if isinstance(sub_domain, str):
+            sub_domain = sub_domain.strip()
         return f"https://{sub_domain}/{sub_path}/{user_uuid}"
 
     # حالت تک‌سروره یا عدم پیکربندی درست → از دامنه اصلی استفاده کن
     return f"https://{main_domain}/{main_sub_path}/{user_uuid}"
 
+
 def build_subconverter_link(urls: List[str], target: Optional[str] = None) -> Optional[str]:
     try:
-        if not SUBCONVERTER_ENABLED or not SUBCONVERTER_URL or not urls: return None
+        if not SUBCONVERTER_ENABLED:
+            return None
+        base = (SUBCONVERTER_URL or "").rstrip("/")
+        if not base:
+            return None
+
+        # پاک‌سازی و حذف تکراری‌ها با حفظ ترتیب
+        cleaned = [u.strip() for u in (urls or []) if u and u.strip()]
+        seen = set()
+        sources: List[str] = []
+        for u in cleaned:
+            if u not in seen:
+                sources.append(u)
+                seen.add(u)
+        if not sources:
+            return None
+
         tgt = (target or SUBCONVERTER_DEFAULT_TARGET or "v2ray").strip().lower()
-        src = "|".join(u.strip() for u in urls if u and u.strip())
-        if not src: return None
+        src = "|".join(sources)
         src_enc = quote_plus(src, safe=":/?&=%|")
-        base = SUBCONVERTER_URL.rstrip("/")
         return f"{base}/sub?target={tgt}&url={src_enc}"
     except Exception as e:
         logger.error("build_subconverter_link failed: %s", e, exc_info=True)
         return None
+
 
 def make_qr_bytes(data: str) -> io.BytesIO:
     img = qrcode.make(data)
@@ -142,6 +179,7 @@ def make_qr_bytes(data: str) -> io.BytesIO:
     img.save(bio, "PNG")
     bio.seek(0)
     return bio
+
 
 def _format_expiry_and_days(user_data: dict, service_db_record: Optional[dict] = None) -> Tuple[str, int]:
     expire_dt = None
@@ -153,8 +191,10 @@ def _format_expiry_and_days(user_data: dict, service_db_record: Optional[dict] =
             if plan_id and (plan := db.get_plan(plan_id)):
                 package_days = int(plan.get('days', 0))
             else:
-                try: package_days = int(db.get_setting("trial_days") or 1)
-                except (ValueError, TypeError): package_days = 1
+                try:
+                    package_days = int(db.get_setting("trial_days") or 1)
+                except (ValueError, TypeError):
+                    package_days = 1
             if package_days > 0:
                 expire_dt = start_dt + timedelta(days=package_days)
 
@@ -174,6 +214,7 @@ def _format_expiry_and_days(user_data: dict, service_db_record: Optional[dict] =
         if expire_dt > now_aware:
             days_left = math.ceil((expire_dt - now_aware).total_seconds() / (24 * 3600))
     return expire_jalali, days_left
+
 
 def create_service_info_caption(
     user_data: dict, service_db_record: Optional[dict] = None, title: str = "🎉 سرویس شما!", override_sub_url: Optional[str] = None
@@ -207,6 +248,7 @@ def create_service_info_caption(
         f"لینک اشتراک:\n`{sub_url}`"
     )
 
+
 def get_service_status(hiddify_info: dict) -> Tuple[str, str, bool]:
     now = datetime.now(timezone.utc)
     is_expired = False
@@ -221,9 +263,11 @@ def get_service_status(hiddify_info: dict) -> Tuple[str, str, bool]:
     else:
         start_date_str = next((hiddify_info.get(k) for k in ['start_date', 'last_reset_time', 'created_at'] if hiddify_info.get(k)), None)
         package_days = hiddify_info.get('package_days', 0)
-        if not start_date_str: return "نامشخص", "N/A", True
+        if not start_date_str:
+            return "نامشخص", "N/A", True
         start_dt = parse_date_flexible(start_date_str)
-        if not start_dt: return "نامشخص", "N/A", True
+        if not start_dt:
+            return "نامشخص", "N/A", True
         expiry_dt_utc = start_dt + timedelta(days=package_days)
     if not is_expired and now > expiry_dt_utc:
         is_expired = True
@@ -231,8 +275,10 @@ def get_service_status(hiddify_info: dict) -> Tuple[str, str, bool]:
     if jdatetime:
         try:
             expire_j = jdatetime.date.fromgregorian(date=expiry_dt_utc.astimezone().date()).strftime('%Y/%m/%d')
-        except Exception: pass
+        except Exception:
+            pass
     return "🔴 منقضی شده" if is_expired else "🟢 فعال", expire_j, is_expired
+
 
 def is_valid_sqlite(filepath: str) -> bool:
     try:
