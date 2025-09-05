@@ -74,6 +74,23 @@ def _node_details_kb(n_id: int) -> InlineKeyboardMarkup:
     ])
 
 
+# کمک‌تابع برای ساخت متن و کیبورد جزئیات نود
+def _node_details_view(n: Dict[str, Any]) -> Tuple[str, InlineKeyboardMarkup]:
+    total_gb, users_cnt = _sum_server_usage(n["name"])
+    text = (
+        f"جزئیات نود #{n['id']}:\n"
+        f"- نام: {n['name']}\n"
+        f"- وضعیت: {'فعال' if n['is_active'] else 'غیرفعال'}\n"
+        f"- دامنه پنل: {n['panel_domain']}\n"
+        f"- admin_path: {n['admin_path']} | sub_path: {n['sub_path']}\n"
+        f"- ظرفیت: {n['capacity']} | شمار کاربران (DB): {n.get('current_users', 0)}\n"
+        f"- مصرف snapshot: {total_gb:.2f} GB (برای {users_cnt} کاربر)\n"
+        f"- sub_domains: {', '.join(n.get('sub_domains') or []) or '-'}\n"
+        f"- موقعیت: {n.get('location') or '-'}"
+    )
+    return text, _node_details_kb(n["id"])
+
+
 # ========== Entrypoints ==========
 async def nodes_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q = getattr(update, "callback_query", None)
@@ -86,15 +103,10 @@ async def nodes_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 # ========== Node Settings Menu ==========
-async def node_settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    q = update.callback_query
-    await q.answer()
-
+def _build_node_settings_view() -> Tuple[str, InlineKeyboardMarkup]:
     multi_node_on = "فعال ✅" if _get_bool("multi_server_enabled", MULTI_SERVER_ENABLED_CONFIG) else "غیرفعال ❌"
     nodes_h_on = "فعال ✅" if _get_bool("nodes_health_enabled", True) else "غیرفعال ❌"
     policy = _get("server_selection_policy", SERVER_SELECTION_POLICY)
-
-    # استفاده از HTML تا مشکل Markdown با _ و کاراکترهای خاص پیش نیاید
     text = (
         "<b>⚙️ تنظیمات چندنودی و Health‑check</b>\n\n"
         f"▫️ وضعیت چندنودی: {h(multi_node_on)}\n"
@@ -109,22 +121,21 @@ async def node_settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
         [btn("✍️ تعداد خطا تا غیرفعال‌سازی", "edit_node_setting_nodes_auto_disable_after_fails")],
         nav_row(back_cb="admin_nodes", home_cb="home_menu")
     ]
+    return text, markup(keyboard)
 
-    await q.edit_message_text(text, reply_markup=markup(keyboard), parse_mode=ParseMode.HTML)
+async def node_settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    q = update.callback_query
+    await q.answer()
+    text, kb = _build_node_settings_view()
+    await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
     return C.NODE_SETTINGS_MENU
-
 
 async def toggle_node_setting(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     key = q.data.replace("toggle_node_setting_", "")
-
-    default_from_config = False
-    if key == "multi_server_enabled":
-        default_from_config = MULTI_SERVER_ENABLED_CONFIG
-
+    default_from_config = (key == "multi_server_enabled") and MULTI_SERVER_ENABLED_CONFIG
     _toggle(key, default=default_from_config)
     return await node_settings_menu(update, context)
-
 
 async def edit_node_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
@@ -147,7 +158,6 @@ async def edit_node_setting_start(update: Update, context: ContextTypes.DEFAULT_
     await q.edit_message_text(text, parse_mode=ParseMode.HTML)
     return C.EDIT_NODE_SETTING_VALUE
 
-
 async def edit_node_setting_value_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     key = context.user_data.get('editing_node_setting_key')
     if not key:
@@ -168,9 +178,10 @@ async def edit_node_setting_value_received(update: Update, context: ContextTypes
     db.set_setting(key, val)
     await update.message.reply_text(f"✅ مقدار «{key}» ذخیره شد.")
 
-    dummy_q = type('obj', (), {'data': 'admin_node_settings', 'answer': (lambda *a, **kw: None), 'message': update.message})()
-    dummy_update = Update(update.update_id, callback_query=dummy_q)
-    return await node_settings_menu(dummy_update, context)
+    # نمایش دوباره منوی تنظیمات به‌صورت پیام جدید (بدون ادیت پیام قبلی)
+    text, kb = _build_node_settings_view()
+    await update.message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    return C.NODE_SETTINGS_MENU
 
 
 # ========== Add Node flow ==========
@@ -304,19 +315,8 @@ async def node_details(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     if not n:
         await q.edit_message_text("نود پیدا نشد.")
         return C.NODES_MENU
-    total_gb, users_cnt = _sum_server_usage(n["name"])
-    text = (
-        f"جزئیات نود #{n['id']}:\n"
-        f"- نام: {n['name']}\n"
-        f"- وضعیت: {'فعال' if n['is_active'] else 'غیرفعال'}\n"
-        f"- دامنه پنل: {n['panel_domain']}\n"
-        f"- admin_path: {n['admin_path']} | sub_path: {n['sub_path']}\n"
-        f"- ظرفیت: {n['capacity']} | شمار کاربران (DB): {n.get('current_users', 0)}\n"
-        f"- مصرف snapshot: {total_gb:.2f} GB (برای {users_cnt} کاربر)\n"
-        f"- sub_domains: {', '.join(n.get('sub_domains') or []) or '-'}\n"
-        f"- موقعیت: {n.get('location') or '-'}"
-    )
-    await q.edit_message_text(text, reply_markup=_node_details_kb(n["id"]))
+    text, kb = _node_details_view(n)
+    await q.edit_message_text(text, reply_markup=kb)
     return C.NODE_DETAILS
 
 
@@ -330,8 +330,10 @@ async def toggle_node_active(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await q.edit_message_text("نود پیدا نشد.")
         return C.NODES_MENU
     db.update_node(node_id, {"is_active": 0 if n["is_active"] else 1})
-    q.data = f"admin_node_{node_id}"
-    return await node_details(update, context)
+    n = db.get_node(node_id)  # بازخوانی برای وضعیت جدید
+    text, kb = _node_details_view(n)
+    await q.edit_message_text(text, reply_markup=kb)
+    return C.NODE_DETAILS
 
 async def ping_node(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
@@ -359,8 +361,10 @@ async def update_node_usercount(update: Update, context: ContextTypes.DEFAULT_TY
         await q.answer(f"شمار کاربران به‌روز شد: {cnt}", show_alert=True)
     except Exception:
         await q.answer("خطا در بروزرسانی", show_alert=True)
-    q.data = f"admin_node_{node_id}"
-    return await node_details(update, context)
+    n = db.get_node(node_id)
+    text, kb = _node_details_view(n)
+    await q.edit_message_text(text, reply_markup=kb)
+    return C.NODE_DETAILS
 
 async def show_node_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
@@ -432,9 +436,12 @@ async def edit_field_value_received(update: Update, context: ContextTypes.DEFAUL
         value = None
     db.update_node(node_id, {field: value})
     await update.message.reply_text("✅ تغییرات اعمال شد.")
-    q = type('obj', (), {'data': f"admin_node_{node_id}", 'answer': (lambda *a, **kw: None), 'message': update.message})()
-    dummy_update = Update(update.update_id, callback_query=q)
-    return await node_details(dummy_update, context)
+
+    # نمایش جزئیات نود به صورت پیام جدید
+    n = db.get_node(node_id)
+    text, kb = _node_details_view(n)
+    await update.message.reply_text(text, reply_markup=kb)
+    return C.NODE_DETAILS
 
 
 # ========== Delete ==========
