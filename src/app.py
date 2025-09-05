@@ -100,7 +100,7 @@ def build_application():
         states={
             constants.CHARGE_AMOUNT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, charge_h.charge_amount_received),
-                CallbackQueryHandler(charge_h.charge_amount_confirm_cb, pattern="^charge_amount_(confirm|cancel)$"),
+                CallbackQueryHandler(charge_h.charge_amount_confirm_cb, pattern="^charge_amount_\d+$"),
             ],
             constants.CHARGE_RECEIPT: [MessageHandler(filters.PHOTO, charge_h.charge_receipt_received)],
         },
@@ -281,7 +281,7 @@ def build_application():
     )
 
     # =========================
-    # Nodes Conversation (Admin) - در صورت نیاز
+    # Nodes Conversation (Admin)
     # =========================
     nodes_conv = ConversationHandler(
         entry_points=[
@@ -468,6 +468,8 @@ def build_application():
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern="^check_membership$"))
     # «☰ منوی اصلی» اینلاین
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern="^home_menu$"))
+    # منوی شارژ رایگان (معرفی دوستان)
+    application.add_handler(CallbackQueryHandler(charge_h.show_referral_info_inline, pattern="^acc_referral$"))
 
     # Usage aggregate menu (in Account info)
     application.add_handler(CallbackQueryHandler(usage_h.show_usage_menu, pattern="^acc_usage$"))
@@ -522,8 +524,11 @@ def build_application():
         MessageHandler(filters.Regex('^📋 سرویس‌های من$'), check_channel_membership(us_h.list_my_services)),
         MessageHandler(filters.Regex('^👤 اطلاعات حساب کاربری$'), check_channel_membership(start_h.show_account_info)),
         MessageHandler(filters.Regex('^📚 راهنما$'), check_channel_membership(start_h.show_guide)),
-        MessageHandler(filters.Regex('^🧪 دریافت سرویس تست رایگان$'), check_channel_membership(trial_get_trial_service)),
-        MessageHandler(filters.Regex('^🎁 معرفی دوستان$'), check_channel_membership(start_h.show_referral_link)),
+        # متن دکمه تست کوتاه شد
+        MessageHandler(filters.Regex('^🧪 سرویس تست$'), check_channel_membership(trial_get_trial_service)),
+        # دکمه‌های جدید اضافه شده به keyboards
+        MessageHandler(filters.Regex('^📞 پشتیبانی$'), check_channel_membership(support_h.support_ticket_start)),
+        MessageHandler(filters.Regex('^🎁 کد هدیه$'), check_channel_membership(gift_h.gift_code_entry)),
     ]
     for h in main_menu_handlers:
         application.add_handler(h)
