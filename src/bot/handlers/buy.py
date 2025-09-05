@@ -16,14 +16,13 @@ from bot.constants import GET_CUSTOM_NAME, CMD_CANCEL, CMD_SKIP, PROMO_CODE_ENTR
 from bot.keyboards import get_main_menu_keyboard
 
 try:
-    from config import MULTI_SERVER_ENABLED, SERVERS, DEFAULT_SERVER_NAME, SUBCONVERTER_ENABLED, SUBCONVERTER_EXTRA_SERVERS, SUBCONVERTER_DEFAULT_TARGET
+    from config import MULTI_SERVER_ENABLED, SERVERS, DEFAULT_SERVER_NAME, SUBCONVERTER_ENABLED, SUBCONVERTER_EXTRA_SERVERS
 except Exception:
     MULTI_SERVER_ENABLED = False
     SERVERS = []
     DEFAULT_SERVER_NAME = None
     SUBCONVERTER_ENABLED = False
     SUBCONVERTER_EXTRA_SERVERS = []
-    SUBCONVERTER_DEFAULT_TARGET = "v2ray"
 
 logger = logging.getLogger(__name__)
 
@@ -249,34 +248,42 @@ async def _do_purchase_confirmed(q, context: ContextTypes.DEFAULT_TYPE, custom_n
 
 async def _send_service_info_to_user(context, user_id, new_uuid):
     new_service_record = db.get_service_by_uuid(new_uuid)
-    server_name = (new_service_record or {}).get("server_name")
+    if not new_service_record:
+        await context.bot.send_message(chat_id=user_id, text="❌ خطای داخلی: سرویس ساخته شد اما در دیتابیس یافت نشد.")
+        return
+
+    server_name = new_service_record.get("server_name")
     user_data = await hiddify_api.get_user_info(new_uuid, server_name=server_name)
 
     if user_data:
-        # خواندن نوع لینک پیش‌فرض از تنظیمات ادمین
+        # 1. خواندن نوع لینک پیش‌فرض از تنظیمات ادمین
         default_link_type = db.get_setting("default_sub_link_type") or "sub"
+
+        # 2. ساخت لینک پایه
+        base_main = new_service_record.get('sub_link') or utils.build_subscription_url(new_uuid, server_name=server_name)
         
-        base_main = (new_service_record or {}).get('sub_link') or utils.build_subscription_url(new_uuid, server_name=server_name)
-        
-        sub_url = base_main
+        sub_url = ""
+        # 3. ساخت لینک نهایی بر اساس فعال بودن Subconverter
         if SUBCONVERTER_ENABLED:
             sources = [f"{base_main.rstrip('/')}/sub"]
             try:
-                endpoints = db.list_service_endpoints((new_service_record or {}).get("service_id"))
+                endpoints = db.list_service_endpoints(new_service_record.get("service_id"))
                 for ep in endpoints or []:
-                    if ep_link := (ep.get("sub_link") or "").strip().rstrip("/"): sources.append(f"{ep_link}/sub")
+                    if ep_link := (ep.get("sub_link") or "").strip().rstrip("/"):
+                        sources.append(f"{ep_link}/sub")
             except Exception: pass
             
+            # فقط اگر بیش از یک منبع داریم، لینک واحد بساز
             if len(sources) > 1:
                 target = utils.link_type_to_subconverter_target(default_link_type)
                 unified_url = utils.build_subconverter_link(sources, target=target)
-                if unified_url: sub_url = unified_url
-        else:
-            # اگر Subconverter فعال نیست، نوع لینک پیش‌فرض را به انتهای لینک اضافه کن
+                if unified_url:
+                    sub_url = unified_url
+        
+        # اگر لینک واحد ساخته نشد (یا Subconverter خاموش بود)، لینک تکی را بساز
+        if not sub_url:
             link_endpoint = utils.normalize_link_type(default_link_type)
-            # فقط اگر نوع لینک پیش‌فرض چیزی غیر از 'sub' بود، آن را به انتهای لینک اضافه کن
-            if link_endpoint != "sub":
-                sub_url = f"{base_main.rstrip('/')}/{link_endpoint}"
+            sub_url = f"{base_main.rstrip('/')}/{link_endpoint}"
 
         qr_bio = utils.make_qr_bytes(sub_url)
         caption = utils.create_service_info_caption(
