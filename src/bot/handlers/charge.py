@@ -8,7 +8,7 @@ from telegram.constants import ParseMode
 import database as db
 from config import ADMIN_ID, SUPPORT_USERNAME, REFERRAL_BONUS_AMOUNT
 # ثابت‌های جدید را وارد کنید
-from bot.constants import CHARGE_MENU, CHARGE_AMOUNT, CHARGE_RECEIPT
+from bot.constants import CHARGE_MENU, CHARGE_AMOUNT, CHARGE_RECEIPT, AWAIT_CUSTOM_AMOUNT
 from bot.ui import nav_row, btn, markup
 from bot.keyboards import get_main_menu_keyboard
 
@@ -58,7 +58,7 @@ async def charge_menu_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     else:
         await update.effective_message.reply_text(text, reply_markup=markup(keyboard), parse_mode=ParseMode.MARKDOWN)
     
-    return CHARGE_MENU # به حالت منوی شارژ بروید
+    return CHARGE_MENU
 
 async def show_referral_info_inline(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
@@ -85,11 +85,11 @@ async def show_referral_info_inline(update: Update, context: ContextTypes.DEFAUL
 
     kb = [nav_row(back_cb="charge_menu_main", home_cb="home_menu")]
     await q.edit_message_text(text, reply_markup=markup(kb), parse_mode=ParseMode.MARKDOWN)
-    return CHARGE_MENU # در منوی شارژ بمانید
+    return CHARGE_MENU
 
 async def charge_start_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    شروع فرآیند پرداخت و انتقال به حالت دریافت مبلغ.
+    شروع فرآیند پرداخت و انتقال به حالت انتخاب مبلغ.
     """
     q = update.callback_query
     await q.answer()
@@ -97,28 +97,42 @@ async def charge_start_payment(update: Update, context: ContextTypes.DEFAULT_TYP
     keyboard = [
         [btn("۵۰,۰۰۰ تومان", "charge_amount_50000"), btn("۱۰۰,۰۰۰ تومان", "charge_amount_100000")],
         [btn("۲۰۰,۰۰۰ تومان", "charge_amount_200000"), btn("۵۰۰,۰۰۰ تومان", "charge_amount_500000")],
+        [btn("مبلغ دلخواه", "charge_custom_amount")],
         nav_row(back_cb="charge_menu_main", home_cb="home_menu")
     ]
     
     text = (
         "**💳 شارژ حساب**\n\n"
-        "لطفاً یکی از مبالغ زیر را انتخاب کنید، یا مبلغ دلخواه خود را (به تومان) وارد نمایید."
+        "لطفاً یکی از مبالغ زیر را انتخاب کنید، یا دکمه «مبلغ دلخواه» را بزنید."
     )
 
     await q.edit_message_text(text, reply_markup=markup(keyboard), parse_mode=ParseMode.MARKDOWN)
-    return CHARGE_AMOUNT # به حالت دریافت مبلغ بروید
+    return CHARGE_AMOUNT
 
+async def ask_custom_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    درخواست از کاربر برای وارد کردن مبلغ دلخواه.
+    """
+    q = update.callback_query
+    await q.answer()
+    
+    kb = [nav_row(back_cb="charge_start_payment_back", home_cb="home_menu")]
+    text = "لطفاً مبلغ دلخواه خود را (به تومان) وارد نمایید:"
+    
+    await q.edit_message_text(text, reply_markup=markup(kb))
+    return AWAIT_CUSTOM_AMOUNT
+    
 async def charge_amount_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
         amount = int(float(update.message.text.replace(',', '')))
         if amount < 1000:
             await update.message.reply_text("مبلغ باید حداقل ۱,۰۰۰ تومان باشد.")
-            return CHARGE_AMOUNT
+            return AWAIT_CUSTOM_AMOUNT
         context.user_data['charge_amount'] = amount
         return await _confirm_amount(update, context, amount)
     except (ValueError, TypeError):
         await update.message.reply_text("لطفاً مبلغ را به صورت عدد (تومان) وارد کنید.")
-        return CHARGE_AMOUNT
+        return AWAIT_CUSTOM_AMOUNT
 
 async def charge_amount_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
