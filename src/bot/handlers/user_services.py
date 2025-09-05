@@ -45,9 +45,21 @@ def _link_label(link_type: str) -> str:
 
 
 def _compute_base_link(service: dict, user_uuid: str) -> str:
+    """
+    اولویت با لینک «اصلی/تجمیعی» است؛ سپس sub_link ذخیره‌شده‌ی نود؛
+    و در نهایت fallback به لینک اختصاصی همان نود.
+    """
+    # 1) تلاش برای لینک اصلی/تجمیعی (بدون server_name)
+    base_main = utils.build_subscription_url(user_uuid)
+    if isinstance(base_main, str) and base_main.strip():
+        return base_main.strip().rstrip("/")
+
+    # 2) fallback: sub_link ذخیره‌شده‌ی نود
     sub_link = (service or {}).get("sub_link")
     if isinstance(sub_link, str) and sub_link.strip():
         return sub_link.strip().rstrip("/")
+
+    # 3) آخرین fallback: لینک اختصاصی همان نود
     return utils.build_subscription_url(user_uuid, server_name=(service or {}).get("server_name")).rstrip("/")
 
 
@@ -75,9 +87,10 @@ def _build_unified_link_for_type(service: dict, link_type: str) -> str | None:
     if not SUBCONVERTER_ENABLED:
         return None
     bases = _collect_subscription_bases(service)
-    if not bases or len(bases) < 1:
+    # ادغام فقط وقتی معنی دارد که حداقل دو منبع داشته باشیم
+    if not bases or len(bases) < 2:
         return None
-    sources = [f"{b}/sub" for b in bases]
+    sources = bases  # لینک‌های کامل subscription؛ نیازی به اضافه کردن /sub نیست
     target = utils.link_type_to_subconverter_target(link_type)
     return utils.build_subconverter_link(sources, target=target)
 
@@ -142,8 +155,7 @@ async def send_service_details(
             try:
                 bases = _collect_subscription_bases(service)
                 if bases and len(bases) > 1:
-                    sources = [f"{b}/sub" for b in bases]
-                    unified_default_link = utils.build_subconverter_link(sources)
+                    unified_default_link = utils.build_subconverter_link(bases)
             except Exception as e:
                 logger.debug("build unified_default_link failed for service %s: %s", service_id, e)
 
@@ -378,9 +390,9 @@ async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TY
     await context.bot.send_message(chat_id=user_id, text=text, reply_markup=markup(kb), parse_mode=ParseMode.MARKDOWN)
 
 
-async def confirm_renewal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def confirm_renewal_callback(update: Update, Context: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query; await q.answer()
-    await proceed_with_renewal(update, context, original_message=q.message)
+    await proceed_with_renewal(update, Context, original_message=q.message)
 
 
 async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYPE, original_message=None):
