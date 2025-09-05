@@ -297,19 +297,19 @@ def build_application():
             constants.EDIT_NODE_SETTING_VALUE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, admin_nodes.edit_node_setting_value_received)
             ],
-            admin_nodes.ADD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_name)],
-            admin_nodes.ADD_PANEL_DOMAIN: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_panel_domain)],
-            admin_nodes.ADD_ADMIN_PATH: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_admin_path)],
-            admin_nodes.ADD_SUB_PATH: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_sub_path)],
-            admin_nodes.ADD_API_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_api_key)],
-            admin_nodes.ADD_SUB_DOMAINS: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_sub_domains)],
-            admin_nodes.ADD_CAPACITY: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_capacity)],
-            admin_nodes.ADD_LOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_location)],
-            admin_nodes.ADD_CONFIRM: [
+            constants.ADD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_name)],
+            constants.ADD_PANEL_DOMAIN: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_panel_domain)],
+            constants.ADD_ADMIN_PATH: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_admin_path)],
+            constants.ADD_SUB_PATH: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_sub_path)],
+            constants.ADD_API_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_api_key)],
+            constants.ADD_SUB_DOMAINS: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_sub_domains)],
+            constants.ADD_CAPACITY: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_capacity)],
+            constants.ADD_LOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_location)],
+            constants.ADD_CONFIRM: [
                 CallbackQueryHandler(admin_nodes.add_confirm, pattern=r'^node_add_confirm$'),
                 CallbackQueryHandler(admin_nodes.add_cancel, pattern=r'^node_add_cancel$'),
             ],
-            admin_nodes.NODE_DETAILS: [
+            constants.NODE_DETAILS: [
                 CallbackQueryHandler(admin_nodes.node_details, pattern=r'^admin_node_\d+$'),
                 CallbackQueryHandler(admin_nodes.toggle_node_active, pattern=r'^admin_toggle_node_\d+$'),
                 CallbackQueryHandler(admin_nodes.edit_node_start, pattern=r'^admin_edit_node_\d+$'),
@@ -320,13 +320,13 @@ def build_application():
                 CallbackQueryHandler(admin_nodes.list_nodes, pattern=r'^admin_list_nodes$'),
                 CallbackQueryHandler(admin_nodes.nodes_menu, pattern=r'^admin_nodes$'),
             ],
-            admin_nodes.EDIT_FIELD_PICK: [
+            constants.EDIT_FIELD_PICK: [
                 CallbackQueryHandler(admin_nodes.edit_field_pick, pattern=r'^admin_edit_field_')
             ],
-            admin_nodes.EDIT_FIELD_VALUE: [
+            constants.EDIT_FIELD_VALUE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.edit_field_value_received),
             ],
-            admin_nodes.DELETE_CONFIRM: [
+            constants.DELETE_CONFIRM: [
                 CallbackQueryHandler(admin_nodes.delete_node_execute, pattern=r'^admin_delete_node_yes_\d+$'),
             ],
         },
