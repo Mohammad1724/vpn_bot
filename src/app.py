@@ -137,7 +137,13 @@ def build_application():
     support_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^📞 پشتیبانی$') & user_filter, check_channel_membership(support_h.support_ticket_start))],
         states={constants.SUPPORT_TICKET_OPEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, support_h.forward_to_admin)]},
-        fallbacks=[CommandHandler('cancel', support_h.support_ticket_cancel)],
+        fallbacks=[
+            CommandHandler('cancel', support_h.support_ticket_cancel),
+            # Fallback برای جلوگیری از گیر کردن
+            MessageHandler(filters.Regex('^🛍️ خرید سرویس$'), buy_h.buy_service_list),
+            MessageHandler(filters.Regex('^📋 سرویس‌های من$'), us_h.list_my_services),
+            MessageHandler(filters.Regex('^👤 اطلاعات حساب کاربری$'), start_h.show_account_info),
+        ],
         per_user=True, per_chat=True
     )
 
@@ -498,8 +504,6 @@ def build_application():
         MessageHandler(filters.Regex('^👤 اطلاعات حساب کاربری$'), check_channel_membership(start_h.show_account_info)),
         MessageHandler(filters.Regex('^📚 راهنما$'), check_channel_membership(start_h.show_guide)),
         MessageHandler(filters.Regex('^🧪 سرویس تست$'), check_channel_membership(trial_get_trial_service)),
-        MessageHandler(filters.Regex('^📞 پشتیبانی$'), check_channel_membership(support_h.support_ticket_start)),
-        MessageHandler(filters.Regex('^🎁 کد هدیه$'), check_channel_membership(gift_h.gift_code_entry)),
     ]
     for h in main_menu_handlers:
         application.add_handler(h, group=1)
