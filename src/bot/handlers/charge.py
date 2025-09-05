@@ -2,184 +2,177 @@
 
 import logging
 from telegram.ext import ContextTypes, ConversationHandler
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
-from telegram.error import BadRequest
 
 import database as db
-from config import ADMIN_ID
-from bot import constants
-from bot.utils import format_toman
+from config import ADMIN_ID, SUPPORT_USERNAME, REFERRAL_BONUS_AMOUNT
+from bot.constants import CHARGE_AMOUNT, CHARGE_RECEIPT
+from bot.ui import nav_row, btn, markup  # UI helpers
 
 logger = logging.getLogger(__name__)
 
-def _get_payment_info_text():
-    """متن راهنمای پرداخت را از دیتابیس می‌سازد."""
-    instr = db.get_setting("payment_instruction_text") or "لطفاً مبلغ را به یکی از شماره کارت‌های زیر واریز کرده و از رسید اسکرین‌شات بگیرید."
+def _get_payment_info_text() -> str:
+    """متن راهنمای پرداخت را از دیتابیس می‌خواند."""
+    text = db.get_setting("payment_instruction_text")
+    if not text:
+        text = "راهنمای پرداخت هنوز تنظیم نشده است."
     
-    lines = [f"**راهنمای شارژ حساب**\n\n{instr}\n"]
-    has_cards = False
+    # اضافه کردن شماره کارت‌ها
+    card_lines = []
     for i in range(1, 4):
         num = db.get_setting(f"payment_card_{i}_number")
         name = db.get_setting(f"payment_card_{i}_name")
         bank = db.get_setting(f"payment_card_{i}_bank")
         if num and name:
-            has_cards = True
-            bank_info = f" ({bank})" if bank else ""
-            lines.append(f"💳 شماره کارت: `{num}`\n👤 صاحب حساب: {name}{bank_info}\n")
-
-    if not has_cards:
-        return "در حال حاضر اطلاعات پرداختی ثبت نشده است. لطفاً با پشتیبانی تماس بگیرید."
+            card_lines.append(f"💳 `{num}`\n({name} - {bank or 'نامشخص'})")
+    
+    if card_lines:
+        text += "\n\n" + "\n".join(card_lines)
         
-    return "\n".join(lines)
+    return text
 
-# -----------------
-# شروع و دریافت مبلغ
-# -----------------
+# --- Handlers ---
 async def charge_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    em = update.effective_message
+    """
+    شروع فرآیند شارژ. یک منوی اینلاین با گزینه‌ها + راهنمای وارد کردن مبلغ دلخواه.
+    """
     q = getattr(update, "callback_query", None)
     if q:
         await q.answer()
+
+    keyboard = [
+        [btn("💰 شارژ رایگان (معرفی دوستان)", "acc_referral")],
+        [btn("۵۰,۰۰۰ تومان", "charge_amount_50000"), btn("۱۰۰,۰۰۰ تومان", "charge_amount_100000")],
+        [btn("۲۰۰,۰۰۰ تومان", "charge_amount_200000"), btn("۵۰۰,۰۰۰ تومان", "charge_amount_500000")],
+        nav_row(home_cb="home_menu")
+    ]
+    
+    text = (
+        "**💳 شارژ حساب**\n\n"
+        "لطفاً یکی از مبالغ زیر را انتخاب کنید، یا مبلغ دلخواه خود را (به تومان) وارد نمایید.\n\n"
+        "همچنین می‌توانید با معرفی دوستان، حساب خود را رایگان شارژ کنید."
+    )
+
+    if q:
         try:
-            await q.message.delete()
-        except BadRequest:
-            pass
+            await q.edit_message_text(text, reply_markup=markup(keyboard), parse_mode=ParseMode.MARKDOWN)
+        except Exception:
+            await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=markup(keyboard), parse_mode=ParseMode.MARKDOWN)
+    else:
+        await update.effective_message.reply_text(text, reply_markup=markup(keyboard), parse_mode=ParseMode.MARKDOWN)
+    
+    return CHARGE_AMOUNT
 
-    if em:
-        await em.reply_text(
-            "مبلغ شارژ مورد نظر (تومان) را وارد کنید:",
-            reply_markup=ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True)
-        )
-    return constants.CHARGE_AMOUNT
-
-async def charge_amount_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    txt = (update.message.text or "").strip().replace(",", "")
-    try:
-        amount = int(float(txt))
-        if amount <= 0:
-            raise ValueError()
-    except Exception:
-        await update.message.reply_text("❌ مبلغ نامعتبر است. یک عدد مثبت وارد کنید.")
-        return constants.CHARGE_AMOUNT
-
-    context.user_data['charge_amount'] = amount
-    amount_str = format_toman(amount, persian_digits=True)
-
-    text = f"""
-⚠️ تایید شارژ حساب
-
-- مبلغ: {amount_str}
-
-با تایید، اطلاعات پرداخت به شما نمایش داده می‌شود.
-ادامه می‌دهید؟
-    """.strip()
-
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ تایید و ادامه", callback_data="charge_amount_confirm")],
-        [InlineKeyboardButton("❌ لغو", callback_data="charge_amount_cancel")]
-    ])
-    await update.message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
-
-    return constants.CHARGE_AMOUNT
-
-# -----------------
-# نمایش اطلاعات پرداخت و درخواست رسید
-# -----------------
-async def charge_amount_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def show_referral_info_inline(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    نمایش اطلاعات معرفی دوستان در منوی شارژ (اینلاین).
+    """
     q = update.callback_query
     await q.answer()
-    data = q.data
-
-    if data.endswith("cancel"):
-        context.user_data.clear()
-        try:
-            await q.edit_message_text("❌ عملیات شارژ لغو شد.")
-        except BadRequest:
-            pass
-        return ConversationHandler.END
-
-    payment_info = _get_payment_info_text()
+    
+    user_id = q.from_user.id
+    bot_username = (await context.bot.get_me()).username
+    referral_link = f"https://t.me/{bot_username}?start=ref_{user_id}"
+    bonus_str = db.get_setting('referral_bonus_amount')
     try:
-        await q.edit_message_text(
-            payment_info,
-            reply_markup=ReplyKeyboardMarkup([['/cancel']], resize_keyboard=True),
-            parse_mode=ParseMode.MARKDOWN
-        )
-        await q.message.reply_text("لطفاً تصویر رسید پرداخت را ارسال کنید.")
-    except BadRequest:
-        await context.bot.send_message(
-            chat_id=q.from_user.id,
-            text=payment_info,
-            reply_markup=ReplyKeyboardMarkup([['/cancel']], resize_keyboard=True),
-            parse_mode=ParseMode.MARKDOWN
-        )
-        await context.bot.send_message(
-            chat_id=q.from_user.id,
-            text="لطفاً تصویر رسید پرداخت را ارسال کنید."
-        )
-    return constants.CHARGE_RECEIPT
+        bonus = int(float(bonus_str)) if bonus_str is not None else REFERRAL_BONUS_AMOUNT
+    except (ValueError, TypeError):
+        bonus = REFERRAL_BONUS_AMOUNT
+
+    text = (
+        f"**💰 شارژ رایگان**\n\n"
+        f"با لینک اختصاصی زیر دوستان خود را دعوت کنید:\n"
+        f"`{referral_link}`\n\n"
+        f"با اولین خرید دوست شما، مبلغ **{bonus:,.0f} تومان** به کیف پول شما و **{bonus:,.0f} تومان** به کیف پول دوستتان اضافه می‌شود."
+    )
+
+    kb = [nav_row(back_cb="user_start_charge", home_cb="home_menu")]
+    await q.edit_message_text(text, reply_markup=markup(kb), parse_mode=ParseMode.MARKDOWN)
+
+async def charge_amount_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    زمانی که کاربر مبلغ دلخواه را تایپ می‌کند.
+    """
+    try:
+        amount = int(float(update.message.text.replace(',', '')))
+        if amount < 1000:
+            await update.message.reply_text("مبلغ باید حداقل ۱,۰۰۰ تومان باشد.")
+            return CHARGE_AMOUNT
+        context.user_data['charge_amount'] = amount
+        return await _confirm_amount(update, context, amount)
+    except (ValueError, TypeError):
+        await update.message.reply_text("لطفاً مبلغ را به صورت عدد (تومان) وارد کنید.")
+        return CHARGE_AMOUNT
+
+async def charge_amount_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    زمانی که کاربر روی دکمه‌های مبلغ از پیش‌تعیین‌شده کلیک می‌کند.
+    """
+    q = update.callback_query
+    await q.answer()
+    amount_str = q.data.split('_')[-1]
+    amount = int(amount_str)
+    context.user_data['charge_amount'] = amount
+    return await _confirm_amount(update, context, amount)
+
+async def _confirm_amount(update: Update, context: ContextTypes.DEFAULT_TYPE, amount: int):
+    q = getattr(update, "callback_query", None)
+    
+    payment_info = _get_payment_info_text()
+    text = (
+        f"شما درخواست شارژ به مبلغ **{amount:,.0f} تومان** را دارید.\n\n"
+        f"{payment_info}\n\n"
+        "لطفاً پس از واریز، **عکس رسید** را ارسال نمایید."
+    )
+
+    if q:
+        await q.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
+    else:
+        await update.effective_message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+        
+    return CHARGE_RECEIPT
 
 async def charge_receipt_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    username = update.effective_user.username
-    photos = update.message.photo or []
-    if not photos:
-        await update.message.reply_text("❌ لطفاً تصویر رسید را ارسال کنید.")
-        return constants.CHARGE_RECEIPT
-
-    amount = context.user_data.get('charge_amount', 0)
-    if amount <= 0:
-        await update.message.reply_text("❌ مبلغ شارژ مشخص نیست. لطفاً از ابتدا شروع کنید: /cancel")
+    amount = context.user_data.get('charge_amount')
+    if not amount:
+        await update.message.reply_text("خطا: مبلغ شارژ یافت نشد. لطفاً از ابتدا شروع کنید.")
         return ConversationHandler.END
 
-    promo_code = ""
-    if context.user_data.get('first_charge_promo_applied'):
-        promo_code = db.get_setting('first_charge_code') or ""
+    user = update.effective_user
+    username = f"@{user.username}" if user.username else "ندارد"
+    charge_id = db.create_charge_request(user.id, amount, note=f"From user: {user.id}")
 
-    charge_id = None
-    try:
-        if hasattr(db, "create_charge_request"):
-            charge_id = db.create_charge_request(user_id, amount, note=promo_code)
-    except Exception as e:
-        logger.error("Failed to save charge request to DB: %s", e)
-
-    if charge_id is None:
-        await update.message.reply_text("❌ خطا در ثبت درخواست. لطفاً به پشتیبانی اطلاع دهید.")
+    if not charge_id:
+        await update.message.reply_text("❌ خطایی در ثبت درخواست شما رخ داد. لطفاً به پشتیبانی اطلاع دهید.")
         return ConversationHandler.END
 
-    file_id = photos[-1].file_id
     caption = (
-        f"درخواست شارژ جدید (ID: {charge_id}):\n"
-        f"- کاربر: `{user_id}` (@{username or '—'})\n"
-        f"- مبلغ: {amount:,} تومان"
+        f"💰 درخواست شارژ جدید\n\n"
+        f"کاربر: {user.full_name}\n"
+        f"آیدی: `{user.id}`\n"
+        f"یوزرنیم: {username}\n"
+        f"مبلغ: **{amount:,.0f} تومان**"
     )
-    if promo_code:
-        caption += f"\n- کد شارژ اول: `{promo_code}`"
 
-    callback_data_confirm = f"admin_confirm_charge_{charge_id}"
-    callback_data_reject = f"admin_reject_charge_{charge_id}_{user_id}"
-
-    kb_admin = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ تایید شارژ", callback_data=callback_data_confirm)],
-        [InlineKeyboardButton("❌ رد شارژ", callback_data=callback_data_reject)]
+    kb = InlineKeyboardMarkup([
+        [
+            btn("✅ تایید شارژ", f"admin_confirm_charge_{charge_id}_{user.id}_{amount}"),
+            btn("❌ رد درخواست", f"admin_reject_charge_{charge_id}_{user.id}")
+        ]
     ])
-    try:
-        await context.bot.send_photo(
-            chat_id=ADMIN_ID,
-            photo=file_id,
-            caption=caption,
-            reply_markup=kb_admin,
-            parse_mode=ParseMode.MARKDOWN
-        )
-    except Exception as e:
-        logger.error("Failed to send charge request to admin: %s", e)
-
-    from bot.keyboards import get_main_menu_keyboard
-    await update.message.reply_text(
-        "✅ رسید شما دریافت شد. پس از بررسی ادمین نتیجه اعلام می‌شود.",
-        reply_markup=get_main_menu_keyboard(user_id)
+    
+    await context.bot.send_photo(
+        chat_id=ADMIN_ID,
+        photo=update.message.photo[-1].file_id,
+        caption=caption,
+        reply_markup=kb,
+        parse_mode=ParseMode.MARKDOWN
     )
-
+    
+    await update.message.reply_text(
+        "✅ رسید شما دریافت شد. پس از تایید توسط ادمین، حساب شما شارژ خواهد شد.\n"
+        "می‌توانید از طریق پشتیبانی پیگیری کنید."
+    )
     context.user_data.clear()
     return ConversationHandler.END
