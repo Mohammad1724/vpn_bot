@@ -66,14 +66,8 @@ def build_application():
     buy_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(check_channel_membership(buy_h.buy_start), pattern='^user_buy_')],
         states={
-            constants.GET_CUSTOM_NAME: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, buy_h.get_custom_name),
-                CommandHandler('skip', buy_h.skip_custom_name),
-            ],
-            constants.PROMO_CODE_ENTRY: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, buy_h.promo_code_received),
-                CommandHandler('skip', buy_h.promo_code_received),
-            ],
+            constants.GET_CUSTOM_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, buy_h.get_custom_name), CommandHandler('skip', buy_h.skip_custom_name)],
+            constants.PROMO_CODE_ENTRY: [MessageHandler(filters.TEXT & ~filters.COMMAND, buy_h.promo_code_received), CommandHandler('skip', buy_h.promo_code_received)],
         },
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
         per_user=True, per_chat=True
@@ -137,13 +131,7 @@ def build_application():
     support_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^📞 پشتیبانی$') & user_filter, check_channel_membership(support_h.support_ticket_start))],
         states={constants.SUPPORT_TICKET_OPEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, support_h.forward_to_admin)]},
-        fallbacks=[
-            CommandHandler('cancel', support_h.support_ticket_cancel),
-            # Fallback برای جلوگیری از گیر کردن
-            MessageHandler(filters.Regex('^🛍️ خرید سرویس$'), buy_h.buy_service_list),
-            MessageHandler(filters.Regex('^📋 سرویس‌های من$'), us_h.list_my_services),
-            MessageHandler(filters.Regex('^👤 اطلاعات حساب کاربری$'), start_h.show_account_info),
-        ],
+        fallbacks=[CommandHandler('cancel', support_h.support_ticket_cancel)],
         per_user=True, per_chat=True
     )
 
@@ -267,7 +255,7 @@ def build_application():
                 CallbackQueryHandler(admin_settings.service_configs_submenu, pattern="^settings_service_configs$"),
                 CallbackQueryHandler(admin_settings.subdomains_submenu, pattern="^settings_subdomains$"),
                 CallbackQueryHandler(admin_settings.reports_and_reminders_submenu, pattern="^settings_reports_reminders$"),
-                CallbackQueryHandler(admin_settings.multi_server_usage_submenu, pattern="^settings_multi_server_usage$"),
+                CallbackQueryHandler(admin_settings.usage_aggregation_submenu, pattern="^settings_usage_aggregation$"),
                 CallbackQueryHandler(admin_settings.toggle_usage_aggregation, pattern="^toggle_usage_aggregation$"),
                 CallbackQueryHandler(admin_settings.edit_default_link_start, pattern="^edit_default_link_type$"),
                 CallbackQueryHandler(admin_settings.set_default_link_type, pattern="^set_default_link_"),
@@ -295,10 +283,19 @@ def build_application():
             CallbackQueryHandler(admin_nodes.nodes_menu, pattern=r'^admin_nodes$'),
         ],
         states={
-            admin_nodes.NODES_MENU: [
+            constants.NODES_MENU: [
                 CallbackQueryHandler(admin_nodes.add_node_start, pattern=r'^admin_add_node$'),
                 CallbackQueryHandler(admin_nodes.list_nodes, pattern=r'^admin_list_nodes$'),
+                CallbackQueryHandler(admin_nodes.node_settings_menu, pattern=r'^admin_node_settings$'),
                 CallbackQueryHandler(admin_c.admin_entry, pattern=r'^admin_back_to_menu$'),
+            ],
+            constants.NODE_SETTINGS_MENU: [
+                CallbackQueryHandler(admin_nodes.toggle_node_setting, pattern=r'^toggle_node_setting_'),
+                CallbackQueryHandler(admin_nodes.edit_node_setting_start, pattern=r'^edit_node_setting_'),
+                CallbackQueryHandler(admin_nodes.nodes_menu, pattern=r'^admin_nodes$'),
+            ],
+            constants.EDIT_NODE_SETTING_VALUE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_nodes.edit_node_setting_value_received)
             ],
             admin_nodes.ADD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_name)],
             admin_nodes.ADD_PANEL_DOMAIN: [MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_panel_domain)],
@@ -435,14 +432,13 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # اولویت با مکالمه‌ها (گروه 0)
-    application.add_handler(buy_conv)
-    application.add_handler(gift_conv)
-    application.add_handler(charge_conv)
-    application.add_handler(transfer_conv)
-    application.add_handler(gift_from_balance_conv)
-    application.add_handler(support_conv)
-    application.add_handler(admin_conv)
+    application.add_handler(buy_conv, group=0)
+    application.add_handler(gift_conv, group=0)
+    application.add_handler(charge_conv, group=0)
+    application.add_handler(transfer_conv, group=0)
+    application.add_handler(gift_from_balance_conv, group=0)
+    application.add_handler(support_conv, group=0)
+    application.add_handler(admin_conv, group=0)
 
     application.add_handler(CommandHandler("set_trial_days", set_trial_days, filters=admin_filter))
     application.add_handler(CommandHandler("set_trial_gb", set_trial_gb, filters=admin_filter))
