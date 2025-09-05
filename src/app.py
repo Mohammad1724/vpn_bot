@@ -99,12 +99,24 @@ def build_application():
         ],
         states={
             constants.CHARGE_AMOUNT: [
+                # ورودی‌های مورد انتظار
                 MessageHandler(filters.TEXT & ~filters.COMMAND, charge_h.charge_amount_received),
                 CallbackQueryHandler(charge_h.charge_amount_confirm_cb, pattern="^charge_amount_\d+$"),
+                CallbackQueryHandler(charge_h.show_referral_info_inline, pattern="^acc_referral$"),
             ],
             constants.CHARGE_RECEIPT: [MessageHandler(filters.PHOTO, charge_h.charge_receipt_received)],
         },
-        fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
+        # Fallback برای خروج از مکالمه با دکمه‌های منوی اصلی
+        fallbacks=[
+            CommandHandler('cancel', start_h.user_generic_cancel),
+            MessageHandler(filters.Regex('^🛍️ خرید سرویس$'), buy_h.buy_service_list),
+            MessageHandler(filters.Regex('^📋 سرویس‌های من$'), us_h.list_my_services),
+            MessageHandler(filters.Regex('^👤 اطلاعات حساب کاربری$'), start_h.show_account_info),
+            MessageHandler(filters.Regex('^📚 راهنما$'), start_h.show_guide),
+            MessageHandler(filters.Regex('^🧪 سرویس تست$'), trial_get_trial_service),
+            MessageHandler(filters.Regex('^🎁 کد هدیه$'), gift_h.gift_code_entry),
+            MessageHandler(filters.Regex('^📞 پشتیبانی$'), support_h.support_ticket_start),
+        ],
         per_user=True, per_chat=True
     )
 
@@ -134,9 +146,8 @@ def build_application():
         per_user=True, per_chat=True
     )
 
-    # =========================
-    # Admin Nested Conversations
-    # =========================
+    # ... بقیه کد بدون تغییر ...
+    # ... (کدهای ادمین)
     add_plan_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(r'^➕ افزودن پلن جدید$') & admin_filter, admin_plans.add_plan_start),
@@ -280,9 +291,6 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # =========================
-    # Nodes Conversation (Admin)
-    # =========================
     nodes_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(r'^🖥️ مدیریت نودها$') & admin_filter, admin_nodes.nodes_menu),
@@ -332,9 +340,6 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # =========================
-    # Main Admin Conversation
-    # =========================
     admin_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(f'^{constants.BTN_ADMIN_PANEL}$') & admin_filter, admin_c.admin_entry),
@@ -349,7 +354,6 @@ def build_application():
                 MessageHandler(filters.Regex('^🎁 مدیریت کد هدیه$') & admin_filter, admin_gift.gift_code_management_menu),
                 MessageHandler(filters.Regex('^🛑 خاموش کردن ربات$') & admin_filter, admin_c.shutdown_bot),
 
-                # Nested conversations and callbacks
                 CallbackQueryHandler(admin_plans.plan_management_menu, pattern="^admin_plans$"),
                 CallbackQueryHandler(admin_reports.reports_menu, pattern="^admin_reports$"),
                 CallbackQueryHandler(admin_backup.backup_restore_menu, pattern="^admin_backup$"),
@@ -466,9 +470,7 @@ def build_application():
     application.add_handler(MessageHandler(filters.REPLY & admin_filter, support_h.admin_reply_handler))
     application.add_handler(CallbackQueryHandler(support_h.close_ticket, pattern="^close_ticket_"))
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern="^check_membership$"))
-    # «☰ منوی اصلی» اینلاین
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern="^home_menu$"))
-    # منوی شارژ رایگان (معرفی دوستان)
     application.add_handler(CallbackQueryHandler(charge_h.show_referral_info_inline, pattern="^acc_referral$"))
 
     # Usage aggregate menu (in Account info)
@@ -524,9 +526,7 @@ def build_application():
         MessageHandler(filters.Regex('^📋 سرویس‌های من$'), check_channel_membership(us_h.list_my_services)),
         MessageHandler(filters.Regex('^👤 اطلاعات حساب کاربری$'), check_channel_membership(start_h.show_account_info)),
         MessageHandler(filters.Regex('^📚 راهنما$'), check_channel_membership(start_h.show_guide)),
-        # متن دکمه تست کوتاه شد
         MessageHandler(filters.Regex('^🧪 سرویس تست$'), check_channel_membership(trial_get_trial_service)),
-        # دکمه‌های جدید اضافه شده به keyboards
         MessageHandler(filters.Regex('^📞 پشتیبانی$'), check_channel_membership(support_h.support_ticket_start)),
         MessageHandler(filters.Regex('^🎁 کد هدیه$'), check_channel_membership(gift_h.gift_code_entry)),
     ]
