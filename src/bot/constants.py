@@ -23,8 +23,8 @@ BTN_BACK_TO_ADMIN_MENU = "⬅️ بازگشت به پنل ادمین"
     CHARGE_MENU,
     CHARGE_AMOUNT,
     CHARGE_RECEIPT,
-    AWAIT_CUSTOM_AMOUNT, # اضافه شد
-) = range(100, 104) # رنج آپدیت شد
+    AWAIT_CUSTOM_AMOUNT,
+) = range(100, 104)
 
 # Account Actions Conversation States
 (
@@ -83,3 +83,23 @@ AWAIT_REFERRAL_BONUS = 600
     BROADCAST_TO_USER_ID,
     BROADCAST_TO_USER_MESSAGE,
 ) = range(700, 705)
+
+# Node Management States
+(
+    NODES_MENU,
+    ADD_NAME,
+    ADD_PANEL_DOMAIN,
+    ADD_ADMIN_PATH,
+    ADD_SUB_PATH,
+    ADD_API_KEY,
+    ADD_SUB_DOMAINS,
+    ADD_CAPACITY,
+    ADD_LOCATION,
+    ADD_CONFIRM,
+    NODE_DETAILS,
+    EDIT_FIELD_PICK,
+    EDIT_FIELD_VALUE,
+    DELETE_CONFIRM,
+    NODE_SETTINGS_MENU,
+    EDIT_NODE_SETTING_VALUE,
+) = range(800, 816)
