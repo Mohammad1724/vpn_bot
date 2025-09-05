@@ -15,7 +15,7 @@ from bot import jobs, constants
 from bot.handlers import (
     start as start_h, gift as gift_h, charge as charge_h, buy as buy_h,
     user_services as us_h, account_actions as acc_act, support as support_h,
-    usage as usage_h  # نمایش مصرف تجمیعی
+    usage as usage_h
 )
 from bot.handlers.common_handlers import check_channel_membership
 from bot.handlers.admin import (
@@ -23,9 +23,7 @@ from bot.handlers.admin import (
     settings as admin_settings, backup as admin_backup, users as admin_users,
     gift_codes as admin_gift
 )
-# اگر مدیریت نودها را فعال دارید، این ایمپورت را نگه دارید
 from bot.handlers.admin import nodes as admin_nodes
-
 import bot.handlers.admin.trial_settings_ui as trial_ui
 from bot.handlers.trial import get_trial_service as trial_get_trial_service
 from bot.handlers.admin.trial_settings import set_trial_days, set_trial_gb
@@ -58,7 +56,6 @@ def build_application():
     )
     application.add_error_handler(error_handler)
 
-    # Admin filter
     try:
         admin_id_int = int(ADMIN_ID)
     except Exception:
@@ -66,9 +63,6 @@ def build_application():
     admin_filter = filters.User(user_id=admin_id_int)
     user_filter = ~admin_filter
 
-    # =========================
-    # User Conversations
-    # =========================
     buy_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(check_channel_membership(buy_h.buy_start), pattern='^user_buy_')],
         states={
@@ -94,19 +88,15 @@ def build_application():
 
     charge_conv = ConversationHandler(
         entry_points=[
-            CallbackQueryHandler(check_channel_membership(charge_h.charge_start), pattern='^user_start_charge$'),
-            MessageHandler(filters.Regex(r'^💳 شارژ حساب$') & user_filter, check_channel_membership(charge_h.charge_start)),
+            CallbackQueryHandler(check_channel_membership(charge_h.charge_start_payment), pattern='^charge_start_payment$'),
         ],
         states={
             constants.CHARGE_AMOUNT: [
-                # ورودی‌های مورد انتظار
                 MessageHandler(filters.TEXT & ~filters.COMMAND, charge_h.charge_amount_received),
                 CallbackQueryHandler(charge_h.charge_amount_confirm_cb, pattern="^charge_amount_\d+$"),
-                CallbackQueryHandler(charge_h.show_referral_info_inline, pattern="^acc_referral$"),
             ],
             constants.CHARGE_RECEIPT: [MessageHandler(filters.PHOTO, charge_h.charge_receipt_received)],
         },
-        # Fallback برای خروج از مکالمه با دکمه‌های منوی اصلی
         fallbacks=[
             CommandHandler('cancel', start_h.user_generic_cancel),
             MessageHandler(filters.Regex('^🛍️ خرید سرویس$'), buy_h.buy_service_list),
@@ -116,6 +106,7 @@ def build_application():
             MessageHandler(filters.Regex('^🧪 سرویس تست$'), trial_get_trial_service),
             MessageHandler(filters.Regex('^🎁 کد هدیه$'), gift_h.gift_code_entry),
             MessageHandler(filters.Regex('^📞 پشتیبانی$'), support_h.support_ticket_start),
+            CallbackQueryHandler(charge_h.charge_menu_start, pattern="^charge_menu_main$")
         ],
         per_user=True, per_chat=True
     )
@@ -146,8 +137,6 @@ def build_application():
         per_user=True, per_chat=True
     )
 
-    # ... بقیه کد بدون تغییر ...
-    # ... (کدهای ادمین)
     add_plan_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(r'^➕ افزودن پلن جدید$') & admin_filter, admin_plans.add_plan_start),
@@ -270,7 +259,6 @@ def build_application():
                 CallbackQueryHandler(admin_settings.reports_and_reminders_submenu, pattern="^settings_reports_reminders$"),
                 CallbackQueryHandler(admin_settings.multi_server_usage_submenu, pattern="^settings_multi_server_usage$"),
                 CallbackQueryHandler(admin_settings.toggle_usage_aggregation, pattern="^toggle_usage_aggregation$"),
-
                 CallbackQueryHandler(admin_settings.edit_default_link_start, pattern="^edit_default_link_type$"),
                 CallbackQueryHandler(admin_settings.set_default_link_type, pattern="^set_default_link_"),
                 CallbackQueryHandler(admin_settings.toggle_maintenance, pattern="^toggle_maintenance$"),
@@ -447,9 +435,6 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # =========================
-    # Register Conversations
-    # =========================
     application.add_handler(buy_conv)
     application.add_handler(gift_conv)
     application.add_handler(charge_conv)
@@ -458,13 +443,9 @@ def build_application():
     application.add_handler(support_conv)
     application.add_handler(admin_conv)
 
-    # Admin-only trial command handlers
     application.add_handler(CommandHandler("set_trial_days", set_trial_days, filters=admin_filter))
     application.add_handler(CommandHandler("set_trial_gb", set_trial_gb, filters=admin_filter))
 
-    # =========================
-    # Global Callbacks & Handlers
-    # =========================
     application.add_handler(CallbackQueryHandler(buy_h.confirm_purchase_callback, pattern="^confirmbuy$"), group=2)
     application.add_handler(CallbackQueryHandler(buy_h.cancel_purchase_callback, pattern="^cancelbuy$"), group=2)
     application.add_handler(MessageHandler(filters.REPLY & admin_filter, support_h.admin_reply_handler))
@@ -473,16 +454,12 @@ def build_application():
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern="^home_menu$"))
     application.add_handler(CallbackQueryHandler(charge_h.show_referral_info_inline, pattern="^acc_referral$"))
 
-    # Usage aggregate menu (in Account info)
     application.add_handler(CallbackQueryHandler(usage_h.show_usage_menu, pattern="^acc_usage$"))
     application.add_handler(CallbackQueryHandler(usage_h.show_usage_menu, pattern="^acc_usage_refresh$"))
 
     application.add_handler(CallbackQueryHandler(admin_users.admin_confirm_charge_callback, pattern=r'^admin_confirm_charge_'), group=1)
     application.add_handler(CallbackQueryHandler(admin_users.admin_reject_charge_callback, pattern=r'^admin_reject_charge_'), group=1)
 
-    # =========================
-    # Other (user) handlers
-    # =========================
     user_services_handlers = [
         CallbackQueryHandler(check_channel_membership(us_h.view_service_callback), pattern="^view_service_"),
         CallbackQueryHandler(check_channel_membership(us_h.back_to_services_callback), pattern="^back_to_services$"),
@@ -520,6 +497,7 @@ def build_application():
     for h in plan_category_handlers:
         application.add_handler(h)
 
+    # 핸들러 اصلی: شارژ منوی اصلی و دیگر دکمه‌های سطح بالا
     main_menu_handlers = [
         CommandHandler("start", check_channel_membership(start_h.start)),
         MessageHandler(filters.Regex('^🛍️ خرید سرویس$'), check_channel_membership(buy_h.buy_service_list)),
@@ -529,6 +507,8 @@ def build_application():
         MessageHandler(filters.Regex('^🧪 سرویس تست$'), check_channel_membership(trial_get_trial_service)),
         MessageHandler(filters.Regex('^📞 پشتیبانی$'), check_channel_membership(support_h.support_ticket_start)),
         MessageHandler(filters.Regex('^🎁 کد هدیه$'), check_channel_membership(gift_h.gift_code_entry)),
+        # هندلر شارژ منوی اصلی (که به Conversation وارد نمی‌شود)
+        MessageHandler(filters.Regex('^💳 شارژ حساب$'), check_channel_membership(charge_h.charge_menu_start)),
     ]
     for h in main_menu_handlers:
         application.add_handler(h)
