@@ -281,6 +281,9 @@ def build_application():
         entry_points=[
             MessageHandler(filters.Regex(r'^🖥️ مدیریت نودها$') & admin_filter, admin_nodes.nodes_menu),
             CallbackQueryHandler(admin_nodes.nodes_menu, pattern=r'^admin_nodes$'),
+            # FIX: اجازه بده اگر مستقیم روی این دو دکمه کلیک شد، کانورسیشن شروع و هندلر درست اجرا بشه
+            CallbackQueryHandler(admin_nodes.list_nodes, pattern=r'^admin_list_nodes$'),
+            CallbackQueryHandler(admin_nodes.node_settings_menu, pattern=r'^admin_node_settings$'),
         ],
         states={
             constants.NODES_MENU: [
@@ -331,7 +334,8 @@ def build_application():
             ],
         },
         fallbacks=[CommandHandler('cancel', admin_nodes.cancel)],
-        map_to_parent={ConversationHandler.END: constants.ADMIN_MENU},
+        # FIX: اگر هندلرهای داخلی مقدار ADMIN_MENU برگردوند، به والد مپ شود
+        map_to_parent={ConversationHandler.END: constants.ADMIN_MENU, constants.ADMIN_MENU: constants.ADMIN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
     )
 
