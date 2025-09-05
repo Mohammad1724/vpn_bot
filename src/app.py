@@ -95,7 +95,6 @@ def build_application():
             constants.CHARGE_MENU: [
                 CallbackQueryHandler(charge_h.show_referral_info_inline, pattern="^acc_referral$"),
                 CallbackQueryHandler(charge_h.charge_start_payment, pattern="^charge_start_payment$"),
-                # دکمه بازگشت از منوی معرفی به منوی شارژ
                 CallbackQueryHandler(charge_h.charge_menu_start, pattern="^charge_menu_main$"),
             ],
             constants.CHARGE_AMOUNT: [
@@ -108,9 +107,6 @@ def build_application():
         fallbacks=[
             CommandHandler('cancel', charge_h.charge_cancel),
             CallbackQueryHandler(start_h.start, pattern="^home_menu$"),
-            MessageHandler(filters.Regex('^🛍️ خرید سرویس$'), buy_h.buy_service_list),
-            MessageHandler(filters.Regex('^📋 سرویس‌های من$'), us_h.list_my_services),
-            MessageHandler(filters.Regex('^👤 اطلاعات حساب کاربری$'), start_h.show_account_info),
         ],
         per_user=True, per_chat=True
     )
@@ -429,6 +425,7 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
+    # اولویت با مکالمه‌ها (گروه 0)
     application.add_handler(buy_conv)
     application.add_handler(gift_conv)
     application.add_handler(charge_conv)
@@ -440,10 +437,11 @@ def build_application():
     application.add_handler(CommandHandler("set_trial_days", set_trial_days, filters=admin_filter))
     application.add_handler(CommandHandler("set_trial_gb", set_trial_gb, filters=admin_filter))
 
+    # هندلرهای گلوبال با اولویت‌های مختلف
     application.add_handler(CallbackQueryHandler(buy_h.confirm_purchase_callback, pattern="^confirmbuy$"), group=2)
     application.add_handler(CallbackQueryHandler(buy_h.cancel_purchase_callback, pattern="^cancelbuy$"), group=2)
-    application.add_handler(MessageHandler(filters.REPLY & admin_filter, support_h.admin_reply_handler))
-    application.add_handler(CallbackQueryHandler(support_h.close_ticket, pattern="^close_ticket_"))
+    application.add_handler(MessageHandler(filters.REPLY & admin_filter, support_h.admin_reply_handler), group=1)
+    application.add_handler(CallbackQueryHandler(support_h.close_ticket, pattern="^close_ticket_"), group=1)
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern="^check_membership$"))
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern="^home_menu$"))
 
@@ -490,6 +488,7 @@ def build_application():
     for h in plan_category_handlers:
         application.add_handler(h)
 
+    # هندلرهای منوی اصلی با اولویت پایین (گروه 1)
     main_menu_handlers = [
         CommandHandler("start", check_channel_membership(start_h.start)),
         MessageHandler(filters.Regex('^🛍️ خرید سرویس$'), check_channel_membership(buy_h.buy_service_list)),
@@ -497,8 +496,6 @@ def build_application():
         MessageHandler(filters.Regex('^👤 اطلاعات حساب کاربری$'), check_channel_membership(start_h.show_account_info)),
         MessageHandler(filters.Regex('^📚 راهنما$'), check_channel_membership(start_h.show_guide)),
         MessageHandler(filters.Regex('^🧪 سرویس تست$'), check_channel_membership(trial_get_trial_service)),
-        MessageHandler(filters.Regex('^📞 پشتیبانی$'), check_channel_membership(support_h.support_ticket_start)),
-        MessageHandler(filters.Regex('^🎁 کد هدیه$'), check_channel_membership(gift_h.gift_code_entry)),
     ]
     for h in main_menu_handlers:
         application.add_handler(h, group=1)
