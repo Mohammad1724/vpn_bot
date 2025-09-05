@@ -9,15 +9,17 @@ import database as db
 from config import ADMIN_ID, SUPPORT_USERNAME, REFERRAL_BONUS_AMOUNT
 from bot.constants import CHARGE_AMOUNT, CHARGE_RECEIPT
 from bot.ui import nav_row, btn, markup  # UI helpers
+from bot.keyboards import get_main_menu_keyboard
 
 logger = logging.getLogger(__name__)
+
 
 def _get_payment_info_text() -> str:
     """متن راهنمای پرداخت را از دیتابیس می‌خواند."""
     text = db.get_setting("payment_instruction_text")
     if not text:
         text = "راهنمای پرداخت هنوز تنظیم نشده است."
-    
+
     # اضافه کردن شماره کارت‌ها
     card_lines = []
     for i in range(1, 4):
@@ -26,16 +28,17 @@ def _get_payment_info_text() -> str:
         bank = db.get_setting(f"payment_card_{i}_bank")
         if num and name:
             card_lines.append(f"💳 `{num}`\n({name} - {bank or 'نامشخص'})")
-    
+
     if card_lines:
         text += "\n\n" + "\n".join(card_lines)
-        
+
     return text
 
+
 # --- Handlers ---
-async def charge_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def charge_menu_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    شروع فرآیند شارژ. یک منوی اینلاین با گزینه‌ها + راهنمای وارد کردن مبلغ دلخواه.
+    نمایش منوی اصلی شارژ با دو گزینه: شارژ رایگان و شارژ حساب
     """
     q = getattr(update, "callback_query", None)
     if q:
@@ -43,16 +46,11 @@ async def charge_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = [
         [btn("💰 شارژ رایگان (معرفی دوستان)", "acc_referral")],
-        [btn("۵۰,۰۰۰ تومان", "charge_amount_50000"), btn("۱۰۰,۰۰۰ تومان", "charge_amount_100000")],
-        [btn("۲۰۰,۰۰۰ تومان", "charge_amount_200000"), btn("۵۰۰,۰۰۰ تومان", "charge_amount_500000")],
+        [btn("💳 شارژ حساب (واریز)", "charge_start_payment")],
         nav_row(home_cb="home_menu")
     ]
-    
-    text = (
-        "**💳 شارژ حساب**\n\n"
-        "لطفاً یکی از مبالغ زیر را انتخاب کنید، یا مبلغ دلخواه خود را (به تومان) وارد نمایید.\n\n"
-        "همچنین می‌توانید با معرفی دوستان، حساب خود را رایگان شارژ کنید."
-    )
+
+    text = "**💳 شارژ حساب**\n\nلطفاً یکی از گزینه‌های زیر را انتخاب کنید:"
 
     if q:
         try:
@@ -61,16 +59,39 @@ async def charge_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=markup(keyboard), parse_mode=ParseMode.MARKDOWN)
     else:
         await update.effective_message.reply_text(text, reply_markup=markup(keyboard), parse_mode=ParseMode.MARKDOWN)
-    
-    return CHARGE_AMOUNT
 
-async def show_referral_info_inline(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return ConversationHandler.END
+
+
+async def charge_start_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    نمایش اطلاعات معرفی دوستان در منوی شارژ (اینلاین).
+    شروع فرآیند پرداخت پس از انتخاب «شارژ حساب»
     """
     q = update.callback_query
     await q.answer()
-    
+
+    keyboard = [
+        [btn("۵۰,۰۰۰ تومان", "charge_amount_50000"), btn("۱۰۰,۰۰۰ تومان", "charge_amount_100000")],
+        [btn("۲۰۰,۰۰۰ تومان", "charge_amount_200000"), btn("۵۰۰,۰۰۰ تومان", "charge_amount_500000")],
+        nav_row(back_cb="charge_menu_main", home_cb="home_menu")
+    ]
+
+    text = (
+        "**💳 شارژ حساب**\n\n"
+        "لطفاً یکی از مبالغ زیر را انتخاب کنید، یا مبلغ دلخواه خود را (به تومان) وارد نمایید."
+    )
+
+    await q.edit_message_text(text, reply_markup=markup(keyboard), parse_mode=ParseMode.MARKDOWN)
+    return CHARGE_AMOUNT
+
+
+async def show_referral_info_inline(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    نمایش اطلاعات معرفی دوستان
+    """
+    q = update.callback_query
+    await q.answer()
+
     user_id = q.from_user.id
     bot_username = (await context.bot.get_me()).username
     referral_link = f"https://t.me/{bot_username}?start=ref_{user_id}"
@@ -87,13 +108,11 @@ async def show_referral_info_inline(update: Update, context: ContextTypes.DEFAUL
         f"با اولین خرید دوست شما، مبلغ **{bonus:,.0f} تومان** به کیف پول شما و **{bonus:,.0f} تومان** به کیف پول دوستتان اضافه می‌شود."
     )
 
-    kb = [nav_row(back_cb="user_start_charge", home_cb="home_menu")]
+    kb = [nav_row(back_cb="charge_menu_main", home_cb="home_menu")]
     await q.edit_message_text(text, reply_markup=markup(kb), parse_mode=ParseMode.MARKDOWN)
 
+
 async def charge_amount_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    زمانی که کاربر مبلغ دلخواه را تایپ می‌کند.
-    """
     try:
         amount = int(float(update.message.text.replace(',', '')))
         if amount < 1000:
@@ -105,10 +124,8 @@ async def charge_amount_received(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("لطفاً مبلغ را به صورت عدد (تومان) وارد کنید.")
         return CHARGE_AMOUNT
 
+
 async def charge_amount_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    زمانی که کاربر روی دکمه‌های مبلغ از پیش‌تعیین‌شده کلیک می‌کند.
-    """
     q = update.callback_query
     await q.answer()
     amount_str = q.data.split('_')[-1]
@@ -116,9 +133,10 @@ async def charge_amount_confirm_cb(update: Update, context: ContextTypes.DEFAULT
     context.user_data['charge_amount'] = amount
     return await _confirm_amount(update, context, amount)
 
+
 async def _confirm_amount(update: Update, context: ContextTypes.DEFAULT_TYPE, amount: int):
     q = getattr(update, "callback_query", None)
-    
+
     payment_info = _get_payment_info_text()
     text = (
         f"شما درخواست شارژ به مبلغ **{amount:,.0f} تومان** را دارید.\n\n"
@@ -130,13 +148,14 @@ async def _confirm_amount(update: Update, context: ContextTypes.DEFAULT_TYPE, am
         await q.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
     else:
         await update.effective_message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
-        
+
     return CHARGE_RECEIPT
+
 
 async def charge_receipt_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     amount = context.user_data.get('charge_amount')
     if not amount:
-        await update.message.reply_text("خطا: مبلغ شارژ یافت نشد. لطفاً از ابتدا شروع کنید.")
+        await update.message.reply_text("خطا: مبلغ شارژ یافت نشد. لطفاً از ابتدا شروع کنید.", reply_markup=get_main_menu_keyboard(update.effective_user.id))
         return ConversationHandler.END
 
     user = update.effective_user
@@ -144,7 +163,7 @@ async def charge_receipt_received(update: Update, context: ContextTypes.DEFAULT_
     charge_id = db.create_charge_request(user.id, amount, note=f"From user: {user.id}")
 
     if not charge_id:
-        await update.message.reply_text("❌ خطایی در ثبت درخواست شما رخ داد. لطفاً به پشتیبانی اطلاع دهید.")
+        await update.message.reply_text("❌ خطایی در ثبت درخواست شما رخ داد. لطفاً به پشتیبانی اطلاع دهید.", reply_markup=get_main_menu_keyboard(user.effective_user.id))
         return ConversationHandler.END
 
     caption = (
@@ -161,7 +180,7 @@ async def charge_receipt_received(update: Update, context: ContextTypes.DEFAULT_
             btn("❌ رد درخواست", f"admin_reject_charge_{charge_id}_{user.id}")
         ]
     ])
-    
+
     await context.bot.send_photo(
         chat_id=ADMIN_ID,
         photo=update.message.photo[-1].file_id,
@@ -169,10 +188,11 @@ async def charge_receipt_received(update: Update, context: ContextTypes.DEFAULT_
         reply_markup=kb,
         parse_mode=ParseMode.MARKDOWN
     )
-    
+
     await update.message.reply_text(
         "✅ رسید شما دریافت شد. پس از تایید توسط ادمین، حساب شما شارژ خواهد شد.\n"
-        "می‌توانید از طریق پشتیبانی پیگیری کنید."
+        "می‌توانید از طریق پشتیبانی پیگیری کنید.",
+        reply_markup=get_main_menu_keyboard(user.id)
     )
     context.user_data.clear()
     return ConversationHandler.END
