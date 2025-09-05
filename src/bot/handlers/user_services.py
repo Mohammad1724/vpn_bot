@@ -1,3 +1,4 @@
+# filename: bot/handlers/user_services.py
 # -*- coding: utf-8 -*-
 
 import io
@@ -16,9 +17,7 @@ import database as db
 import hiddify_api
 from config import ADMIN_ID
 from bot import utils
-# اصلاح ایمپورت: create_service_info_caption جایگزین شد
 from bot.utils import create_service_info_caption, get_service_status
-# اصلاح ایمپورت: confirm_row اضافه شد
 from bot.ui import nav_row, markup, chunk, btn, confirm_row
 
 try:
@@ -64,34 +63,76 @@ def _compute_base_link(service: dict, user_uuid: str) -> str:
 
 
 def _collect_subscription_bases(service: dict) -> List[str]:
+    """
+    فهرست تمام لینک‌های اشتراک قابل ادغام را برای این سرویس برمی‌گرداند.
+    - base اصلی (تجمیعی/گروهی)
+    - sub_link یا sub_url هر نود
+    - اگر sub_* نبود، لینک هر نود را از روی ep.sub_uuid + ep.server_name می‌سازیم.
+    """
     bases: List[str] = []
+
+    # base اصلی
     main_base = _compute_base_link(service, service["sub_uuid"])
     if main_base:
         bases.append(main_base)
+
+    # لینک‌های نودها
     try:
-        endpoints = db.list_service_endpoints(service["service_id"])
+        endpoints = db.list_service_endpoints(service["service_id"]) or []
         for ep in endpoints:
-            ep_link = (ep.get("sub_link") or "").strip().rstrip("/")
+            # 1) اگر sub_link یا sub_url ذخیره شده بود، همان را استفاده کن
+            ep_link = (ep.get("sub_link") or ep.get("sub_url") or "").strip().rstrip("/")
+            if not ep_link:
+                # 2) در غیر این صورت، لینک را بر اساس sub_uuid و server_name نود بساز
+                ep_uuid = (ep.get("sub_uuid") or "").strip() or service["sub_uuid"]
+                ep_server = (ep.get("server_name") or service.get("server_name")) or None
+                try:
+                    built = utils.build_subscription_url(ep_uuid, server_name=ep_server)
+                    if isinstance(built, str) and built.strip():
+                        ep_link = built.strip().rstrip("/")
+                except Exception:
+                    ep_link = ""
             if ep_link:
                 bases.append(ep_link)
     except Exception as e:
         logger.debug("list_service_endpoints failed for service %s: %s", service.get("service_id"), e)
-    dedup = []
+
+    # حذف تکراری‌ها با حفظ ترتیب
+    seen = set()
+    dedup: List[str] = []
     for b in bases:
-        if b not in dedup:
+        if not b:
+            continue
+        if b not in seen:
             dedup.append(b)
+            seen.add(b)
     return dedup
 
 
 def _build_unified_link_for_type(service: dict, link_type: str) -> str | None:
+    """
+    اگر Subconverter فعال باشد و حداقل دو منبع داشته باشیم، لینک واحد تولید می‌کند.
+    target براساس نوع لینک یا SUBCONVERTER_DEFAULT_TARGET انتخاب می‌شود.
+    """
     if not SUBCONVERTER_ENABLED:
         return None
+
     bases = _collect_subscription_bases(service)
     # ادغام فقط وقتی معنی دارد که حداقل دو منبع داشته باشیم
     if not bases or len(bases) < 2:
         return None
+
     sources = bases  # لینک‌های کامل subscription؛ نیازی به اضافه کردن /sub نیست
-    target = utils.link_type_to_subconverter_target(link_type)
+
+    # تعیین target
+    target = None
+    try:
+        target = utils.link_type_to_subconverter_target(link_type)
+    except Exception:
+        target = None
+    if not target or link_type == "unified":
+        target = SUBCONVERTER_DEFAULT_TARGET or "v2ray"
+
     return utils.build_subconverter_link(sources, target=target)
 
 
@@ -150,11 +191,13 @@ async def send_service_details(
             await target(chat_id=chat_id, text=text, reply_markup=markup(kb))
             return
 
+        # اگر Subconverter فعال است، سعی کن یک لینک واحد پیش‌فرض بسازی
         unified_default_link = None
         if SUBCONVERTER_ENABLED:
             try:
                 bases = _collect_subscription_bases(service)
                 if bases and len(bases) > 1:
+                    # بدون target => بر اساس SUBCONVERTER_DEFAULT_TARGET در utils تصمیم‌گیری می‌شود
                     unified_default_link = utils.build_subconverter_link(bases)
             except Exception as e:
                 logger.debug("build unified_default_link failed for service %s: %s", service_id, e)
@@ -252,7 +295,9 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await q.edit_message_text("در حال دریافت کانفیگ‌های تکی... ⏳")
             full_link = f"{_compute_base_link(service, user_uuid)}/all.txt"
-            async with httpx.AsyncClient(timeout=20) as c: resp = await c.get(full_link); resp.raise_for_status()
+            async with httpx.AsyncClient(timeout=20) as c:
+                resp = await c.get(full_link)
+                resp.raise_for_status()
             await q.message.delete()
             await context.bot.send_document(
                 chat_id=q.from_user.id,
@@ -277,7 +322,8 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     caption = f"نام کانفیگ: **{config_name}**\nنوع لینک: **{_link_label(link_type)}**\n\n`{final_link}`"
     try:
         await q.message.delete()
-    except BadRequest: pass
+    except BadRequest:
+        pass
     await context.bot.send_photo(
         chat_id=q.message.chat_id, photo=qr_bio, caption=caption, parse_mode="Markdown",
         reply_markup=markup([nav_row(back_cb=f"more_links_{user_uuid}", home_cb="home_menu")])
@@ -293,22 +339,28 @@ async def refresh_service_details(update: Update, context: ContextTypes.DEFAULT_
     if not service or service['user_id'] != q.from_user.id:
         await q.answer("خطا: این سرویس متعلق به شما نیست.", show_alert=True); return
 
-    try: await q.message.delete()
-    except BadRequest: pass
+    try:
+        await q.message.delete()
+    except BadRequest:
+        pass
     msg = await context.bot.send_message(chat_id=q.from_user.id, text="در حال به‌روزرسانی اطلاعات...")
     if q.from_user.id == ADMIN_ID:
         try:
             info = await hiddify_api.get_user_info(service['sub_uuid'], server_name=service.get("server_name"))
-            if info: await q.from_user.send_message(f"-- DEBUG INFO --\n<pre>{json.dumps(info, indent=2, ensure_ascii=False)}</pre>", parse_mode="HTML")
-        except Exception as e: await q.from_user.send_message(f"Debug error: {e}")
+            if info:
+                await q.from_user.send_message(f"-- DEBUG INFO --\n<pre>{json.dumps(info, indent=2, ensure_ascii=False)}</pre>", parse_mode="HTML")
+        except Exception as e:
+            await q.from_user.send_message(f"Debug error: {e}")
     await send_service_details(context, q.from_user.id, service_id, original_message=msg, is_from_menu=True)
 
 
 async def back_to_services_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    try: await q.message.delete()
-    except BadRequest: pass
+    try:
+        await q.message.delete()
+    except BadRequest:
+        pass
     await list_my_services(update, context)
 
 
@@ -316,8 +368,10 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
     q = update.callback_query
     await q.answer()
     data = q.data
-    try: service_id = int(data.split('_')[-1])
-    except Exception: await q.edit_message_text("❌ ورودی نامعتبر."); return
+    try:
+        service_id = int(data.split('_')[-1])
+    except Exception:
+        await q.edit_message_text("❌ ورودی نامعتبر."); return
 
     service = db.get_service(service_id)
     if not service or service['user_id'] != q.from_user.id:
@@ -333,13 +387,16 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
             reply_markup=kb
         ); return
 
-    try: await q.edit_message_text("در حال حذف سرویس از پنل... ⏳")
-    except BadRequest: pass
+    try:
+        await q.edit_message_text("در حال حذف سرویس از پنل... ⏳")
+    except BadRequest:
+        pass
     try:
         success = await hiddify_api.delete_user_from_panel(service['sub_uuid'], server_name=service.get("server_name"))
         if not success:
             probe = await hiddify_api.get_user_info(service['sub_uuid'], server_name=service.get("server_name"))
-            if isinstance(probe, dict) and probe.get("_not_found"): success = True
+            if isinstance(probe, dict) and probe.get("_not_found"):
+                success = True
         if not success:
             await q.edit_message_text("❌ حذف سرویس از پنل با خطا مواجه شد."); return
 
@@ -360,15 +417,19 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
 async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
     await q.answer()
-    try: await q.message.delete()
-    except BadRequest: pass
+    try:
+        await q.message.delete()
+    except BadRequest:
+        pass
 
     service_id = int(q.data.split('_')[1])
     user_id = q.from_user.id
     service = db.get_service(service_id)
-    if not service: await context.bot.send_message(chat_id=user_id, text="❌ سرویس نامعتبر است."); return
+    if not service:
+        await context.bot.send_message(chat_id=user_id, text="❌ سرویس نامعتبر است."); return
     plan = db.get_plan(service['plan_id']) if service.get('plan_id') else None
-    if not plan: await context.bot.send_message(chat_id=user_id, text="❌ پلن تمدید یافت نشد."); return
+    if not plan:
+        await context.bot.send_message(chat_id=user_id, text="❌ پلن تمدید یافت نشد."); return
     user = db.get_or_create_user(user_id)
     if user['balance'] < plan['price']:
         await context.bot.send_message(chat_id=user_id, text=f"موجودی کافی نیست! (نیاز به {int(plan['price']):,} تومان)"); return
@@ -400,7 +461,8 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
     service_id, plan_id = context.user_data.get('renewal_service_id'), context.user_data.get('renewal_plan_id')
     if not service_id or not plan_id:
         await _send_renewal_error(original_message, "❌ خطای داخلی: اطلاعات تمدید یافت نشد."); return
-    if original_message: await original_message.edit_text("در حال ارسال درخواست تمدید... ⏳")
+    if original_message:
+        await original_message.edit_text("در حال ارسال درخواست تمدید... ⏳")
     service, plan = db.get_service(service_id), db.get_plan(plan_id)
     if not service or not plan or service['user_id'] != user_id:
         await _send_renewal_error(original_message, "❌ اطلاعات سرویس یا پلن نامعتبر است."); return
@@ -411,7 +473,8 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
         new_info = await hiddify_api.renew_user_subscription(
             user_uuid=service['sub_uuid'], plan_days=plan['days'], plan_gb=plan['gb'], server_name=service.get("server_name")
         )
-        if not new_info: raise ValueError("Invalid API response")
+        if not new_info:
+            raise ValueError("Invalid API response")
         endpoints = db.list_service_endpoints(service_id) or []
         for ep in endpoints:
             if ep_uuid := (ep.get("sub_uuid") or "").strip():
@@ -419,7 +482,8 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
                     user_uuid=ep_uuid, plan_days=plan['days'], plan_gb=plan['gb'], server_name=ep.get("server_name")
                 )
         db.finalize_renewal_transaction(txn_id, plan_id)
-        if original_message: await original_message.edit_text("✅ سرویس با موفقیت تمدید شد!")
+        if original_message:
+            await original_message.edit_text("✅ سرویس با موفقیت تمدید شد!")
         await send_service_details(context, user_id, service_id, original_message=original_message, is_from_menu=True)
     except Exception as e:
         logger.error(f"Service renewal failed: {e}", exc_info=True)
@@ -430,8 +494,10 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def _send_renewal_error(message, error_text: str):
     if message:
-        try: await message.edit_text(error_text)
-        except Exception: pass
+        try:
+            await message.edit_text(error_text)
+        except Exception:
+            pass
 
 
 async def cancel_renewal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
