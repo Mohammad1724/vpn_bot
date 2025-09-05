@@ -23,7 +23,8 @@ BTN_BACK_TO_ADMIN_MENU = "⬅️ بازگشت به پنل ادمین"
     CHARGE_MENU,
     CHARGE_AMOUNT,
     CHARGE_RECEIPT,
-) = range(100, 103)
+    AWAIT_CUSTOM_AMOUNT, # اضافه شد
+) = range(100, 104) # رنج آپدیت شد
 
 # Account Actions Conversation States
 (
