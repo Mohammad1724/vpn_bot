@@ -37,7 +37,6 @@ logger = logging.getLogger(__name__)
 _PERSIAN_DIGIT_MAP = str.maketrans("0123456789,-", "۰۱۲۳۴۵۶۷۸۹،-")
 
 def to_persian_digits(s: str) -> str:
-    """تبدیل اعداد لاتین به فارسی"""
     if not s:
         return ""
     try:
@@ -46,7 +45,6 @@ def to_persian_digits(s: str) -> str:
         return s
 
 def format_toman(amount: Union[int, float, str], persian_digits: bool = False) -> str:
-    """فرمت‌بندی مبلغ به تومان با جداکننده هزارگان"""
     try:
         amt = int(round(float(amount)))
     except (ValueError, TypeError):
@@ -57,7 +55,6 @@ def format_toman(amount: Union[int, float, str], persian_digits: bool = False) -
     return s
 
 def parse_date_flexible(date_str: str) -> Union[datetime, None]:
-    """تجزیه انعطاف‌پذیر تاریخ در فرمت‌های مختلف"""
     if not date_str:
         return None
     s = str(date_str).strip().replace("Z", "+00:00")
@@ -89,11 +86,9 @@ def parse_date_flexible(date_str: str) -> Union[datetime, None]:
     return None
 
 def normalize_link_type(t: str) -> str:
-    """نرمال‌سازی نوع لینک برای استفاده داخلی"""
     return (t or "sub").strip().lower().replace("clash-meta", "clashmeta")
 
 def link_type_to_subconverter_target(link_type: str) -> str:
-    """نگاشت نوع لینک در UI به target در Subconverter"""
     lt = normalize_link_type(link_type)
     if lt in ("sub", "sub64"): return "v2ray"
     if lt == "auto": return (SUBCONVERTER_DEFAULT_TARGET or "v2ray").strip().lower()
@@ -101,19 +96,33 @@ def link_type_to_subconverter_target(link_type: str) -> str:
     return "v2ray"
 
 def build_subscription_url(user_uuid: str, server_name: Optional[str] = None) -> str:
-    """ساخت URL اشتراک بر اساس UUID کاربر و سرور انتخابی"""
+    """
+    ساخت URL اشتراک:
+    - اگر server_name مشخص نباشد: همیشه از دامنه/مسیر اصلی (SUB_DOMAINS یا PANEL_DOMAIN + SUB_PATH/ADMIN_PATH) استفاده کن.
+      این رفتار حتی در حالت MULTI_SERVER_ENABLED هم برقرار است تا لینک «اصلی/تجمیعی» تولید شود.
+    - اگر server_name مشخص باشد و MULTI_SERVER_ENABLED فعال باشد: لینک اختصاصی همان نود ساخته می‌شود.
+    """
+    # لینک روی دامنه اصلی (ترجیحاً SUB_DOMAINS، در غیر این صورت PANEL_DOMAIN)
+    main_sub_path = SUB_PATH or ADMIN_PATH
+    main_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
+    if not server_name:
+        return f"https://{main_domain}/{main_sub_path}/{user_uuid}"
+
+    # اگر سرور مشخص است و چندنودی فعال است → لینک اختصاصی نود
     if MULTI_SERVER_ENABLED and SERVERS:
-        server = next((s for s in SERVERS if str(s.get("name")) == str(server_name)), SERVERS[0])
-        sub_path = server.get("sub_path") or server.get("admin_path")
+        server = next((s for s in SERVERS if str(s.get("name")) == str(server_name)), None)
+        if not server:
+            # اگر نود یافت نشد، به دامنه اصلی برگرد
+            return f"https://{main_domain}/{main_sub_path}/{user_uuid}"
+        sub_path = server.get("sub_path") or server.get("admin_path") or main_sub_path
         sub_domains = server.get("sub_domains") or []
-        sub_domain = random.choice(sub_domains) if sub_domains else server.get("panel_domain")
+        sub_domain = random.choice(sub_domains) if sub_domains else (server.get("panel_domain") or main_domain)
         return f"https://{sub_domain}/{sub_path}/{user_uuid}"
-    sub_path = SUB_PATH or ADMIN_PATH
-    sub_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
-    return f"https://{sub_domain}/{sub_path}/{user_uuid}"
+
+    # حالت تک‌سروره یا عدم پیکربندی درست → از دامنه اصلی استفاده کن
+    return f"https://{main_domain}/{main_sub_path}/{user_uuid}"
 
 def build_subconverter_link(urls: List[str], target: Optional[str] = None) -> Optional[str]:
-    """ساخت لینک واحد Subconverter از چند URL اشتراک"""
     try:
         if not SUBCONVERTER_ENABLED or not SUBCONVERTER_URL or not urls: return None
         tgt = (target or SUBCONVERTER_DEFAULT_TARGET or "v2ray").strip().lower()
@@ -127,7 +136,6 @@ def build_subconverter_link(urls: List[str], target: Optional[str] = None) -> Op
         return None
 
 def make_qr_bytes(data: str) -> io.BytesIO:
-    """تولید کد QR برای یک رشته و بازگرداندن آن به صورت BytesIO"""
     img = qrcode.make(data)
     bio = io.BytesIO()
     bio.name = "qr.png"
