@@ -16,13 +16,14 @@ from bot.constants import GET_CUSTOM_NAME, CMD_CANCEL, CMD_SKIP, PROMO_CODE_ENTR
 from bot.keyboards import get_main_menu_keyboard
 
 try:
-    from config import MULTI_SERVER_ENABLED, SERVERS, DEFAULT_SERVER_NAME, SUBCONVERTER_ENABLED, SUBCONVERTER_EXTRA_SERVERS
+    from config import MULTI_SERVER_ENABLED, SERVERS, DEFAULT_SERVER_NAME, SUBCONVERTER_ENABLED, SUBCONVERTER_EXTRA_SERVERS, SUBCONVERTER_DEFAULT_TARGET
 except Exception:
     MULTI_SERVER_ENABLED = False
     SERVERS = []
     DEFAULT_SERVER_NAME = None
     SUBCONVERTER_ENABLED = False
     SUBCONVERTER_EXTRA_SERVERS = []
+    SUBCONVERTER_DEFAULT_TARGET = "v2ray"
 
 logger = logging.getLogger(__name__)
 
@@ -41,12 +42,18 @@ def _short_price(price: float) -> str:
 
 
 def _vol_label(gb: int) -> str:
-    return "نامحدود" if int(gb) == 0 else f"{utils.to_persian_digits(str(gb))} گیگ"
+    g = int(gb)
+    return "نامحدود" if g == 0 else f"{utils.to_persian_digits(str(g))} گیگ"
 
 
 def _short_label(p: dict) -> str:
     name = (p.get('name') or 'پلن')[:18]
-    label = f"{name} | {utils.to_persian_digits(str(p.get('days',0)))} روز | {_vol_label(p.get('gb',0))} | {_short_price(p.get('price',0))}"
+    days = int(p.get('days', 0))
+    gb = int(p.get('gb', 0))
+    vol = _vol_label(gb)
+    price_str = _short_price(p.get('price', 0))
+    days_fa = utils.to_persian_digits(str(days))
+    label = f"{name} | {days_fa} روز | {vol} | {price_str}"
     return label[:62] + "…" if len(label) > 63 else label
 
 
@@ -79,6 +86,7 @@ def _pick_extra_servers(primary_name: Optional[str]) -> List[str]:
         cand = DEFAULT_SERVER_NAME or (SERVERS[0].get("name") if SERVERS else None)
         if cand and cand != primary_name: extra = [str(cand)]
     return list(dict.fromkeys(extra))
+
 
 async def buy_service_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -161,7 +169,7 @@ async def _ask_purchase_confirm(update: Update, context: ContextTypes.DEFAULT_TY
     user_id = update.effective_user.id
     plan = db.get_plan(context.user_data.get('buy_plan_id'))
     if not plan:
-        await update.message.reply_text("❌ پلن انتخاب‌شده نامعتبر است.", reply_markup=get_main_menu_keyboard(user_id)); return ConversationHandler.END
+        await update.message.reply_text("❌ پلن نامعتبر است.", reply_markup=get_main_menu_keyboard(user_id)); return ConversationHandler.END
     promo_code = context.user_data.get('buy_promo_code')
     discount, error_msg = _calc_promo_discount(user_id, plan['price'], promo_code)
     final_price = max(0, int(plan['price']) - discount)
@@ -179,8 +187,7 @@ async def _ask_purchase_confirm(update: Update, context: ContextTypes.DEFAULT_TY
 مدت: {utils.to_persian_digits(str(plan['days']))} روز
 حجم: {_vol_label(plan['gb'])}
 {price_line}{server_line}
-با تایید، مبلغ از کیف‌پول شما کسر شده و سرویس بلافاصله ساخته می‌شود.
-ادامه می‌دهید؟""".strip()
+با تایید، مبلغ از کیف‌پول شما کسر شده و سرویس بلافاصله ساخته می‌شود.""".strip()
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ تایید خرید", callback_data="confirmbuy"), InlineKeyboardButton("❌ انصراف", callback_data="cancelbuy")]])
     await update.message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN); return ConversationHandler.END
 
@@ -248,7 +255,7 @@ async def _send_service_info_to_user(context, user_id, new_uuid):
     if user_data:
         # خواندن نوع لینک پیش‌فرض از تنظیمات ادمین
         default_link_type = db.get_setting("default_sub_link_type") or "sub"
-
+        
         base_main = (new_service_record or {}).get('sub_link') or utils.build_subscription_url(new_uuid, server_name=server_name)
         
         sub_url = base_main
@@ -267,6 +274,7 @@ async def _send_service_info_to_user(context, user_id, new_uuid):
         else:
             # اگر Subconverter فعال نیست، نوع لینک پیش‌فرض را به انتهای لینک اضافه کن
             link_endpoint = utils.normalize_link_type(default_link_type)
+            # فقط اگر نوع لینک پیش‌فرض چیزی غیر از 'sub' بود، آن را به انتهای لینک اضافه کن
             if link_endpoint != "sub":
                 sub_url = f"{base_main.rstrip('/')}/{link_endpoint}"
 
