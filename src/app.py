@@ -95,6 +95,8 @@ def build_application():
             constants.CHARGE_MENU: [
                 CallbackQueryHandler(charge_h.show_referral_info_inline, pattern="^acc_referral$"),
                 CallbackQueryHandler(charge_h.charge_start_payment, pattern="^charge_start_payment$"),
+                # دکمه بازگشت از منوی معرفی به منوی شارژ
+                CallbackQueryHandler(charge_h.charge_menu_start, pattern="^charge_menu_main$"),
             ],
             constants.CHARGE_AMOUNT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, charge_h.charge_amount_received),
