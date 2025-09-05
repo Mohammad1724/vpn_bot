@@ -16,7 +16,10 @@ import database as db
 import hiddify_api
 from config import ADMIN_ID
 from bot import utils
-from bot.ui import nav_row, markup, chunk, btn
+# اصلاح ایمپورت: create_service_info_caption جایگزین شد
+from bot.utils import create_service_info_caption, get_service_status
+# اصلاح ایمپورت: confirm_row اضافه شد
+from bot.ui import nav_row, markup, chunk, btn, confirm_row
 
 try:
     from config import SUBCONVERTER_ENABLED, SUBCONVERTER_DEFAULT_TARGET
@@ -332,7 +335,7 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
         for ep in endpoints:
             if ep_uuid := (ep.get("sub_uuid") or "").strip():
                 await hiddify_api.delete_user_from_panel(ep_uuid, server_name=ep.get("server_name"))
-        db.delete_service(service_id) # cascading delete will handle endpoints
+        db.delete_service(service_id)
 
         await q.edit_message_text("✅ سرویس با موفقیت از پنل و ربات حذف شد.")
         kb = markup([nav_row(back_cb="back_to_services", home_cb="home_menu")])
