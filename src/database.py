@@ -91,6 +91,7 @@ def _remove_device_limit_alert_column_if_exists(conn: sqlite3.Connection):
     except Exception as e:
         logger.warning(f"Couldn't remove device_limit_alert_sent column: {e}")
 
+
 # ---------- Ensure/repair nodes schema (handles older tables without id) ----------
 def _ensure_nodes_schema(conn: sqlite3.Connection):
     cur = conn.cursor()
@@ -666,7 +667,6 @@ def finalize_purchase_transaction(transaction_id: int, sub_uuid: str, sub_link: 
         # به‌روزرسانی وضعیت تراکنش
         cursor.execute("UPDATE transactions SET status = 'completed', updated_at = ? WHERE transaction_id = ?", (now_str, transaction_id))
 
-        # ثبت تغییرات
         conn.commit()
         logger.info(f"Purchase transaction {transaction_id} successfully finalized")
 
