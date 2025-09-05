@@ -11,6 +11,7 @@ import database as db
 from bot import utils
 from bot.constants import ADMIN_MENU, AWAIT_SETTING_VALUE, ADMIN_SETTINGS_MENU
 from bot.keyboards import get_admin_menu_keyboard
+from bot.ui import nav_row, chunk, btn  # UI helpers
 
 # Optional multi-server/usage configs (for display-only defaults)
 try:
@@ -92,7 +93,7 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("⚙️ تنظیمات سرویس", callback_data="settings_service_configs")],
         [InlineKeyboardButton("🌐 چندنودی و مصرف", callback_data="settings_multi_server_usage")],
         [InlineKeyboardButton("📊 گزارش‌ها و یادآورها", callback_data="settings_reports_reminders")],
-        [InlineKeyboardButton("🔙 بازگشت به پنل ادمین", callback_data="admin_back_to_menu")]
+        [nav_row(back_cb="admin_back_to_menu", home_cb="home_menu")[0]] # just back button
     ])
     await _send_or_edit(update, context, text, keyboard, parse_mode=ParseMode.MARKDOWN)
     return ADMIN_SETTINGS_MENU
@@ -214,26 +215,43 @@ async def multi_server_usage_submenu(update: Update, context: ContextTypes.DEFAU
     interval_min = _get("usage_update_interval_min", str(USAGE_UPDATE_INTERVAL_MIN))
 
     # display-only info from config.py
-    nodes_on = "فعال ✅" if MULTI_SERVER_ENABLED else "غیرفعال ❌"
-    nodes_count = len(SERVERS) if isinstance(SERVERS, list) else 0
-    default_node = DEFAULT_SERVER_NAME or (SERVERS[0].get("name") if nodes_count else "-")
+    nodes_on_cfg = "فعال ✅" if MULTI_SERVER_ENABLED else "غیرفعال ❌"
+    nodes_count_cfg = len(SERVERS) if isinstance(SERVERS, list) else 0
+    default_node = DEFAULT_SERVER_NAME or (SERVERS[0].get("name") if nodes_count_cfg else "-")
+    try:
+        nodes_db_count = len(db.list_nodes() or [])
+    except Exception:
+        nodes_db_count = 0
+
+    # Node health-check settings (DB-driven)
+    nodes_h_on = "فعال ✅" if _get_bool("nodes_health_enabled", True) else "غیرفعال ❌"
+    nodes_h_interval = _get("nodes_health_interval_min", "10")
+    auto_disable_after = _get("nodes_auto_disable_after_fails", "3")
+
+    policy = str(SERVER_SELECTION_POLICY or "first")
 
     text = (
         f"**🌐 چندنودی و مصرف**\n\n"
-        f"- وضعیت چندنودی (config.py): {nodes_on}\n"
-        f"- تعداد نودها (config): {nodes_count}\n"
+        f"- وضعیت چندنودی (config.py): {nodes_on_cfg}\n"
+        f"- تعداد نودها (config): {nodes_count_cfg}\n"
+        f"- تعداد نودها (DB): {nodes_db_count}\n"
         f"- نود پیش‌فرض: {default_node}\n"
-        f"- سیاست انتخاب نود: {SERVER_SELECTION_POLICY}\n\n"
+        f"- سیاست انتخاب نود: {policy}\n\n"
         f"- تجمیع مصرف بین نودها: {usage_agg_on}\n"
         f"- بازه به‌روزرسانی مصرف: {interval_min} دقیقه\n\n"
+        f"- Health-check نودها: {nodes_h_on}\n"
+        f"- بازه Health-check: {nodes_h_interval} دقیقه\n"
+        f"- تعداد خطای متوالی تا غیرفعال‌سازی خودکار: {auto_disable_after}\n\n"
         f"_مدیریت نودها از پنل ادمین > «🖥️ مدیریت نودها» انجام می‌شود._"
     )
     kb = _kb([
         [InlineKeyboardButton("تغییر وضعیت تجمیع مصرف", callback_data="toggle_usage_aggregation")],
         [_admin_edit_btn("✍️ بازه به‌روزرسانی (دقیقه)", "usage_update_interval_min")],
+        [InlineKeyboardButton("تغییر وضعیت Health-Check نودها", callback_data="toggle_report_nodes_health_enabled")],
+        [_admin_edit_btn("✍️ بازه Health-Check (دقیقه)", "nodes_health_interval_min"),
+         _admin_edit_btn("✍️ تعداد خطا تا غیرفعال‌سازی", "nodes_auto_disable_after_fails")],
         [_back_to_settings_btn()]
     ])
-    # نکته: به‌صورت صریح parse_mode=None تا از مشکلات Markdown (underscore) جلوگیری شود.
     await _send_or_edit(update, context, text, kb, parse_mode=None); return ADMIN_SETTINGS_MENU
 
 # --- Edit Logic ---
@@ -250,7 +268,7 @@ def _infer_return_target(key: str) -> str:
         return "maintenance_join"
     if key in ("expiry_reminder_days", "expiry_reminder_min_remaining_gb"):
         return "reports_reminders"
-    if key in ("usage_update_interval_min",):
+    if key in ("usage_update_interval_min", "nodes_health_interval_min", "nodes_auto_disable_after_fails"):
         return "multi_server_usage"
     return "settings_root"
 
@@ -268,8 +286,8 @@ async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
         tip = "\n(دامنه‌ها را با کاما جدا کنید)"
     elif key == "first_charge_expires_at":
         tip = "\n(فرمت: 2025-12-31T23:59:59+03:30)"
-    elif key == "usage_update_interval_min":
-        tip = "\n(یک عدد صحیح بر حسب دقیقه وارد کنید)"
+    elif key in ("usage_update_interval_min", "nodes_health_interval_min", "nodes_auto_disable_after_fails"):
+        tip = "\n(یک عدد صحیح مثبت وارد کنید)"
 
     text = f"✍️ مقدار جدید برای **{key}** را ارسال کنید.{tip}\n/cancel برای انصراف\n\n**مقدار فعلی:**\n`{cur}`"
 
@@ -294,15 +312,15 @@ async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_T
     if val == "-":
         val = ""
 
-    # Optional: simple validation for usage interval
-    if key == "usage_update_interval_min":
+    # Validation
+    if key in ("usage_update_interval_min", "nodes_health_interval_min", "nodes_auto_disable_after_fails"):
         try:
             intval = int(float(val))
             if intval <= 0:
                 raise ValueError()
             val = str(intval)
         except Exception:
-            await update.message.reply_text("❌ مقدار نامعتبر است. یک عدد صحیح مثبت (دقیقه) وارد کنید.")
+            await update.message.reply_text("❌ مقدار نامعتبر است. یک عدد صحیح مثبت وارد کنید.")
             return AWAIT_SETTING_VALUE
 
     db.set_setting(key, val)
@@ -345,6 +363,11 @@ async def toggle_report_setting(update: Update, context: ContextTypes.DEFAULT_TY
     q = getattr(update, "callback_query", None)
     key = (q.data if q else "").replace("toggle_report_", "").strip()
     _toggle(key)
+    # Return to appropriate submenu
+    if key in ("report_daily_enabled", "report_weekly_enabled"):
+        return await reports_and_reminders_submenu(update, context)
+    if key in ("nodes_health_enabled",):
+        return await multi_server_usage_submenu(update, context)
     return await reports_and_reminders_submenu(update, context)
 
 async def edit_default_link_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -383,9 +406,11 @@ async def back_to_admin_menu_cb(update: Update, context: ContextTypes.DEFAULT_TY
     if q:
         await q.answer()
         try:
-            await q.edit_message_text("🔙 بازگشت به منوی مدیریت", reply_markup=get_admin_menu_keyboard())
-        except BadRequest:
-            await context.bot.send_message(chat_id=q.from_user.id, text="🔙 بازگشت به منوی مدیریت", reply_markup=get_admin_menu_keyboard())
+            # پاک کردن پیام اینلاین و ارسال کیبورد اصلی
+            await q.message.delete()
+        except Exception:
+            pass
+        await context.bot.send_message(chat_id=q.from_user.id, text="🔙 بازگشت به منوی مدیریت", reply_markup=get_admin_menu_keyboard())
     else:
         await update.effective_message.reply_text("🔙 بازگشت به منوی مدیریت", reply_markup=get_admin_menu_keyboard())
     return ConversationHandler.END
