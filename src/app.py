@@ -86,7 +86,7 @@ def build_application():
         per_user=True, per_chat=True
     )
 
-    charge_conv = ConversationHandler(
+        charge_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(r'^💳 شارژ حساب$') & user_filter, check_channel_membership(charge_h.charge_menu_start)),
             CallbackQueryHandler(check_channel_membership(charge_h.charge_menu_start), pattern='^user_start_charge$'),
@@ -98,9 +98,13 @@ def build_application():
                 CallbackQueryHandler(charge_h.charge_menu_start, pattern="^charge_menu_main$"),
             ],
             constants.CHARGE_AMOUNT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, charge_h.charge_amount_received),
                 CallbackQueryHandler(charge_h.charge_amount_confirm_cb, pattern="^charge_amount_\d+$"),
+                CallbackQueryHandler(charge_h.ask_custom_amount, pattern="^charge_custom_amount$"),
                 CallbackQueryHandler(charge_h.charge_menu_start, pattern="^charge_menu_main$"),
+            ],
+            constants.AWAIT_CUSTOM_AMOUNT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, charge_h.charge_amount_received),
+                CallbackQueryHandler(charge_h.charge_start_payment, pattern="^charge_start_payment_back$"),
             ],
             constants.CHARGE_RECEIPT: [MessageHandler(filters.PHOTO, charge_h.charge_receipt_received)],
         },
@@ -109,7 +113,7 @@ def build_application():
             CallbackQueryHandler(start_h.start, pattern="^home_menu$"),
         ],
         per_user=True, per_chat=True
-    )
+        )
 
     transfer_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(check_channel_membership(acc_act.transfer_start), pattern="^acc_transfer_start$")],
