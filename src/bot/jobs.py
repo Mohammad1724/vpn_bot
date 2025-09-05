@@ -244,7 +244,7 @@ async def update_user_usage_snapshot(context: ContextTypes.DEFAULT_TYPE):
         coros = [fetch_usage(uid, srv, uuid) for (uid, srv, uuid) in tasks_data]
         results = await asyncio.gather(*coros, return_exceptions=False)
 
-        # Aggregate per (user_id, server_name)
+        # Aggregate per (user_id, server_name) and collect seen servers per user
         agg = defaultdict(float)
         seen_servers_by_user = defaultdict(set)
         for r in results:
