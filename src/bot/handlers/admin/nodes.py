@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-from typing import Dict, Any, Tuple, List
+from typing import Dict, Any, Tuple
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, ConversationHandler
 import database as db
 import hiddify_api
+from bot.ui import nav_row, confirm_row, chunk, btn, markup
 
 # States
 NODES_MENU, ADD_NAME, ADD_PANEL_DOMAIN, ADD_ADMIN_PATH, ADD_SUB_PATH, ADD_API_KEY, ADD_SUB_DOMAINS, ADD_CAPACITY, ADD_LOCATION, ADD_CONFIRM, \
@@ -12,11 +13,12 @@ NODE_DETAILS, EDIT_FIELD_PICK, EDIT_FIELD_VALUE, DELETE_CONFIRM = range(14)
 
 # ========== Helpers ==========
 def _nodes_menu_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ افزودن نود جدید", callback_data="admin_add_node")],
-        [InlineKeyboardButton("📜 لیست نودها", callback_data="admin_list_nodes")],
-        [InlineKeyboardButton("⬅️ بازگشت", callback_data="admin_back_to_menu")],
-    ])
+    rows = [
+        [btn("➕ افزودن نود جدید", "admin_add_node")],
+        [btn("📜 لیست نودها", "admin_list_nodes")],
+        nav_row(back_cb="admin_back_to_menu", home_cb="home_menu")
+    ]
+    return markup(rows)
 
 
 def _sum_server_usage(server_name: str) -> Tuple[float, int]:
@@ -27,8 +29,7 @@ def _sum_server_usage(server_name: str) -> Tuple[float, int]:
     total = 0.0
     cnt = 0
     try:
-        # استفاده از اتصال داخلی دیتابیس (read-only)
-        conn = db._connect_db()  # noqa: SLF001 (استفاده از تابع داخلی در همین پروژه)
+        conn = db._connect_db()
         cur = conn.cursor()
         cur.execute("SELECT SUM(traffic_used) as total, COUNT(*) as cnt FROM user_traffic WHERE server_name = ?", (server_name,))
         row = cur.fetchone()
@@ -44,21 +45,19 @@ def _node_row_buttons(n: Dict[str, Any]) -> list:
     node_id = n["id"]
     status_icon = "🟢" if n.get("is_active") else "🔴"
     return [
-        InlineKeyboardButton(f"{status_icon} {n.get('name')}", callback_data=f"admin_node_{node_id}"),
-        InlineKeyboardButton("🗑️ حذف", callback_data=f"admin_delete_node_{node_id}")
+        btn(f"{status_icon} {n.get('name')}", f"admin_node_{node_id}"),
+        btn("🗑️ حذف", f"admin_delete_node_{node_id}")
     ]
 
 
 def _node_details_kb(n_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔁 فعال/غیرفعال", callback_data=f"admin_toggle_node_{n_id}")],
-        [InlineKeyboardButton("✏️ ویرایش", callback_data=f"admin_edit_node_{n_id}"),
-         InlineKeyboardButton("🔌 تست اتصال", callback_data=f"admin_node_ping_{n_id}")],
-        [InlineKeyboardButton("🔄 بروزرسانی شمار کاربران", callback_data=f"admin_node_update_count_{n_id}"),
-         InlineKeyboardButton("📊 مصرف این نود", callback_data=f"admin_node_usage_{n_id}")],
-        [InlineKeyboardButton("🗑️ حذف", callback_data=f"admin_delete_node_{n_id}")],
-        [InlineKeyboardButton("⬅️ لیست نودها", callback_data="admin_list_nodes"),
-         InlineKeyboardButton("🏠 منوی نودها", callback_data="admin_nodes")],
+    return markup([
+        [btn("🔁 فعال/غیرفعال", f"admin_toggle_node_{n_id}")],
+        [btn("✏️ ویرایش", f"admin_edit_node_{n_id}"), btn("🔌 تست اتصال", f"admin_node_ping_{n_id}")],
+        [btn("🔄 بروزرسانی شمار کاربران", f"admin_node_update_count_{n_id}"),
+         btn("📊 مصرف این نود", f"admin_node_usage_{n_id}")],
+        [btn("🗑️ حذف", f"admin_delete_node_{n_id}")],
+        nav_row(back_cb="admin_list_nodes", home_cb="home_menu")
     ])
 
 
@@ -145,7 +144,7 @@ async def add_get_capacity(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text("عدد معتبر وارد کنید:")
         return ADD_CAPACITY
     context.user_data["node_add"]["capacity"] = int(txt)
-    await update.message.reply_text("محل/لوکیشن نود را وارد کنید (مثلا DE یا Germany). اگر نمی‌خواهید: خالی بفرستید")
+    await update.message.reply_text("محل/لوکیشن نود را وارد کنید (مثال: DE یا Germany). اگر نمی‌خواهید: خالی بفرستید")
     return ADD_LOCATION
 
 
@@ -166,10 +165,7 @@ async def _add_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         f"- موقعیت: {nd.get('location') or '-'}\n"
         f"- sub_domains: {', '.join(nd.get('sub_domains') or []) or '-'}\n"
     )
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ تایید", callback_data="node_add_confirm"),
-         InlineKeyboardButton("❌ انصراف", callback_data="node_add_cancel")]
-    ])
+    kb = markup([confirm_row(yes_cb="node_add_confirm", no_cb="node_add_cancel")])
     await update.message.reply_text(text, reply_markup=kb)
     return ADD_CONFIRM
 
@@ -190,9 +186,9 @@ async def add_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             location=nd.get("location"),
             is_active=True
         )
-        await update.callback_query.edit_message_text(f"✅ نود «{nd['name']}» اضافه شد.")
+        await update.callback_query.edit_message_text(f"✅ نود «{nd['name']}» اضافه شد.", reply_markup=_nodes_menu_kb())
     except Exception as e:
-        await update.callback_query.edit_message_text(f"❌ خطا در ذخیره نود: {e}")
+        await update.callback_query.edit_message_text(f"❌ خطا در ذخیره نود: {e}", reply_markup=_nodes_menu_kb())
     context.user_data.pop("node_add", None)
     return ConversationHandler.END
 
@@ -200,7 +196,7 @@ async def add_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 async def add_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.callback_query:
         await update.callback_query.answer()
-        await update.callback_query.edit_message_text("عملیات افزودن نود لغو شد.")
+        await update.callback_query.edit_message_text("عملیات افزودن نود لغو شد.", reply_markup=_nodes_menu_kb())
     return ConversationHandler.END
 
 
@@ -210,13 +206,13 @@ async def list_nodes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.callback_query.answer()
     nodes = db.list_nodes()  # dicts with id, name, ...
     if not nodes:
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ بازگشت", callback_data="admin_nodes")]])
+        kb = markup([nav_row(back_cb="admin_nodes", home_cb="home_menu")])
         await update.callback_query.edit_message_text("هیچ نودی ثبت نشده است.", reply_markup=kb)
         return NODES_MENU
 
-    rows = [[*_node_row_buttons(n)] for n in nodes]
-    rows.append([InlineKeyboardButton("⬅️ بازگشت", callback_data="admin_nodes")])
-    kb = InlineKeyboardMarkup(rows)
+    rows = [_node_row_buttons(n) for n in nodes]
+    rows.append(nav_row(back_cb="admin_nodes", home_cb="home_menu"))
+    kb = markup(rows)
     await update.callback_query.edit_message_text("لیست نودها:", reply_markup=kb)
     return NODE_DETAILS
 
@@ -229,7 +225,6 @@ async def node_details(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         await update.callback_query.edit_message_text("نود پیدا نشد.")
         return NODES_MENU
 
-    # مصرف snapshot (از جدول user_traffic)
     total_gb, users_cnt = _sum_server_usage(n["name"])
     total_gb_str = f"{total_gb:.2f} GB" if total_gb > 0 else "0 GB"
 
@@ -257,9 +252,7 @@ async def toggle_node_active(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.callback_query.edit_message_text("نود پیدا نشد.")
         return NODES_MENU
     db.update_node(node_id, {"is_active": 0 if n["is_active"] else 1})
-    # refresh
-    fake = type("obj", (), {"data": f"admin_node_{node_id}"})
-    update.callback_query = fake
+    update.callback_query.data = f"admin_node_{node_id}"
     return await node_details(update, context)
 
 
@@ -273,9 +266,7 @@ async def ping_node(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     ok = await hiddify_api.check_api_connection(server_name=n["name"])
     status = "موفق ✅" if ok else "ناموفق ❌"
     await update.callback_query.answer(f"تست اتصال: {status}", show_alert=True)
-    # refresh
-    fake = type("obj", (), {"data": f"admin_node_{node_id}"})
-    update.callback_query = fake
+    update.callback_query.data = f"admin_node_{node_id}"
     return await node_details(update, context)
 
 
@@ -295,9 +286,7 @@ async def update_node_usercount(update: Update, context: ContextTypes.DEFAULT_TY
         await update.callback_query.answer(f"به‌روزرسانی شمار کاربران: {cnt}", show_alert=True)
     except Exception:
         await update.callback_query.answer("خطا در بروزرسانی شمار کاربران", show_alert=True)
-    # refresh
-    fake = type("obj", (), {"data": f"admin_node_{node_id}"})
-    update.callback_query = fake
+    update.callback_query.data = f"admin_node_{node_id}"
     return await node_details(update, context)
 
 
@@ -328,17 +317,19 @@ async def edit_node_start(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await update.callback_query.answer()
     node_id = int(update.callback_query.data.split("_")[-1])
     context.user_data["edit_node_id"] = node_id
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("نام", callback_data=f"admin_edit_field_name_{node_id}"),
-         InlineKeyboardButton("دامنه پنل", callback_data=f"admin_edit_field_panel_domain_{node_id}")],
-        [InlineKeyboardButton("admin_path", callback_data=f"admin_edit_field_admin_path_{node_id}"),
-         InlineKeyboardButton("sub_path", callback_data=f"admin_edit_field_sub_path_{node_id}")],
-        [InlineKeyboardButton("API Key", callback_data=f"admin_edit_field_api_key_{node_id}"),
-         InlineKeyboardButton("ظرفیت", callback_data=f"admin_edit_field_capacity_{node_id}")],
-        [InlineKeyboardButton("sub_domains", callback_data=f"admin_edit_field_sub_domains_{node_id}"),
-         InlineKeyboardButton("موقعیت", callback_data=f"admin_edit_field_location_{node_id}")],
-        [InlineKeyboardButton("⬅️ بازگشت", callback_data=f"admin_node_{node_id}")]
-    ])
+    buttons = [
+        btn("نام", f"admin_edit_field_name_{node_id}"),
+        btn("دامنه پنل", f"admin_edit_field_panel_domain_{node_id}"),
+        btn("admin_path", f"admin_edit_field_admin_path_{node_id}"),
+        btn("sub_path", f"admin_edit_field_sub_path_{node_id}"),
+        btn("API Key", f"admin_edit_field_api_key_{node_id}"),
+        btn("ظرفیت", f"admin_edit_field_capacity_{node_id}"),
+        btn("sub_domains", f"admin_edit_field_sub_domains_{node_id}"),
+        btn("موقعیت", f"admin_edit_field_location_{node_id}"),
+    ]
+    rows = chunk(buttons, cols=2)
+    rows.append(nav_row(back_cb=f"admin_node_{node_id}", home_cb="home_menu"))
+    kb = markup(rows)
     await update.callback_query.edit_message_text("کدام فیلد را ویرایش می‌کنید؟", reply_markup=kb)
     return EDIT_FIELD_PICK
 
@@ -385,9 +376,7 @@ async def edit_field_value_received(update: Update, context: ContextTypes.DEFAUL
 
     db.update_node(node_id, {field: value})
     await update.message.reply_text("✅ تغییرات اعمال شد.")
-    # بازگشت به جزئیات
-    fake = type("obj", (), {"data": f"admin_node_{node_id}"})
-    update.callback_query = fake
+    update.callback_query = type("obj", (), {"data": f"admin_node_{node_id}"})
     return await node_details(update, context)
 
 
@@ -399,10 +388,7 @@ async def delete_node_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not n:
         await update.callback_query.edit_message_text("نود پیدا نشد.")
         return NODES_MENU
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ بله حذف کن", callback_data=f"admin_delete_node_yes_{node_id}"),
-         InlineKeyboardButton("خیر", callback_data=f"admin_node_{node_id}")]
-    ])
+    kb = markup([confirm_row(yes_cb=f"admin_delete_node_yes_{node_id}", no_cb=f"admin_node_{node_id}")])
     await update.callback_query.edit_message_text(f"آیا از حذف «{n['name']}» مطمئن هستید؟", reply_markup=kb)
     return DELETE_CONFIRM
 
@@ -411,7 +397,7 @@ async def delete_node_execute(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.callback_query.answer()
     node_id = int(update.callback_query.data.split("_")[-1])
     db.delete_node(node_id)
-    await update.callback_query.edit_message_text("✅ نود حذف شد.")
+    await update.callback_query.edit_message_text("✅ نود حذف شد.", reply_markup=_nodes_menu_kb())
     return ConversationHandler.END
 
 
