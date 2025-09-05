@@ -88,25 +88,26 @@ def build_application():
 
     charge_conv = ConversationHandler(
         entry_points=[
-            CallbackQueryHandler(check_channel_membership(charge_h.charge_start_payment), pattern='^charge_start_payment$'),
+            # ورود از منوی اصلی
+            MessageHandler(filters.Regex(r'^💳 شارژ حساب$') & user_filter, check_channel_membership(charge_h.charge_menu_start)),
+            # ورود از منوی اطلاعات حساب
+            CallbackQueryHandler(check_channel_membership(charge_h.charge_menu_start), pattern='^user_start_charge$'),
         ],
         states={
+            constants.CHARGE_MENU: [
+                CallbackQueryHandler(charge_h.show_referral_info_inline, pattern="^acc_referral$"),
+                CallbackQueryHandler(charge_h.charge_start_payment, pattern="^charge_start_payment$"),
+            ],
             constants.CHARGE_AMOUNT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, charge_h.charge_amount_received),
                 CallbackQueryHandler(charge_h.charge_amount_confirm_cb, pattern="^charge_amount_\d+$"),
+                CallbackQueryHandler(charge_h.charge_menu_start, pattern="^charge_menu_main$"), # دکمه بازگشت
             ],
             constants.CHARGE_RECEIPT: [MessageHandler(filters.PHOTO, charge_h.charge_receipt_received)],
         },
         fallbacks=[
-            CommandHandler('cancel', start_h.user_generic_cancel),
-            MessageHandler(filters.Regex('^🛍️ خرید سرویس$'), buy_h.buy_service_list),
-            MessageHandler(filters.Regex('^📋 سرویس‌های من$'), us_h.list_my_services),
-            MessageHandler(filters.Regex('^👤 اطلاعات حساب کاربری$'), start_h.show_account_info),
-            MessageHandler(filters.Regex('^📚 راهنما$'), start_h.show_guide),
-            MessageHandler(filters.Regex('^🧪 سرویس تست$'), trial_get_trial_service),
-            MessageHandler(filters.Regex('^🎁 کد هدیه$'), gift_h.gift_code_entry),
-            MessageHandler(filters.Regex('^📞 پشتیبانی$'), support_h.support_ticket_start),
-            CallbackQueryHandler(charge_h.charge_menu_start, pattern="^charge_menu_main$")
+            CommandHandler('cancel', charge_h.charge_cancel),
+            CallbackQueryHandler(charge_h.charge_cancel, pattern="^home_menu$"),
         ],
         per_user=True, per_chat=True
     )
@@ -341,7 +342,6 @@ def build_application():
                 MessageHandler(filters.Regex('^👥 مدیریت کاربران$') & admin_filter, admin_users.user_management_menu),
                 MessageHandler(filters.Regex('^🎁 مدیریت کد هدیه$') & admin_filter, admin_gift.gift_code_management_menu),
                 MessageHandler(filters.Regex('^🛑 خاموش کردن ربات$') & admin_filter, admin_c.shutdown_bot),
-
                 CallbackQueryHandler(admin_plans.plan_management_menu, pattern="^admin_plans$"),
                 CallbackQueryHandler(admin_reports.reports_menu, pattern="^admin_reports$"),
                 CallbackQueryHandler(admin_backup.backup_restore_menu, pattern="^admin_backup$"),
@@ -349,7 +349,6 @@ def build_application():
                 CallbackQueryHandler(admin_gift.gift_code_management_menu, pattern="^admin_gift$"),
                 CallbackQueryHandler(admin_c.shutdown_bot, pattern="^admin_shutdown$"),
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
-
                 nodes_conv,
                 admin_settings_conv,
                 broadcast_conv,
@@ -452,7 +451,6 @@ def build_application():
     application.add_handler(CallbackQueryHandler(support_h.close_ticket, pattern="^close_ticket_"))
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern="^check_membership$"))
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern="^home_menu$"))
-    application.add_handler(CallbackQueryHandler(charge_h.show_referral_info_inline, pattern="^acc_referral$"))
 
     application.add_handler(CallbackQueryHandler(usage_h.show_usage_menu, pattern="^acc_usage$"))
     application.add_handler(CallbackQueryHandler(usage_h.show_usage_menu, pattern="^acc_usage_refresh$"))
@@ -497,7 +495,6 @@ def build_application():
     for h in plan_category_handlers:
         application.add_handler(h)
 
-    # 핸들러 اصلی: شارژ منوی اصلی و دیگر دکمه‌های سطح بالا
     main_menu_handlers = [
         CommandHandler("start", check_channel_membership(start_h.start)),
         MessageHandler(filters.Regex('^🛍️ خرید سرویس$'), check_channel_membership(buy_h.buy_service_list)),
@@ -507,10 +504,8 @@ def build_application():
         MessageHandler(filters.Regex('^🧪 سرویس تست$'), check_channel_membership(trial_get_trial_service)),
         MessageHandler(filters.Regex('^📞 پشتیبانی$'), check_channel_membership(support_h.support_ticket_start)),
         MessageHandler(filters.Regex('^🎁 کد هدیه$'), check_channel_membership(gift_h.gift_code_entry)),
-        # هندلر شارژ منوی اصلی (که به Conversation وارد نمی‌شود)
-        MessageHandler(filters.Regex('^💳 شارژ حساب$'), check_channel_membership(charge_h.charge_menu_start)),
     ]
     for h in main_menu_handlers:
-        application.add_handler(h)
+        application.add_handler(h, group=1) # priority 1
 
     return application
