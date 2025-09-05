@@ -33,8 +33,9 @@ escape_sed() { echo "$1" | sed -e 's/[\/&]/\\&/g'; }
 
 ensure_deps() {
   print_color yellow "Installing system dependencies (python3, venv, git, sqlite3)..."
-  apt-get update -y >/dev/null 2>&1 || true
-  apt-get install -y python3 python3-pip python3-venv curl git sqlite3 >/dev/null 2>&1 || true
+  # خروجی نمایش داده می‌شود تا کاربر پیشرفت را ببیند
+  apt-get update -y || print_color red "apt-get update failed."
+  apt-get install -y python3 python3-pip python3-venv curl git sqlite3 || print_color red "apt-get install failed."
 }
 
 load_conf() {
@@ -102,7 +103,6 @@ deactivate_venv() {
 }
 
 ensure_install_dir_vars() {
-  # از مقدار قبلی (load_conf) اگر وجود داشته باشد استفاده شود
   GITHUB_REPO="${GITHUB_REPO:-$DEFAULT_GITHUB_REPO}"
   print_color yellow "Using repository: ${GITHUB_REPO}"
   local DEFAULT_INSTALL_DIR="/opt/vpn-bot"
@@ -129,17 +129,15 @@ configure_config_py() {
   fi
   cp "$TEMPLATE_FILE" "$CONFIG_FILE"
 
-  # Bot Token
   while true; do
     read -rp "Telegram Bot Token: " BOT_TOKEN
     if validate_telegram_token "$BOT_TOKEN"; then
       break
     else
-      print_color yellow "Invalid bot token format. Example: 123456789:ABCDefGhIJKlmNoPQRsTUVwxyZ"
+      print_color yellow "Invalid bot token format."
     fi
   done
 
-  # Admin ID
   while true; do
     read -rp "Telegram Admin ID (numeric): " ADMIN_ID
     if validate_numeric_id "$ADMIN_ID"; then
@@ -156,7 +154,7 @@ configure_config_py() {
   read -rp "Support username (without @): " SUPPORT_USERNAME
 
   echo
-  print_color yellow "Enter subscription domains comma-separated (or leave empty to use PANEL_DOMAIN):"
+  print_color yellow "Enter subscription domains comma-separated (or leave empty):"
   read -rp "Subscription Domains: " SUB_DOMAINS_INPUT
   local PYTHON_LIST_FORMAT="[]"
   if [ -n "$SUB_DOMAINS_INPUT" ]; then
@@ -190,7 +188,6 @@ configure_config_py() {
   read -rp "Low-usage alert threshold (0.0 - 1.0) [0.8]: " USAGE_ALERT_INPUT
   local USAGE_ALERT_THRESHOLD="${USAGE_ALERT_INPUT:-0.8}"
 
-  # Escape values for sed
   local BOT_TOKEN_E; BOT_TOKEN_E=$(escape_sed "$BOT_TOKEN")
   local PANEL_DOMAIN_E; PANEL_DOMAIN_E=$(escape_sed "$PANEL_DOMAIN")
   local ADMIN_PATH_E; ADMIN_PATH_E=$(escape_sed "$ADMIN_PATH")
@@ -213,7 +210,6 @@ configure_config_py() {
   sed -i "s|^EXPIRY_REMINDER_DAYS = .*|EXPIRY_REMINDER_DAYS = ${EXPIRY_REMINDER_DAYS}|" "$CONFIG_FILE"
   sed -i "s|^USAGE_ALERT_THRESHOLD = .*|USAGE_ALERT_THRESHOLD = ${USAGE_ALERT_THRESHOLD}|" "$CONFIG_FILE"
 
-  # ---------------- Subconverter (Unified link) ----------------
   echo
   print_color blue "--- Subconverter (Unified Link) ---"
   read -rp "Enable Subconverter unified link? [y/N]: " EN_SUB
@@ -229,7 +225,7 @@ configure_config_py() {
     SUBCONVERTER_URL_VAL="${SUBC_URL_IN:-http://127.0.0.1:25500}"
     read -rp "Default target (v2ray|clash|clashmeta|singbox) [v2ray]: " SUBC_TGT_IN
     SUBCONVERTER_DEFAULT_TARGET_VAL="${SUBC_TGT_IN:-v2ray}"
-    echo "Enter extra server names to include in unified link (comma-separated), e.g., Main,Node-2"
+    echo "Enter extra server names to include in unified link (comma-separated):"
     read -rp "Extra servers: " SUBC_EXTRA_IN
     if [ -n "$SUBC_EXTRA_IN" ]; then
       SUBCONVERTER_EXTRA_SERVERS_VAL="[\"$(echo "$SUBC_EXTRA_IN" | sed 's/,/\", \"/g')\"]"
@@ -239,15 +235,12 @@ configure_config_py() {
   local SUBC_URL_E; SUBC_URL_E=$(escape_sed "$SUBCONVERTER_URL_VAL")
   local SUBC_TGT_E; SUBC_TGT_E=$(escape_sed "$SUBCONVERTER_DEFAULT_TARGET_VAL")
 
-  # These keys exist in template; replace them
   sed -i "s|^SUBCONVERTER_ENABLED = .*|SUBCONVERTER_ENABLED = ${SUBCONVERTER_ENABLED_VAL}|" "$CONFIG_FILE"
   sed -i "s|^SUBCONVERTER_URL = .*|SUBCONVERTER_URL = \"${SUBC_URL_E}\"|" "$CONFIG_FILE"
   sed -i "s|^SUBCONVERTER_DEFAULT_TARGET = .*|SUBCONVERTER_DEFAULT_TARGET = \"${SUBC_TGT_E}\"|" "$CONFIG_FILE"
   sed -i "s|^SUBCONVERTER_EXTRA_SERVERS = .*|SUBCONVERTER_EXTRA_SERVERS = ${SUBCONVERTER_EXTRA_SERVERS_VAL}|" "$CONFIG_FILE"
 
-  # Permissions
   chmod 640 "$CONFIG_FILE" || true
-
   print_color green "config.py created/updated successfully."
 }
 
@@ -264,7 +257,6 @@ append_missing_keys_if_any() {
   if ! grep -q '^USAGE_ALERT_THRESHOLD' "$CONFIG_FILE"; then
     echo 'USAGE_ALERT_THRESHOLD = 0.8' >> "$CONFIG_FILE"; changed=1
   fi
-  # Subconverter defaults (if template older / keys missing)
   if ! grep -q '^SUBCONVERTER_ENABLED' "$CONFIG_FILE"; then
     cat >> "$CONFIG_FILE" <<'EOF'
 SUBCONVERTER_ENABLED = False
@@ -279,30 +271,17 @@ EOF
   fi
 }
 
-# اگر config.py وجود نداشت یا شامل مقادیر پیش‌فرض/ناقص بود، باید تنظیم شود
 needs_config_setup() {
   local CONFIG_FILE="${INSTALL_DIR}/src/config.py"
-  # فایل وجود ندارد؟
   [ -f "$CONFIG_FILE" ] || return 0
-
-  # مقادیر پیش‌فرض/پلیس‌هولدر
-  if grep -qE 'YOUR_BOT_TOKEN_HERE|your_panel_domain\.com|your_hiddify_api_key_here|your_support_username|your_subscription_secret_path' "$CONFIG_FILE"; then
-    return 0
-  fi
-
-  # شناسه مثال
-  if grep -qE '^\s*ADMIN_ID\s*=\s*123456789\b' "$CONFIG_FILE"; then
-    return 0
-  fi
-
+  if grep -qE 'YOUR_BOT_TOKEN_HERE|your_panel_domain\.com' "$CONFIG_FILE"; then return 0; fi
+  if grep -qE '^\s*ADMIN_ID\s*=\s*123456789\b' "$CONFIG_FILE"; then return 0; fi
   return 1
 }
 
 install_subconverter_docker() {
-  # Install & run Subconverter via Docker (optional helper)
   local URL="$1"
-  local PORT
-  PORT="$(echo "$URL" | sed -n 's/.*:KATEX_INLINE_OPEN[0-9]\{2,5\}KATEX_INLINE_CLOSE.*/\1/p')"
+  local PORT; PORT="$(echo "$URL" | sed -n 's/.*:KATEX_INLINE_OPEN[0-9]\{2,5\}KATEX_INLINE_CLOSE.*/\1/p')"
   [ -n "$PORT" ] || PORT="25500"
 
   print_color yellow "Preparing Docker for Subconverter (port ${PORT})..."
@@ -326,25 +305,20 @@ install_or_reinstall() {
   ensure_deps
   ensure_install_dir_vars
 
-  local PREV_EXISTS=0
-  if [ -d "$INSTALL_DIR" ]; then
-    PREV_EXISTS=1
-  fi
-
-  local BACKUP_DIR=""
-  local REUSE_CONFIG="N"
+  local PREV_EXISTS=0; [ -d "$INSTALL_DIR" ] && PREV_EXISTS=1
+  local BACKUP_DIR=""; local REUSE_CONFIG="N"
   if [ "$PREV_EXISTS" -eq 1 ]; then
     print_color yellow "Previous installation found at ${INSTALL_DIR}."
     read -rp "Reuse previous config.py and database? [y/N]: " REUSE_CONFIG
     REUSE_CONFIG=${REUSE_CONFIG:-N}
-    print_color yellow "Stopping existing service (if running)..."
+    print_color yellow "Stopping existing service..."
     systemctl stop "${SERVICE_NAME}.service" || true
 
     if [[ "$REUSE_CONFIG" =~ ^[Yy]$ ]]; then
       BACKUP_DIR="/tmp/vpn-bot-backup-$(date +%s)"
       mkdir -p "$BACKUP_DIR"
-      [ -f "${INSTALL_DIR}/src/config.py" ] && cp "${INSTALL_DIR}/src/config.py" "${BACKUP_DIR}/config.py" || true
-      [ -f "${INSTALL_DIR}/src/vpn_bot.db" ] && cp "${INSTALL_DIR}/src/vpn_bot.db" "${BACKUP_DIR}/vpn_bot.db" || true
+      [ -f "${INSTALL_DIR}/src/config.py" ] && cp "${INSTALL_DIR}/src/config.py" "${BACKUP_DIR}/config.py"
+      [ -f "${INSTALL_DIR}/src/vpn_bot.db" ] && cp "${INSTALL_DIR}/src/vpn_bot.db" "${BACKUP_DIR}/vpn_bot.db"
       print_color green "Temporary backup saved to ${BACKUP_DIR}."
     fi
 
@@ -359,65 +333,45 @@ install_or_reinstall() {
   print_color yellow "Creating Python venv and installing dependencies..."
   python3 -m venv venv
   activate_venv
-  pip install --upgrade pip >/dev/null 2>&1 || true
-  if [ ! -f "requirements.txt" ]; then
-    print_color red "requirements.txt not found."
-    deactivate_venv
-    exit 1
-  fi
-  pip install -r requirements.txt >/dev/null 2>&1 || {
-    print_color red "Failed to install Python packages (requirements.txt)."
-    deactivate_venv
-    exit 1
-  }
+  pip install --upgrade pip
+  if [ ! -f "requirements.txt" ]; then print_color red "requirements.txt not found."; deactivate_venv; exit 1; fi
+  pip install -r requirements.txt || { print_color red "Failed to install Python packages."; deactivate_venv; exit 1; }
   deactivate_venv
 
-  # Fix potential typo in repo (keboards.py -> keyboards.py)
-  if [ -f "${INSTALL_DIR}/src/bot/keboards.py" ] && [ ! -f "${INSTALL_DIR}/src/bot/keyboards.py" ]; then
-    print_color yellow "Renaming keboards.py -> keyboards.py"
-    mv "${INSTALL_DIR}/src/bot/keboards.py" "${INSTALL_DIR}/src/bot/keyboards.py" || true
+  if [ -f "${INSTALL_DIR}/src/bot/keboards.py" ]; then
+    mv "${INSTALL_DIR}/src/bot/keboards.py" "${INSTALL_DIR}/src/bot/keyboards.py"
   fi
 
   mkdir -p "${INSTALL_DIR}/backups"
 
   if [[ "$REUSE_CONFIG" =~ ^[Yy]$ ]] && [ -n "$BACKUP_DIR" ]; then
     print_color yellow "Restoring previous config and database..."
-    [ -f "${BACKUP_DIR}/config.py" ] && cp "${BACKUP_DIR}/config.py" "${INSTALL_DIR}/src/config.py" || true
-    [ -f "${BACKUP_DIR}/vpn_bot.db" ] && cp "${BACKUP_DIR}/vpn_bot.db" "${INSTALL_DIR}/src/vpn_bot.db" || true
+    [ -f "${BACKUP_DIR}/config.py" ] && cp "${BACKUP_DIR}/config.py" "${INSTALL_DIR}/src/config.py"
+    [ -f "${BACKUP_DIR}/vpn_bot.db" ] && cp "${BACKUP_DIR}/vpn_bot.db" "${INSTALL_DIR}/src/vpn_bot.db"
     append_missing_keys_if_any
   else
-    print_color blue "--- Bot Configuration ---"
-    configure_config_py
+    print_color blue "--- Bot Configuration ---"; configure_config_py
   fi
 
-  # اگر config ناقص/پیش‌فرض است، اجباراً پیکربندی را اجرا کن
   if needs_config_setup; then
-    print_color yellow "config.py شامل مقادیر پیش‌فرض/ناقص است. شروع پیکربندی..."
+    print_color yellow "config.py contains default values. Starting configuration..."
     configure_config_py
   else
-    # پیشنهاد ویرایش مجدد
-    read -rp "Do you want to review/edit config.py now? [y/N]: " EDIT_NOW
-    EDIT_NOW=${EDIT_NOW:-N}
-    if [[ "$EDIT_NOW" =~ ^[Yy]$ ]]; then
-      configure_config_py
-    fi
+    read -rp "Review/edit config.py now? [y/N]: " EDIT_NOW; EDIT_NOW=${EDIT_NOW:-N}
+    if [[ "$EDIT_NOW" =~ ^[Yy]$ ]]; then configure_config_py; fi
   fi
 
-  # Optional: Deploy Subconverter Docker if enabled and localhost URL
   local CONFIG_FILE="${INSTALL_DIR}/src/config.py"
   if grep -qE '^\s*SUBCONVERTER_ENABLED\s*=\s*True' "$CONFIG_FILE"; then
-    local SUBC_URL
-    SUBC_URL="$(grep -E '^\s*SUBCONVERTER_URL\s*=' "$CONFIG_FILE" | sed -E 's/^[^"]*"([^"]+)".*/\1/')"
+    local SUBC_URL; SUBC_URL="$(grep -E '^\s*SUBCONVERTER_URL\s*=' "$CONFIG_FILE" | sed -E 's/^[^"]*"([^"]+)".*/\1/')"
     if echo "$SUBC_URL" | grep -qiE '127\.0\.0\.1|localhost'; then
-      read -rp "Deploy local Subconverter via Docker on ${SUBC_URL}? [y/N]: " DEPLOY_SUBC
-      DEPLOY_SUBC=${DEPLOY_SUBC:-N}
+      read -rp "Deploy local Subconverter via Docker on ${SUBC_URL}? [y/N]: " DEPLOY_SUBC; DEPLOY_SUBC=${DEPLOY_SUBC:-N}
       if [[ "$DEPLOY_SUBC" =~ ^[Yy]$ ]]; then
         install_subconverter_docker "$SUBC_URL" || print_color red "Subconverter deployment failed."
       fi
     fi
   fi
 
-  # Create log file and set permissions
   touch "${INSTALL_DIR}/src/bot.log"
   create_system_user
   chown -R vpn-bot:vpn-bot "${INSTALL_DIR}" || true
@@ -428,7 +382,6 @@ install_or_reinstall() {
   print_color yellow "Enabling and starting service..."
   systemctl enable "${SERVICE_NAME}" >/dev/null 2>&1 || true
   systemctl start "${SERVICE_NAME}"
-
   save_conf
 
   print_color blue "--- Installation Complete ---"
@@ -440,43 +393,28 @@ install_or_reinstall() {
 update_bot() {
   ensure_root
   load_conf
-  if [ -z "${INSTALL_DIR:-}" ] || [ ! -d "$INSTALL_DIR" ]; then
-    print_color red "Installation directory not found. Please install first."
-    exit 1
-  fi
-  if [ ! -d "${INSTALL_DIR}/.git" ]; then
-    print_color red "Install dir is not a git repository. Cannot update."
-    exit 1
-  fi
+  if [ -z "${INSTALL_DIR:-}" ] || [ ! -d "$INSTALL_DIR" ]; then print_color red "Installation not found."; exit 1; fi
+  if [ ! -d "${INSTALL_DIR}/.git" ]; then print_color red "Not a git repository."; exit 1; fi
 
   print_color yellow "Stopping service for update..."
   systemctl stop "${SERVICE_NAME}" || true
-
   print_color yellow "Pulling latest changes..."
   git -C "$INSTALL_DIR" pull --ff-only
-
   print_color yellow "Updating Python deps..."
   activate_venv
-  pip install --upgrade pip >/dev/null 2>&1 || true
-  if [ -f "${INSTALL_DIR}/requirements.txt" ]; then
-    pip install -r "${INSTALL_DIR}/requirements.txt" >/dev/null 2>&1 || true
-  fi
+  pip install --upgrade pip
+  [ -f "${INSTALL_DIR}/requirements.txt" ] && pip install -r "${INSTALL_DIR}/requirements.txt"
   deactivate_venv
 
-  # Fix potential typo in repo
-  if [ -f "${INSTALL_DIR}/src/bot/keboards.py" ] && [ ! -f "${INSTALL_DIR}/src/bot/keyboards.py" ]; then
-    print_color yellow "Renaming keboards.py -> keyboards.py"
-    mv "${INSTALL_DIR}/src/bot/keboards.py" "${INSTALL_DIR}/src/bot/keyboards.py" || true
+  if [ -f "${INSTALL_DIR}/src/bot/keboards.py" ]; then
+    mv "${INSTALL_DIR}/src/bot/keboards.py" "${INSTALL_DIR}/src/bot/keyboards.py"
   fi
 
-  # Ensure log file exists and has correct permissions
   touch "${INSTALL_DIR}/src/bot.log"
   chown vpn-bot:vpn-bot "${INSTALL_DIR}/src/bot.log" || true
   chmod 640 "${INSTALL_DIR}/src/config.py" || true
-
   print_color yellow "Restarting service..."
   systemctl start "${SERVICE_NAME}"
-
   print_color green "Update completed."
 }
 
@@ -519,32 +457,15 @@ uninstall_bot() {
   print_color red "WARNING: This will remove the service and delete all files."
   read -rp "Are you sure? [y/N]: " CONFIRM
   CONFIRM=${CONFIRM:-N}
-  if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
-    print_color yellow "Uninstall cancelled."
-    return
-  fi
+  if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then print_color yellow "Uninstall cancelled."; return; fi
 
   print_color yellow "Stopping and disabling service..."
   systemctl stop "${SERVICE_NAME}" || true
   systemctl disable "${SERVICE_NAME}" || true
-
-  if [ -f "$SERVICE_FILE" ]; then
-    print_color yellow "Removing service file..."
-    rm -f "$SERVICE_FILE"
-    systemctl daemon-reload
-  fi
-
+  if [ -f "$SERVICE_FILE" ]; then print_color yellow "Removing service file..."; rm -f "$SERVICE_FILE"; systemctl daemon-reload; fi
   local DIR="${INSTALL_DIR:-/opt/vpn-bot}"
-  if [ -d "$DIR" ]; then
-    print_color yellow "Removing install directory: ${DIR}"
-    rm -rf "$DIR"
-  fi
-
-  if [ -f "$CONF_FILE" ]; then
-    print_color yellow "Removing saved settings: ${CONF_FILE}"
-    rm -f "$CONF_FILE"
-  fi
-
+  if [ -d "$DIR" ]; then print_color yellow "Removing install directory: ${DIR}"; rm -rf "$DIR"; fi
+  if [ -f "$CONF_FILE" ]; then print_color yellow "Removing saved settings: ${CONF_FILE}"; rm -f "$CONF_FILE"; fi
   print_color blue "--- Uninstall complete ---"
 }
 
