@@ -86,7 +86,7 @@ def build_application():
         per_user=True, per_chat=True
     )
 
-        charge_conv = ConversationHandler(
+    charge_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(r'^💳 شارژ حساب$') & user_filter, check_channel_membership(charge_h.charge_menu_start)),
             CallbackQueryHandler(check_channel_membership(charge_h.charge_menu_start), pattern='^user_start_charge$'),
@@ -113,7 +113,7 @@ def build_application():
             CallbackQueryHandler(start_h.start, pattern="^home_menu$"),
         ],
         per_user=True, per_chat=True
-        )
+    )
 
     transfer_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(check_channel_membership(acc_act.transfer_start), pattern="^acc_transfer_start$")],
@@ -441,7 +441,6 @@ def build_application():
     application.add_handler(CommandHandler("set_trial_days", set_trial_days, filters=admin_filter))
     application.add_handler(CommandHandler("set_trial_gb", set_trial_gb, filters=admin_filter))
 
-    # هندلرهای گلوبال با اولویت‌های مختلف
     application.add_handler(CallbackQueryHandler(buy_h.confirm_purchase_callback, pattern="^confirmbuy$"), group=2)
     application.add_handler(CallbackQueryHandler(buy_h.cancel_purchase_callback, pattern="^cancelbuy$"), group=2)
     application.add_handler(MessageHandler(filters.REPLY & admin_filter, support_h.admin_reply_handler), group=1)
@@ -492,7 +491,6 @@ def build_application():
     for h in plan_category_handlers:
         application.add_handler(h)
 
-    # هندلرهای منوی اصلی با اولویت پایین (گروه 1)
     main_menu_handlers = [
         CommandHandler("start", check_channel_membership(start_h.start)),
         MessageHandler(filters.Regex('^🛍️ خرید سرویس$'), check_channel_membership(buy_h.buy_service_list)),
@@ -500,6 +498,8 @@ def build_application():
         MessageHandler(filters.Regex('^👤 اطلاعات حساب کاربری$'), check_channel_membership(start_h.show_account_info)),
         MessageHandler(filters.Regex('^📚 راهنما$'), check_channel_membership(start_h.show_guide)),
         MessageHandler(filters.Regex('^🧪 سرویس تست$'), check_channel_membership(trial_get_trial_service)),
+        MessageHandler(filters.Regex('^📞 پشتیبانی$'), check_channel_membership(support_h.support_ticket_start)),
+        MessageHandler(filters.Regex('^🎁 کد هدیه$'), check_channel_membership(gift_h.gift_code_entry)),
     ]
     for h in main_menu_handlers:
         application.add_handler(h, group=1)
