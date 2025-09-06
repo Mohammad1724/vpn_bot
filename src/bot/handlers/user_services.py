@@ -6,10 +6,10 @@ import json
 import logging
 import httpx
 import qrcode
-from typing import List
+from typing import List, Optional
 
 from telegram.ext import ContextTypes
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Message, InputFile
+from telegram import Update, Message, InputFile
 from telegram.error import BadRequest
 from telegram.constants import ParseMode
 
@@ -25,6 +25,12 @@ try:
 except Exception:
     SUBCONVERTER_ENABLED = False
     SUBCONVERTER_DEFAULT_TARGET = "v2ray"
+
+# برای ساخت fallback لینک هر نود درصورت نبود sub_link
+try:
+    from config import SUB_PATH as CFG_SUB_PATH
+except Exception:
+    CFG_SUB_PATH = "sub"
 
 logger = logging.getLogger(__name__)
 
@@ -44,34 +50,65 @@ def _link_label(link_type: str) -> str:
 
 
 def _compute_base_link(service: dict, user_uuid: str) -> str:
-    """
-    اولویت با لینک «اصلی/تجمیعی» است؛ سپس sub_link ذخیره‌شده‌ی نود؛
-    و در نهایت fallback به لینک اختصاصی همان نود.
-    """
-    # 1) تلاش برای لینک اصلی/تجمیعی (بدون server_name)
+    # لینک اصلی/تجمیعی روی دامنه/مسیر اصلی
     base_main = utils.build_subscription_url(user_uuid)
     if isinstance(base_main, str) and base_main.strip():
         return base_main.strip().rstrip("/")
 
-    # 2) fallback: sub_link ذخیره‌شده‌ی نود
+    # اگر در رکورد سرویس sub_link داشت
     sub_link = (service or {}).get("sub_link")
     if isinstance(sub_link, str) and sub_link.strip():
         return sub_link.strip().rstrip("/")
 
-    # 3) آخرین fallback: لینک اختصاصی همان نود
+    # در نهایت لینک اختصاصی همان نود رکورد سرویس
     return utils.build_subscription_url(user_uuid, server_name=(service or {}).get("server_name")).rstrip("/")
+
+
+def _endpoint_to_base_link(ep: dict, service: dict) -> Optional[str]:
+    """
+    تولید لینک sub برای هر نود endpoint با اولویت:
+    1) ep.sub_link یا ep.sub_url
+    2) ساختن با panel_domain/domain/host + sub_path (+ sub_uuid)
+    3) ساختن با server_name از روی تنظیمات SERVERS
+    """
+    # 1) اگر مستقیم لینک ذخیره‌شده داریم
+    direct = (ep.get("sub_link") or ep.get("sub_url") or "").strip().rstrip("/")
+    if direct:
+        return direct
+
+    ep_uuid = (ep.get("sub_uuid") or "").strip() or service.get("sub_uuid")
+    if not ep_uuid:
+        return None
+
+    # 2) اگر دامین نود داخل endpoint هست، مستقیم می‌سازیم
+    domain = (ep.get("panel_domain") or ep.get("domain") or ep.get("host") or "").strip()
+    if not domain and isinstance(ep.get("sub_domains"), list) and ep["sub_domains"]:
+        domain = str(ep["sub_domains"][0]).strip()
+    sub_path = (ep.get("sub_path") or CFG_SUB_PATH or "sub").strip().strip("/")
+
+    if domain:
+        return f"https://{domain}/{sub_path}/{ep_uuid}".rstrip("/")
+
+    # 3) در غیر این صورت با server_name می‌سازیم (از روی SERVERS در config)
+    server_name = (ep.get("server_name") or service.get("server_name"))
+    try:
+        built = utils.build_subscription_url(ep_uuid, server_name=server_name)
+        if isinstance(built, str) and built.strip():
+            return built.strip().rstrip("/")
+    except Exception:
+        pass
+    return None
 
 
 def _collect_subscription_bases(service: dict) -> List[str]:
     """
-    فهرست تمام لینک‌های اشتراک قابل ادغام را برای این سرویس برمی‌گرداند.
-    - base اصلی (تجمیعی/گروهی)
-    - sub_link یا sub_url هر نود
-    - اگر sub_* نبود، لینک هر نود را از روی ep.sub_uuid + ep.server_name می‌سازیم.
+    جمع‌آوری تمام لینک‌های قابل ادغام برای این سرویس:
+    - لینک اصلی (تجمیعی/گروهی)
+    - لینک تک‌تک نودها (از endpointها) با فالبک‌های مختلف
     """
     bases: List[str] = []
 
-    # base اصلی
+    # لینک اصلی
     main_base = _compute_base_link(service, service["sub_uuid"])
     if main_base:
         bases.append(main_base)
@@ -80,18 +117,7 @@ def _collect_subscription_bases(service: dict) -> List[str]:
     try:
         endpoints = db.list_service_endpoints(service["service_id"]) or []
         for ep in endpoints:
-            # 1) اگر sub_link یا sub_url ذخیره شده بود، همان را استفاده کن
-            ep_link = (ep.get("sub_link") or ep.get("sub_url") or "").strip().rstrip("/")
-            if not ep_link:
-                # 2) در غیر این صورت، لینک را بر اساس sub_uuid و server_name نود بساز
-                ep_uuid = (ep.get("sub_uuid") or "").strip() or service["sub_uuid"]
-                ep_server = (ep.get("server_name") or service.get("server_name")) or None
-                try:
-                    built = utils.build_subscription_url(ep_uuid, server_name=ep_server)
-                    if isinstance(built, str) and built.strip():
-                        ep_link = built.strip().rstrip("/")
-                except Exception:
-                    ep_link = ""
+            ep_link = _endpoint_to_base_link(ep, service)
             if ep_link:
                 bases.append(ep_link)
     except Exception as e:
@@ -112,20 +138,15 @@ def _collect_subscription_bases(service: dict) -> List[str]:
 def _build_unified_link_for_type(service: dict, link_type: str) -> str | None:
     """
     اگر Subconverter فعال باشد و حداقل دو منبع داشته باشیم، لینک واحد تولید می‌کند.
-    target براساس نوع لینک یا SUBCONVERTER_DEFAULT_TARGET انتخاب می‌شود.
     """
     if not SUBCONVERTER_ENABLED:
         return None
 
     bases = _collect_subscription_bases(service)
-    # ادغام فقط وقتی معنی دارد که حداقل دو منبع داشته باشیم
     if not bases or len(bases) < 2:
         return None
 
-    sources = bases  # لینک‌های کامل subscription؛ نیازی به اضافه کردن /sub نیست
-
     # تعیین target
-    target = None
     try:
         target = utils.link_type_to_subconverter_target(link_type)
     except Exception:
@@ -133,7 +154,7 @@ def _build_unified_link_for_type(service: dict, link_type: str) -> str | None:
     if not target or link_type == "unified":
         target = SUBCONVERTER_DEFAULT_TARGET or "v2ray"
 
-    return utils.build_subconverter_link(sources, target=target)
+    return utils.build_subconverter_link(bases, target=target)
 
 
 async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -191,13 +212,12 @@ async def send_service_details(
             await target(chat_id=chat_id, text=text, reply_markup=markup(kb))
             return
 
-        # اگر Subconverter فعال است، سعی کن یک لینک واحد پیش‌فرض بسازی
+        # تلاش برای ساخت لینک واحد پیش‌فرض (اگر حداقل دو منبع داریم)
         unified_default_link = None
         if SUBCONVERTER_ENABLED:
             try:
                 bases = _collect_subscription_bases(service)
                 if bases and len(bases) > 1:
-                    # بدون target => بر اساس SUBCONVERTER_DEFAULT_TARGET در utils تصمیم‌گیری می‌شود
                     unified_default_link = utils.build_subconverter_link(bases)
             except Exception as e:
                 logger.debug("build unified_default_link failed for service %s: %s", service_id, e)
@@ -311,6 +331,18 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     unified_link = _build_unified_link_for_type(service, link_type) if SUBCONVERTER_ENABLED else None
+
+    # دیباگ برای ادمین: ببینیم چه سورس‌هایی شناسایی شده
+    if q.from_user.id == ADMIN_ID:
+        try:
+            sources_dbg = _collect_subscription_bases(service)
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=f"DEBUG unified={bool(unified_link)} | sources={json.dumps(sources_dbg, ensure_ascii=False)}"
+            )
+        except Exception:
+            pass
+
     if unified_link:
         final_link = unified_link
     else:
