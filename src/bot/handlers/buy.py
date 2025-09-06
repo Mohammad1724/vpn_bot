@@ -46,6 +46,36 @@ def _vol_label(gb: int) -> str:
     return "نامحدود" if g == 0 else f"{utils.to_persian_digits(str(g))} گیگ"
 
 
+def _get_global_discount_params() -> tuple[bool, float, Optional[datetime], Optional[datetime]]:
+    """
+    خواندن تنظیمات تخفیف همگانی از DB:
+      - global_discount_enabled: 1/0
+      - global_discount_percent: عدد (مثلاً 10)
+      - global_discount_starts_at: اختیاری (ISO یا فرمت رایج)
+      - global_discount_expires_at: اختیاری
+    """
+    enabled = str(db.get_setting("global_discount_enabled") or "0").lower() in ("1", "true", "on", "yes")
+    try:
+        percent = float(db.get_setting("global_discount_percent") or 0)
+    except Exception:
+        percent = 0.0
+    starts = utils.parse_date_flexible(db.get_setting("global_discount_starts_at")) if db.get_setting("global_discount_starts_at") else None
+    expires = utils.parse_date_flexible(db.get_setting("global_discount_expires_at")) if db.get_setting("global_discount_expires_at") else None
+    return enabled, max(percent, 0.0), starts, expires
+
+
+def _is_global_discount_active(now: datetime | None = None) -> tuple[bool, float]:
+    enabled, percent, starts, expires = _get_global_discount_params()
+    if not enabled or percent <= 0:
+        return False, 0.0
+    now = now or datetime.now().astimezone()
+    if starts and now < starts:
+        return False, 0.0
+    if expires and now > expires:
+        return False, 0.0
+    return True, percent
+
+
 def _short_label(p: dict) -> str:
     name = (p.get('name') or 'پلن')[:18]
     days = int(p.get('days', 0))
@@ -53,7 +83,10 @@ def _short_label(p: dict) -> str:
     vol = _vol_label(gb)
     price_str = _short_price(p.get('price', 0))
     days_fa = utils.to_persian_digits(str(days))
-    label = f"{name} | {days_fa} روز | {vol} | {price_str}"
+    # یک برچسب کوتاه برای تخفیف همگانی اضافه می‌کنیم (اگر فعال باشد)
+    gd_active, gd_percent = _is_global_discount_active()
+    off_tag = f" | {int(gd_percent)}٪ آف" if gd_active and gd_percent > 0 else ""
+    label = f"{name} | {days_fa} روز | {vol} | {price_str}{off_tag}"
     return label[:62] + "…" if len(label) > 63 else label
 
 
@@ -170,25 +203,48 @@ async def _ask_purchase_confirm(update: Update, context: ContextTypes.DEFAULT_TY
     plan = db.get_plan(context.user_data.get('buy_plan_id'))
     if not plan:
         await update.message.reply_text("❌ پلن نامعتبر است.", reply_markup=get_main_menu_keyboard(user_id)); return ConversationHandler.END
+
+    base_price = int(plan['price'])
+    gd_active, gd_percent = _is_global_discount_active()
+    gd_amount = int(round(base_price * (gd_percent / 100.0))) if (gd_active and gd_percent > 0) else 0
+    price_after_global = max(0, base_price - gd_amount)
+
     promo_code = context.user_data.get('buy_promo_code')
-    discount, error_msg = _calc_promo_discount(user_id, plan['price'], promo_code)
-    final_price = max(0, int(plan['price']) - discount)
+    promo_discount, error_msg = _calc_promo_discount(user_id, price_after_global, promo_code)
+    final_price = max(0, price_after_global - promo_discount)
+
     server_name = _get_selected_server_name(context)
-    context.user_data['pending_buy'] = {'plan_id': plan['plan_id'], 'custom_name': custom_name, 'promo_code': promo_code, 'final_price': final_price, 'server_name': server_name}
-    price_text = utils.format_toman(plan['price'], persian_digits=True)
-    price_line = f"قیمت: {price_text}"
-    if discount > 0:
-        price_line = f"قیمت: {price_text}\nتخفیف: {utils.format_toman(discount, True)}\nقیمت نهایی: {utils.format_toman(final_price, True)}"
-    elif promo_code and error_msg:
-        price_line += f"\n(کد تخفیف نامعتبر: {error_msg})"
+    context.user_data['pending_buy'] = {
+        'plan_id': plan['plan_id'],
+        'custom_name': custom_name,
+        'promo_code': promo_code,
+        'final_price': final_price,
+        'server_name': server_name
+    }
+
+    # ساخت متن قیمت
+    lines = [f"قیمت: {_short_price(base_price)}"]
+    if gd_amount > 0:
+        lines.append(f"تخفیف همگانی ({int(gd_percent)}٪): {_short_price(gd_amount)}")
+        lines.append(f"پس از تخفیف همگانی: {_short_price(price_after_global)}")
+    if promo_code:
+        if promo_discount > 0:
+            lines.append(f"تخفیف کدتخفیف: {_short_price(promo_discount)}")
+        elif error_msg:
+            lines.append(f"(کد تخفیف نامعتبر: {error_msg})")
+    lines.append(f"قیمت نهایی: {_short_price(final_price)}")
+    price_block = "\n".join(lines)
+
     server_line = f"\nسرور: {server_name}" if MULTI_SERVER_ENABLED and server_name else ""
     text = f"""🛒 تایید خرید سرویس
 نام سرویس: {custom_name or '(بدون نام)'}
 مدت: {utils.to_persian_digits(str(plan['days']))} روز
 حجم: {_vol_label(plan['gb'])}
-{price_line}{server_line}
+{price_block}{server_line}
 با تایید، مبلغ از کیف‌پول شما کسر شده و سرویس بلافاصله ساخته می‌شود.""".strip()
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ تایید خرید", callback_data="confirmbuy"), InlineKeyboardButton("❌ انصراف", callback_data="cancelbuy")]])
+
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ تایید خرید", callback_data="confirmbuy"),
+                                InlineKeyboardButton("❌ انصراف", callback_data="cancelbuy")]])
     await update.message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN); return ConversationHandler.END
 
 
@@ -257,28 +313,20 @@ async def _send_service_info_to_user(context, user_id, new_uuid):
     user_data = await hiddify_api.get_user_info(new_uuid, server_name=server_name)
 
     if user_data:
-        # نوع پیش‌فرض لینک طبق تنظیم ادمین (با همان کلیدی که در settings.py ست می‌شود)
         admin_default_type = utils.normalize_link_type(db.get_setting("default_sub_link_type") or "sub")
-
-        # نام برای ?name= در لینک‌های typed
         config_name = (user_data.get('name', 'config') if isinstance(user_data, dict) else 'config') or 'config'
         safe_name = str(config_name).replace(' ', '_')
 
-        # لینک پایه «اصلی/تجمیعی» (بدون server_name تا روی دامنه اصلی برود) یا fallback
         base_main = utils.build_subscription_url(new_uuid) \
                     or new_service_record.get('sub_link') \
                     or utils.build_subscription_url(new_uuid, server_name=server_name)
 
         final_link = ""
-
-        # اگر ادمین unified انتخاب کرده و Subconverter روشن است، تلاش برای ادغام
         if admin_default_type == "unified" and SUBCONVERTER_ENABLED:
             sources: List[str] = []
-            # لینک نود اصلی
             main_direct = new_service_record.get('sub_link') or utils.build_subscription_url(new_uuid, server_name=server_name)
             if isinstance(main_direct, str) and main_direct.strip():
                 sources.append(main_direct.strip())
-            # لینک‌های نودهای اضافه
             try:
                 endpoints = db.list_service_endpoints(new_service_record.get("service_id"))
                 for ep in endpoints or []:
@@ -293,7 +341,6 @@ async def _send_service_info_to_user(context, user_id, new_uuid):
                 if unified_url:
                     final_link = unified_url
 
-        # اگر unified نبود یا موفق نشد، طبق نوع انتخابی ادمین لینک بساز
         if not final_link:
             if admin_default_type == "sub":
                 final_link = base_main
