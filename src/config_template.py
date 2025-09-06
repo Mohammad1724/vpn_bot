@@ -5,20 +5,20 @@
 # TELEGRAM BOT CONFIGURATION
 # ===============================================================
 BOT_TOKEN = "CHANGE_ME_BOT_TOKEN"
-ADMIN_ID = 123456789
+ADMIN_ID = 123456789  # عدد تلگرام ادمین
 SUPPORT_USERNAME = "CHANGE_ME_SUPPORT_USERNAME"
 
 # ===============================================================
 # HIDDIFY PANEL CONFIGURATION (Single-Server defaults)
 # ===============================================================
-# دامنه و مسیرها
+# دامنه و مسیرها (حواست باشه مسیر اشتراک sub باشه، نه admin)
 PANEL_DOMAIN = "mrmu3.iranshop21.monster"
-ADMIN_PATH = "blWv7lnshWJWrnsK5eAX0pPe6"  # مسیر ادمین پنل (برای API)
-SUB_PATH = "sub"  # مسیر اشتراک؛ حتماً sub یا مسیر درست اشتراک
+ADMIN_PATH = "blWv7lnshWJWrnsK5eAX0pPe6"  # فقط برای API
+SUB_PATH = "sub"  # مسیر اشتراک
 API_KEY = "CHANGE_ME_HIDDIFY_API_KEY"
-SUB_DOMAINS = [
-    "mrmu3.iranshop21.monster",
-]
+
+# اگر ساب‌دامین اشتراک داری همین‌جا یک‌خطه بنویس تا خطای ایندنت نگیری
+SUB_DOMAINS = ["mrmu3.iranshop21.monster"]
 
 # ===============================================================
 # MULTI-SERVER (NODES) CONFIGURATION
@@ -67,9 +67,9 @@ NODES_AUTO_DISABLE_AFTER_FAILS = 3
 
 # ===============================================================
 # SUBCONVERTER (Unified subscription link for multiple panels)
-# برای ادغام چند نود لازم است Subconverter پابلیک داشته باشی.
-# مثال داکر:
-# docker run -d --name subconverter -p 25500:25500 tindy2013/subconverter:latest
+# برای ادغام چند نود باید Subconverter پابلیک داشته باشی.
+# مثال داکر: docker run -d -p 25500:25500 tindy2013/subconverter:latest
+# توجه: آدرس باید از سمت کاربر قابل دسترس باشد (نه 127.0.0.1)
 # ===============================================================
 SUBCONVERTER_ENABLED = True
 SUBCONVERTER_URL = "https://CHANGE_ME_SUBCONVERTER_HOST:25500"  # مثل: https://subconv.yourdomain.com:25500
