@@ -1,3 +1,4 @@
+# filename: bot/handlers/admin/settings.py
 # -*- coding: utf-8 -*-
 
 import logging
@@ -41,24 +42,32 @@ async def _send_or_edit(
     update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup=None, parse_mode=ParseMode.MARKDOWN
 ):
     q = getattr(update, "callback_query", None)
+    try_text = text
     if q:
         await q.answer()
         try:
-            await q.edit_message_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+            await q.edit_message_text(try_text, reply_markup=reply_markup, parse_mode=parse_mode)
         except BadRequest as e:
-            if "can't parse entities" in str(e).lower():
-                try: await q.edit_message_text(text, reply_markup=reply_markup, parse_mode=None)
-                except Exception: pass
+            emsg = str(e).lower()
+            if "can't parse entities" in emsg or "can't find end of the entity" in emsg:
+                try:
+                    await q.edit_message_text(try_text, reply_markup=reply_markup, parse_mode=None)
+                except Exception:
+                    pass
             else:
-                await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=reply_markup, parse_mode=parse_mode)
-        except Exception:
-            await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=reply_markup, parse_mode=parse_mode)
+                try:
+                    await context.bot.send_message(chat_id=q.from_user.id, text=try_text, reply_markup=reply_markup, parse_mode=parse_mode)
+                except BadRequest as e2:
+                    emsg2 = str(e2).lower()
+                    if "can't parse entities" in emsg2 or "can't find end of the entity" in emsg2:
+                        await context.bot.send_message(chat_id=q.from_user.id, text=try_text, reply_markup=reply_markup, parse_mode=None)
     else:
         try:
-            await update.effective_message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+            await update.effective_message.reply_text(try_text, reply_markup=reply_markup, parse_mode=parse_mode)
         except BadRequest as e:
-            if "can't parse entities" in str(e).lower():
-                await update.effective_message.reply_text(text, reply_markup=reply_markup, parse_mode=None)
+            emsg = str(e).lower()
+            if "can't parse entities" in emsg or "can't find end of the entity" in emsg:
+                await update.effective_message.reply_text(try_text, reply_markup=reply_markup, parse_mode=None)
 
 # --- Main Settings Menu ---
 async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -201,8 +210,8 @@ async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     elif key == "first_charge_expires_at": tip = "\n(فرمت: 2025-12-31T23:59:59+03:30)"
     elif key == "usage_update_interval_min": tip = "\n(عدد صحیح مثبت)"
     text = f"✍️ مقدار جدید برای **{key}** را ارسال کنید.{tip}\n/cancel برای انصراف\n\n**مقدار فعلی:**\n`{cur}`"
-    if q: await q.answer(); await q.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
-    else: await update.effective_message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+    # استفاده از هِلپر با فالبک خودکار روی خطای Markdown
+    await _send_or_edit(update, context, text, reply_markup=None, parse_mode=ParseMode.MARKDOWN)
     return AWAIT_SETTING_VALUE
 
 async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
