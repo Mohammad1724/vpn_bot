@@ -1,3 +1,4 @@
+# filename: bot/handlers/admin/nodes.py
 # -*- coding: utf-8 -*-
 from typing import Dict, Any, Tuple
 from html import escape as h
@@ -10,6 +11,7 @@ import database as db
 import hiddify_api
 from bot.ui import nav_row, confirm_row, chunk, btn, markup
 from bot import constants as C  # استفاده از state های مرکزی
+from bot.nodes_sync import sync_nodes_into_panel  # اضافه شد
 
 try:
     from config import MULTI_SERVER_ENABLED as MULTI_SERVER_ENABLED_CONFIG, SERVER_SELECTION_POLICY
@@ -74,7 +76,6 @@ def _node_details_kb(n_id: int) -> InlineKeyboardMarkup:
     ])
 
 
-# کمک‌تابع برای ساخت متن و کیبورد جزئیات نود
 def _node_details_view(n: Dict[str, Any]) -> Tuple[str, InlineKeyboardMarkup]:
     total_gb, users_cnt = _sum_server_usage(n["name"])
     text = (
@@ -178,7 +179,6 @@ async def edit_node_setting_value_received(update: Update, context: ContextTypes
     db.set_setting(key, val)
     await update.message.reply_text(f"✅ مقدار «{key}» ذخیره شد.")
 
-    # نمایش دوباره منوی تنظیمات به‌صورت پیام جدید (بدون ادیت پیام قبلی)
     text, kb = _build_node_settings_view()
     await update.message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
     return C.NODE_SETTINGS_MENU
@@ -279,6 +279,10 @@ async def add_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     try:
         db.add_node(**nd, panel_type="hiddify", is_active=True)
         await q.edit_message_text(f"✅ نود «{nd['name']}» اضافه شد.", reply_markup=_nodes_menu_kb())
+        try:
+            await sync_nodes_into_panel()  # همگام‌سازی با پنل
+        except Exception:
+            pass
     except Exception as e:
         await q.edit_message_text(f"❌ خطا در ذخیره نود: {e}", reply_markup=_nodes_menu_kb())
     context.user_data.pop("node_add", None)
@@ -333,6 +337,10 @@ async def toggle_node_active(update: Update, context: ContextTypes.DEFAULT_TYPE)
     n = db.get_node(node_id)  # بازخوانی برای وضعیت جدید
     text, kb = _node_details_view(n)
     await q.edit_message_text(text, reply_markup=kb)
+    try:
+        await sync_nodes_into_panel()  # همگام‌سازی با پنل
+    except Exception:
+        pass
     return C.NODE_DETAILS
 
 async def ping_node(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -437,10 +445,14 @@ async def edit_field_value_received(update: Update, context: ContextTypes.DEFAUL
     db.update_node(node_id, {field: value})
     await update.message.reply_text("✅ تغییرات اعمال شد.")
 
-    # نمایش جزئیات نود به صورت پیام جدید
     n = db.get_node(node_id)
     text, kb = _node_details_view(n)
     await update.message.reply_text(text, reply_markup=kb)
+
+    try:
+        await sync_nodes_into_panel()  # همگام‌سازی با پنل
+    except Exception:
+        pass
     return C.NODE_DETAILS
 
 
@@ -463,6 +475,10 @@ async def delete_node_execute(update: Update, context: ContextTypes.DEFAULT_TYPE
     node_id = int(q.data.split("_")[-1])
     db.delete_node(node_id)
     await q.edit_message_text("✅ نود حذف شد.", reply_markup=_nodes_menu_kb())
+    try:
+        await sync_nodes_into_panel()  # همگام‌سازی با پنل
+    except Exception:
+        pass
     return ConversationHandler.END
 
 
