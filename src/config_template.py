@@ -1,70 +1,69 @@
+# filename: config.py
 # -*- coding: utf-8 -*-
 
 # ===============================================================
 # TELEGRAM BOT CONFIGURATION
 # ===============================================================
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
-ADMIN_ID = 123456789
-SUPPORT_USERNAME = "your_support_username"
+BOT_TOKEN = "CHANGE_ME_BOT_TOKEN"
+ADMIN_ID = 123456789  # عدد تلگرام ادمین
+SUPPORT_USERNAME = "CHANGE_ME_SUPPORT_USERNAME"
 
 # ===============================================================
 # HIDDIFY PANEL CONFIGURATION (Single-Server defaults)
-# Used if MULTI_SERVER_ENABLED is False and no nodes are defined in DB.
 # ===============================================================
-PANEL_DOMAIN = "your_panel_domain.com"
-ADMIN_PATH = "your_admin_secret_path"
-SUB_PATH = "your_subscription_secret_path"
-API_KEY = "your_hiddify_api_key_here"
-SUB_DOMAINS = []  # e.g., ["sub1.example.com", "sub2.example.com"]
+# دامنه پنل/سابسکریپشن اصلی
+PANEL_DOMAIN = "mrmu3.iranshop21.monster"  # دامنه واقعی‌ات
+# مسیر ادمین پنل (همون که لینک قبلی‌ت داشت، فقط برای API استفاده میشه)
+ADMIN_PATH = "blWv7lnshWJWrnsK5eAX0pPe6"
+# مسیر اشتراک؛ حتماً مسیر «sub» یا مسیر اشتراک واقعی‌ت رو بزن، نه admin_path
+SUB_PATH = "sub"
+# کلید API پنل اصلی
+API_KEY = "CHANGE_ME_HIDDIFY_API_KEY"
+# ساب‌دامین‌های اشتراک (اختیاری). اگر نداری خالی بذار یا همین دامنه اصلی رو بده
+SUB_DOMAINS = [
+    "mrmu3.iranshop21.monster",
+]
 
 # ===============================================================
 # MULTI-SERVER (NODES) CONFIGURATION
-# If disabled, the bot falls back to single-server settings above.
-# If enabled (and DB nodes are empty), the bot uses SERVERS below.
-# Note: If you add nodes from Admin Panel, those DB nodes take precedence.
+# اگر نودها رو از داخل پنل ادمین ربات تعریف کرده‌ای، همین False بمونه.
+# اگر نودها رو اینجا مدیریت می‌کنی، True کن و لیست SERVERS رو تکمیل کن.
 # ===============================================================
 MULTI_SERVER_ENABLED = False
 
-# List of servers. Keep 'name' unique per server.
+# لیست نودها (فقط اگر MULTI_SERVER_ENABLED=True و DB خالی باشد استفاده می‌شود)
 SERVERS = [
     {
-        "name": "Main",
-        "panel_domain": PANEL_DOMAIN,
+        "name": "mrmu3",  # باید با server_name دیتابیس یکی باشد
+        "panel_domain": "mrmu3.iranshop21.monster",
         "admin_path": ADMIN_PATH,
-        "sub_path": SUB_PATH,
+        "sub_path": SUB_PATH,  # فقط مسیر sub؛ نه admin_path
         "api_key": API_KEY,
-        "sub_domains": SUB_DOMAINS,  # e.g., ["sub1.example.com", "sub2.example.com"]
+        "sub_domains": SUB_DOMAINS,
     },
+    # نود دوم نمونه (در صورت نیاز باز کن و مقادیرش را پر کن)
     # {
-    #     "name": "Node-2",
-    #     "panel_domain": "panel2.example.com",
-    #     "admin_path": "admin2",
-    #     "sub_path": "sub2",
-    #     "api_key": "api_key_2",
-    #     "sub_domains": ["sub3.example.com"],
+    #     "name": "node2",
+    #     "panel_domain": "CHANGE_ME_NODE2_DOMAIN",
+    #     "admin_path": "CHANGE_ME_NODE2_ADMIN_PATH",
+    #     "sub_path": "sub",
+    #     "api_key": "CHANGE_ME_NODE2_API_KEY",
+    #     "sub_domains": ["CHANGE_ME_NODE2_SUB_DOMAIN"],
     # },
 ]
 
-# Default server selection policy for creating new users/services
-# first: pick the first active node
-# by_name: use DEFAULT_SERVER_NAME
-# least_loaded: pick the node with most free capacity (recommended)
-DEFAULT_SERVER_NAME = "Main"   # server name from SERVERS
+# انتخاب نود پیش‌فرض برای ساخت سرویس جدید
+DEFAULT_SERVER_NAME = "mrmu3"
 SERVER_SELECTION_POLICY = "least_loaded"  # first | by_name | least_loaded
 
 # ===============================================================
 # USAGE AGGREGATION ACROSS SERVERS (per user)
-# The JobQueue periodically fetches usage and stores snapshots in DB.
-# Interval can be edited later from Admin > Settings.
 # ===============================================================
 USAGE_AGGREGATION_ENABLED = False
 USAGE_UPDATE_INTERVAL_MIN = 10  # minutes
 
 # ===============================================================
-# NODE HEALTH-CHECK (for DB/config servers)
-# Periodically checks API connectivity and updates current_users per node.
-# Auto-disable will set node is_active=0 after consecutive failures.
-# Intervals and toggles can be edited later from Admin > Settings.
+# NODE HEALTH-CHECK
 # ===============================================================
 NODES_HEALTH_ENABLED = True
 NODES_HEALTH_INTERVAL_MIN = 10
@@ -72,19 +71,17 @@ NODES_AUTO_DISABLE_AFTER_FAILS = 3
 
 # ===============================================================
 # SUBCONVERTER (Unified subscription link for multiple panels)
-# If enabled, the bot will merge multiple sub-links into one link and
-# give that to the user (e.g., combining Main + a Node).
-# Example docker: docker run -d -p 25500:25500 tindy2013/subconverter:latest
+# برای ادغام لینک‌های چند نود، باید یک ساب‌کانورتر پابلیک داشته باشی
+# docker run -d --name subconverter -p 25500:25500 tindy2013/subconverter:latest
+# و حتماً SUBCONVERTER_URL را روی دامنه/آی‌پی پابلیک ست کنی (نه 127.0.0.1)
 # ===============================================================
-SUBCONVERTER_ENABLED = False
-SUBCONVERTER_URL = "http://127.0.0.1:25500"
-# Default target for merged link: v2ray | clash | clashmeta | singbox | sub (raw)
-SUBCONVERTER_DEFAULT_TARGET = "v2ray"
-# Optional: which extra servers (by name) to provision alongside the primary
-# to include in the unified link (if empty, the bot may pick a default fallback).
+SUBCONVERTER_ENABLED = True
+SUBCONVERTER_URL = "https://CHANGE_ME_PUBLIC_HOST:25500"  # مثل: https://subconv.yourdomain.com:25500
+SUBCONVERTER_DEFAULT_TARGET = "v2ray"  # v2ray | clash | clashmeta | singbox | sub
+# در صورتی که می‌خواهی هنگام ایجاد سرویس، روی نودهای اضافه هم پرویژن شود
 SUBCONVERTER_EXTRA_SERVERS = [
-    # "Main",
-    # "Node-2",
+    # "mrmu3",
+    # "node2",
 ]
 
 # ===============================================================
@@ -104,5 +101,4 @@ EXPIRY_REMINDER_DAYS = 3
 # USAGE & DEVICE LIMITS CONFIGURATION
 # ===============================================================
 USAGE_ALERT_THRESHOLD = 0.8
-# Enable or disable the job that warns users when they reach their device limit.
 DEVICE_LIMIT_ALERT_ENABLED = True
