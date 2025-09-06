@@ -20,6 +20,12 @@ API_KEY = "CHANGE_ME_HIDDIFY_API_KEY"
 # ساب‌دامین‌های اشتراک (یک‌خطه تا خطای ایندنت نگیری)
 SUB_DOMAINS = ["mrmu3.iranshop21.monster"]
 
+# Expanded API (برای پوش‌کردن nodes.json و hidybotconfigs.json از ربات)
+# مسیرهای مورد استفاده: https://<PANEL_DOMAIN>/<SUB_PATH>/<PANEL_SECRET_UUID>/api/v1/...
+PANEL_SECRET_UUID = "CHANGE_ME_SECRET_UUID"  # سکرت UUID پنل (بخشی از آدرس API)
+# اگر گواهی پنل سلف‌ساین است False کن
+HIDDIFY_API_VERIFY_SSL = True
+
 # ===============================================================
 # MULTI-SERVER (NODES) CONFIGURATION
 # اگر نودها را از داخل پنل ربات تعریف کرده‌ای، این را False بگذار.
@@ -67,12 +73,10 @@ NODES_AUTO_DISABLE_AFTER_FAILS = 3
 
 # ===============================================================
 # SUBCONVERTER (Unified subscription link for multiple panels)
-# برای ادغام چند نود باید Subconverter پابلیک داشته باشی.
-# مثال داکر: docker run -d -p 25500:25500 tindy2013/subconverter:latest
-# توجه: آدرس باید از سمت کاربر قابل دسترس باشد (نه 127.0.0.1)
+# فعلاً غیرفعاله؛ ادغام لینک‌ها سمت پنل انجام می‌شود (nodes.json).
 # ===============================================================
-SUBCONVERTER_ENABLED = True
-SUBCONVERTER_URL = "https://CHANGE_ME_SUBCONVERTER_HOST:25500"  # مثل: https://subconv.yourdomain.com:25500
+SUBCONVERTER_ENABLED = False
+SUBCONVERTER_URL = "https://CHANGE_ME_SUBCONVERTER_HOST:25500"  # در صورت نیاز فعال کن
 SUBCONVERTER_DEFAULT_TARGET = "v2ray"  # v2ray | clash | clashmeta | singbox | sub
 SUBCONVERTER_EXTRA_SERVERS = []  # اگر نمی‌خوای provisioning اضافی داشته باشی خالی بگذار
 
