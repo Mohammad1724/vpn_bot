@@ -157,6 +157,20 @@ def _build_unified_link_for_type(service: dict, link_type: str) -> str | None:
     return utils.build_subconverter_link(bases, target=target)
 
 
+def _get_default_link_type() -> str:
+    """
+    نوع لینک انتخابی ادمین را از تنظیمات می‌خواند؛
+    کلید درست طبق settings.py: default_sub_link_type
+    """
+    try:
+        v = db.get_setting("default_sub_link_type")
+        if v:
+            return utils.normalize_link_type(str(v))
+    except Exception:
+        pass
+    return "sub"
+
+
 async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     services = db.get_user_services(user_id)
@@ -212,6 +226,10 @@ async def send_service_details(
             await target(chat_id=chat_id, text=text, reply_markup=markup(kb))
             return
 
+        # نام کانفیگ برای ?name=
+        config_name = (info.get('name', 'config') if isinstance(info, dict) else 'config') or 'config'
+        safe_name = config_name.replace(' ', '_')
+
         # تلاش برای ساخت لینک واحد پیش‌فرض (اگر حداقل دو منبع داریم)
         unified_default_link = None
         if SUBCONVERTER_ENABLED:
@@ -222,7 +240,25 @@ async def send_service_details(
             except Exception as e:
                 logger.debug("build unified_default_link failed for service %s: %s", service_id, e)
 
-        caption = utils.create_service_info_caption(info, service_db_record=service, override_sub_url=unified_default_link)
+        # اعمال نوع لینک انتخابی ادمین روی لینکی که در کپشن نمایش داده می‌شود
+        admin_default_type = _get_default_link_type()
+        preferred_url = None
+        if admin_default_type == "unified":
+            preferred_url = _build_unified_link_for_type(service, "unified") if SUBCONVERTER_ENABLED else None
+        else:
+            base_link = _compute_base_link(service, service['sub_uuid'])
+            t = utils.normalize_link_type(admin_default_type)
+            if t == "sub":
+                preferred_url = base_link
+            else:
+                url_link_type = t.replace('clashmeta', 'clash-meta')
+                preferred_url = f"{base_link}/{url_link_type}/?name={safe_name}"
+
+        # اگر به هر دلیل preferred_url نداشتیم، از unified_default_link یا base استفاده کن
+        override_url = preferred_url or unified_default_link or _compute_base_link(service, service['sub_uuid'])
+
+        caption = utils.create_service_info_caption(info, service_db_record=service, override_sub_url=override_url)
+
         keyboard_rows = []
         if not minimal:
             if unified_default_link:
