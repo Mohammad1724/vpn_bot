@@ -1,3 +1,4 @@
+# filename: bot/handlers/buy.py
 # -*- coding: utf-8 -*-
 
 import logging
@@ -256,23 +257,28 @@ async def _send_service_info_to_user(context, user_id, new_uuid):
     user_data = await hiddify_api.get_user_info(new_uuid, server_name=server_name)
 
     if user_data:
-        default_link_type = db.get_setting("default_sub_link_type") or "sub"
+        # نوع پیش‌فرض لینک طبق تنظیم ادمین (با همان کلیدی که در settings.py ست می‌شود)
+        admin_default_type = utils.normalize_link_type(db.get_setting("default_sub_link_type") or "sub")
 
-        # ابتدا لینک «اصلی/تجمیعی» را تلاش کن (بدون server_name تا روی دامنه اصلی برود)
-        preferred_main = utils.build_subscription_url(new_uuid) \
-                          or new_service_record.get('sub_link') \
-                          or utils.build_subscription_url(new_uuid, server_name=server_name)
+        # نام برای ?name= در لینک‌های typed
+        config_name = (user_data.get('name', 'config') if isinstance(user_data, dict) else 'config') or 'config'
+        safe_name = str(config_name).replace(' ', '_')
 
-        sub_url = ""
+        # لینک پایه «اصلی/تجمیعی» (بدون server_name تا روی دامنه اصلی برود) یا fallback
+        base_main = utils.build_subscription_url(new_uuid) \
+                    or new_service_record.get('sub_link') \
+                    or utils.build_subscription_url(new_uuid, server_name=server_name)
 
-        if SUBCONVERTER_ENABLED:
+        final_link = ""
+
+        # اگر ادمین unified انتخاب کرده و Subconverter روشن است، تلاش برای ادغام
+        if admin_default_type == "unified" and SUBCONVERTER_ENABLED:
             sources: List[str] = []
             # لینک نود اصلی
             main_direct = new_service_record.get('sub_link') or utils.build_subscription_url(new_uuid, server_name=server_name)
             if isinstance(main_direct, str) and main_direct.strip():
                 sources.append(main_direct.strip())
-
-            # لینک نودهای اضافه (از دیتابیس service_endpoints)
+            # لینک‌های نودهای اضافه
             try:
                 endpoints = db.list_service_endpoints(new_service_record.get("service_id"))
                 for ep in endpoints or []:
@@ -281,21 +287,23 @@ async def _send_service_info_to_user(context, user_id, new_uuid):
                         sources.append(ep_link)
             except Exception:
                 pass
-
-            # اگر حداقل دو منبع داریم، ادغام کن
             if len(sources) > 1:
-                target = utils.link_type_to_subconverter_target(default_link_type)
+                target = utils.link_type_to_subconverter_target(admin_default_type)
                 unified_url = utils.build_subconverter_link(sources, target=target)
                 if unified_url:
-                    sub_url = unified_url
+                    final_link = unified_url
 
-        # اگر ادغام نشد یا Subconverter خاموش بود، از لینک اصلی/ترجیحی استفاده کن
-        if not sub_url:
-            sub_url = preferred_main
+        # اگر unified نبود یا موفق نشد، طبق نوع انتخابی ادمین لینک بساز
+        if not final_link:
+            if admin_default_type == "sub":
+                final_link = base_main
+            else:
+                t = admin_default_type.replace('clashmeta', 'clash-meta')
+                final_link = f"{base_main}/{t}/?name={safe_name}"
 
-        qr_bio = utils.make_qr_bytes(sub_url)
+        qr_bio = utils.make_qr_bytes(final_link)
         caption = utils.create_service_info_caption(
-            user_data, service_db_record=new_service_record, title="🎉 سرویس شما با موفقیت ساخته شد!", override_sub_url=sub_url
+            user_data, service_db_record=new_service_record, title="🎉 سرویس شما با موفقیت ساخته شد!", override_sub_url=final_link
         )
         inline_kb = InlineKeyboardMarkup([[InlineKeyboardButton("📚 راهنمای اتصال", callback_data="guide_connection"), InlineKeyboardButton("📋 سرویس‌های من", callback_data="back_to_services")]])
         await context.bot.send_photo(chat_id=user_id, photo=InputFile(qr_bio), caption=caption, parse_mode=ParseMode.MARKDOWN, reply_markup=inline_kb)
