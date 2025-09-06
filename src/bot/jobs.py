@@ -1,3 +1,4 @@
+# filename: bot/jobs.py
 # -*- coding: utf-8 -*-
 
 import asyncio
@@ -16,6 +17,7 @@ import hiddify_api
 from config import ADMIN_ID
 from bot.utils import get_service_status
 from bot.handlers.admin.reports import send_daily_summary, send_weekly_summary
+from bot.nodes_sync import sync_nodes_into_panel  # اضافه شد
 
 # Optional usage aggregation configs
 try:
@@ -366,6 +368,18 @@ async def initial_backfill_job(context: ContextTypes.DEFAULT_TYPE):
         logger.error("Initial backfill failed: %s", e, exc_info=True)
 
 
+# ========== One-time Push nodes.json to panel ==========
+async def sync_nodes_once(context: ContextTypes.DEFAULT_TYPE):
+    """
+    یک‌بار پس از استارت: لیست نودهای فعال DB را به پنل پوش می‌کند (nodes.json).
+    """
+    try:
+        await sync_nodes_into_panel()
+        logger.info("Nodes synced into panel (nodes.json) once after startup.")
+    except Exception as e:
+        logger.error("sync_nodes_into_panel failed: %s", e, exc_info=True)
+
+
 # ========== Scheduler hooks ==========
 def _is_on(keys: list[str], default: str = "0") -> bool:
     """
@@ -389,6 +403,9 @@ async def post_init(app: Application):
 
         # Backfill یک‌باره‌ی server_name سرویس‌های قدیمی
         jq.run_once(initial_backfill_job, when=timedelta(seconds=2), name="initial_backfill")
+
+        # Sync nodes.json در پنل (یک‌بار پس از استارت)
+        jq.run_once(sync_nodes_once, when=timedelta(seconds=3), name="sync_nodes_once")
 
         # گزارش‌ها (حمایت از نام کلید قدیمی و جدید)
         if _is_on(["report_daily_enabled", "daily_report_enabled"], default="0"):
