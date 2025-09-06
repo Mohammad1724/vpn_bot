@@ -1,11 +1,25 @@
+# filename: hiddify_api.py
 # -*- coding: utf-8 -*-
+"""
+Hiddify API client for the bot (async, HTTPX)
+
+این ماژول دو بخش دارد:
+1) ارتباط با API ادمین هیدیفای (/api/v2/admin/): ساخت/گرفتن/تمدید/حذف کاربر
+2) پوش‌کردن تنظیمات ادغام به پنل Expanded API: به‌روزرسانی nodes.json و hidybotconfigs.json
+   از طریق مسیرهای:
+     https://<PANEL_DOMAIN>/<SUB_PATH>/<PANEL_SECRET_UUID>/api/v1/sub/      (POST, body=list[str])
+     https://<PANEL_DOMAIN>/<SUB_PATH>/<PANEL_SECRET_UUID>/api/v1/configs/  (POST, body=dict)
+
+نکته: برای بخش 2، PANEL_SECRET_UUID باید در config.py تنظیم شده باشد. اگر ندارید، مسیر بدون UUID
+هم امتحان می‌شود ولی معمولاً به auth نیاز دارد.
+"""
 
 import asyncio
 import httpx
 import uuid
 import random
 import logging
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 
 import database as db
 from config import PANEL_DOMAIN, ADMIN_PATH, API_KEY, SUB_DOMAINS, SUB_PATH
@@ -18,6 +32,17 @@ except Exception:
     SERVERS = []
     DEFAULT_SERVER_NAME = None
     SERVER_SELECTION_POLICY = "first"
+
+# Expanded API push helpers
+try:
+    from config import PANEL_SECRET_UUID
+except Exception:
+    PANEL_SECRET_UUID = None
+
+try:
+    from config import HIDDIFY_API_VERIFY_SSL
+except Exception:
+    HIDDIFY_API_VERIFY_SSL = True
 
 logger = logging.getLogger(__name__)
 
@@ -331,7 +356,7 @@ def _extract_usage_gb(payload: Dict[str, Any]) -> Optional[float]:
     return None
 
 
-# ========================= API wrappers =========================
+# ========================= Admin API v2 wrappers =========================
 async def create_hiddify_user(
     plan_days: int,
     plan_gb: float,
@@ -457,3 +482,97 @@ async def check_api_connection(server_name: Optional[str] = None) -> bool:
     except Exception as e:
         logger.error("API connection check failed: %s", e, exc_info=True)
         return False
+
+
+# ========================= Expanded API (push nodes/configs) =========================
+def _panel_api_base_for_push() -> List[str]:
+    """
+    کاندیدهای مسیر API پنل برای پوش‌کردن nodes.json و hidybotconfigs.json
+    اولویت:
+      1) https://<PANEL_DOMAIN>/<SUB_PATH>/<PANEL_SECRET_UUID>/api/v1
+      2) https://<PANEL_DOMAIN>/<SUB_PATH>/api/v1
+      3) https://<PANEL_DOMAIN>/<ADMIN_PATH>/<PANEL_SECRET_UUID>/api/v1  (fallback)
+      4) https://<PANEL_DOMAIN>/<ADMIN_PATH>/api/v1                       (fallback)
+    """
+    domain = PANEL_DOMAIN
+    cpath = (SUB_PATH or "sub").strip().strip("/")
+
+    bases: List[str] = []
+    if PANEL_SECRET_UUID:
+        bases.append(f"https://{domain}/{cpath}/{PANEL_SECRET_UUID}/api/v1")
+    bases.append(f"https://{domain}/{cpath}/api/v1")
+
+    if PANEL_SECRET_UUID:
+        bases.append(f"https://{domain}/{ADMIN_PATH}/{PANEL_SECRET_UUID}/api/v1")
+    bases.append(f"https://{domain}/{ADMIN_PATH}/api/v1")
+
+    # حذف تکراری‌ها با حفظ ترتیب
+    seen = set()
+    uniq = []
+    for b in bases:
+        b = b.rstrip("/")
+        if b not in seen:
+            uniq.append(b)
+            seen.add(b)
+    return uniq
+
+
+async def _post_json_noauth(url: str, body: Any, timeout: float = 20.0) -> Tuple[int, Any]:
+    """
+    درخواست POST ساده (بدون هدر ویژه) برای Expanded API.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=timeout, verify=HIDDIFY_API_VERIFY_SSL) as client:
+            resp = await client.post(url, json=body)
+            data = None
+            try:
+                data = resp.json()
+            except Exception:
+                data = None
+            return resp.status_code, data
+    except Exception as e:
+        logger.debug("POST %s failed: %s", url, e)
+        return 0, None
+
+
+async def push_nodes_to_panel(base_urls: List[str]) -> bool:
+    """
+    به‌روزرسانی nodes.json روی پنل اصلی:
+      POST /api/v1/sub/   با بدنه JSON = ["https://NODE/<client_proxy_path>", ...]
+    نکته: هر آیتم باید base مسیر کلاینت نود باشد (بدون UUID).
+    """
+    # پاک‌سازی و یکتا
+    cleaned: List[str] = []
+    seen = set()
+    for u in base_urls or []:
+        u = (u or "").strip().rstrip("/")
+        if u and u not in seen:
+            cleaned.append(u)
+            seen.add(u)
+
+    if not cleaned:
+        # خالی بودن هم به‌عنوان موفق گزارش می‌کنیم (یعنی هیچ نودی برای ادغام ست نیست)
+        logger.info("push_nodes_to_panel: empty list, skipping push.")
+        return True
+
+    for base in _panel_api_base_for_push():
+        status, data = await _post_json_noauth(f"{base}/sub/", cleaned)
+        if status == 200 and isinstance(data, dict) and int(data.get("status", 0)) == 200:
+            return True
+        # تلاش با پایه بعدی
+    logger.warning("push_nodes_to_panel failed on all bases. last_status=%s last_resp=%s", status, data)
+    return False
+
+
+async def push_hidybot_configs(cfg: Dict[str, Any]) -> bool:
+    """
+    به‌روزرسانی hidybotconfigs.json روی پنل اصلی:
+      POST /api/v1/configs/   با بدنه JSON = {"username": True, "randomize": False, "randomize_mode": "servers"}
+    """
+    body = cfg or {}
+    for base in _panel_api_base_for_push():
+        status, data = await _post_json_noauth(f"{base}/configs/", body)
+        if status == 200 and isinstance(data, dict) and int(data.get("status", 0)) == 200:
+            return True
+    logger.warning("push_hidybot_configs failed on all bases. last_status=%s last_resp=%s", status, data)
+    return False
