@@ -148,7 +148,7 @@ async def send_service_details(
             await context.bot.send_message(chat_id=chat_id, text=text)
 
 
-async def more_links_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def more_links_callback(update: Update, Context):
     q = update.callback_query
     await q.answer()
     uuid = q.data.split('_')[-1]
@@ -156,7 +156,7 @@ async def more_links_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not service:
         await q.edit_message_text("سرویس یافت نشد.")
         return
-    await show_link_options_menu(q.message, uuid, service['service_id'], is_edit=True, context=context)
+    await show_link_options_menu(q.message, uuid, service['service_id'], is_edit=True, context=Context)
 
 
 async def show_link_options_menu(message: Message, user_uuid: str, service_id: int, is_edit: bool = True, context: ContextTypes.DEFAULT_TYPE = None):
@@ -170,11 +170,14 @@ async def show_link_options_menu(message: Message, user_uuid: str, service_id: i
     rows.append(nav_row(back_cb=f"refresh_{service_id}", home_cb="home_menu"))
     text = "لطفاً نوع لینک اشتراک مورد نظر را انتخاب کنید:"
     try:
-        if getattr(message, "photo", None):
-            await message.delete()
-            await context.bot.send_message(chat_id=message.chat_id, text=text, reply_markup=markup(rows))
+        if is_edit:
+            if getattr(message, "photo", None):
+                await message.delete()
+                await context.bot.send_message(chat_id=message.chat_id, text=text, reply_markup=markup(rows))
+            else:
+                await message.edit_text(text, reply_markup=markup(rows))
         else:
-            await message.edit_text(text, reply_markup=markup(rows))
+            await message.reply_text(text, reply_markup=markup(rows))
     except BadRequest as e:
         if "message is not modified" not in str(e):
             logger.error("show_link_options_menu error: %s", e)
@@ -393,10 +396,10 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
             plan_gb=float(plan['gb'])
         )
 
-        # توجه: {} (از پاسخ 204) هم موفقیت است؛ فقط None یعنی شکست
-        if new_info is None:
-            logger.error(f"Renewal failed for UUID {service['sub_uuid']}: API did not confirm renewal (None).")
-            raise ValueError("API did not confirm renewal")
+        # فقط وقتی موفقیت تلقی می‌کنیم که new_info واقعاً برگردد و از پنل خوانده شده باشد
+        if not isinstance(new_info, dict) or new_info.get("_not_found"):
+            logger.error(f"Renewal failed for UUID {service['sub_uuid']}: verification failed.")
+            raise ValueError("Panel verification failed")
 
         db.finalize_renewal_transaction(txn_id, plan_id)
 
@@ -407,7 +410,7 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
     except Exception as e:
         logger.error(f"Service renewal failed for UUID {service['sub_uuid']}: {e}", exc_info=True)
         db.cancel_renewal_transaction(txn_id)
-        await _send_renewal_error(original_message, "❌ خطا در تمدید سرویس. لطفاً با پشتیبانی تماس بگیرید.")
+        await _send_renewal_error(original_message, "❌ تمدید اعمال نشد. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.")
     finally:
         context.user_data.pop('renewal_service_id', None)
         context.user_data.pop('renewal_plan_id', None)
