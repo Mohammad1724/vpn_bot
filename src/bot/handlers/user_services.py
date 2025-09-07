@@ -5,7 +5,6 @@ import io
 import json
 import logging
 import httpx
-import qrcode
 from typing import List, Optional
 
 from telegram.ext import ContextTypes
@@ -44,7 +43,6 @@ def _link_label(link_type: str) -> str:
 
 
 def _get_default_link_type() -> str:
-    """Read admin's preferred link type from settings."""
     try:
         v = db.get_setting("default_sub_link_type")
         if v:
@@ -118,12 +116,7 @@ async def send_service_details(
         safe_name = config_name.replace(' ', '_')
         base_link = utils.build_subscription_url(service['sub_uuid'])
 
-        preferred_url = ""
-        if admin_default_type == "sub":
-            preferred_url = base_link
-        else:
-            t = admin_default_type.replace('clashmeta', 'clash-meta')
-            preferred_url = f"{base_link}/{t}/?name={safe_name}"
+        preferred_url = base_link if admin_default_type == "sub" else f"{base_link}/{admin_default_type.replace('clashmeta', 'clash-meta')}/?name={safe_name}"
 
         caption = utils.create_service_info_caption(info, service_db_record=service, override_sub_url=preferred_url)
         keyboard_rows = []
@@ -177,14 +170,11 @@ async def show_link_options_menu(message: Message, user_uuid: str, service_id: i
     rows.append(nav_row(back_cb=f"refresh_{service_id}", home_cb="home_menu"))
     text = "لطفاً نوع لینک اشتراک مورد نظر را انتخاب کنید:"
     try:
-        if is_edit:
-            if message.photo:
-                await message.delete()
-                await context.bot.send_message(chat_id=message.chat_id, text=text, reply_markup=markup(rows))
-            else:
-                await message.edit_text(text, reply_markup=markup(rows))
+        if getattr(message, "photo", None):
+            await message.delete()
+            await context.bot.send_message(chat_id=message.chat_id, text=text, reply_markup=markup(rows))
         else:
-            await message.reply_text(text, reply_markup=markup(rows))
+            await message.edit_text(text, reply_markup=markup(rows))
     except BadRequest as e:
         if "message is not modified" not in str(e):
             logger.error("show_link_options_menu error: %s", e)
@@ -203,7 +193,6 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     info = await hiddify_api.get_user_info(user_uuid)
     config_name = (info.get('name', 'config') if isinstance(info, dict) else 'config') or 'config'
     safe_name = config_name.replace(' ', '_')
-
     base_link = utils.build_subscription_url(user_uuid)
 
     if link_type == "full":
@@ -404,8 +393,9 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
             plan_gb=float(plan['gb'])
         )
 
-        if not new_info:
-            logger.error(f"Renewal failed: API did not confirm reset for UUID {service['sub_uuid']}")
+        # توجه: {} (از پاسخ 204) هم موفقیت است؛ فقط None یعنی شکست
+        if new_info is None:
+            logger.error(f"Renewal failed for UUID {service['sub_uuid']}: API did not confirm renewal (None).")
             raise ValueError("API did not confirm renewal")
 
         db.finalize_renewal_transaction(txn_id, plan_id)
