@@ -9,18 +9,7 @@ from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime, timezone
 
 import database as db
-from config import PANEL_DOMAIN, ADMIN_PATH, API_KEY, SUB_DOMAINS, SUB_PATH
-
-# Expanded API access
-try:
-    from config import PANEL_SECRET_UUID
-except Exception:
-    PANEL_SECRET_UUID = None
-
-try:
-    from config import HIDDIFY_API_VERIFY_SSL
-except Exception:
-    HIDDIFY_API_VERIFY_SSL = True
+from config import PANEL_DOMAIN, ADMIN_PATH, API_KEY, SUB_DOMAINS, SUB_PATH, PANEL_SECRET_UUID, HIDDIFY_API_VERIFY_SSL
 
 logger = logging.getLogger(__name__)
 
@@ -28,23 +17,13 @@ MAX_RETRIES = 3
 BASE_RETRY_DELAY = 1.0
 
 
-# ========================= Server selection (Single Node) =========================
 def _select_server() -> Dict[str, Any]:
-    """
-    همیشه تنظیمات پنل اصلی را برمی‌گرداند (نودها غیرفعال).
-    """
+    """همیشه تنظیمات پنل اصلی را برمی‌گرداند."""
     return {
-        "name": "Main",
-        "panel_domain": PANEL_DOMAIN,
-        "admin_path": ADMIN_PATH,
-        "sub_path": SUB_PATH,
-        "api_key": API_KEY,
-        "sub_domains": SUB_DOMAINS or [],
-        "panel_type": "hiddify"
+        "name": "Main", "panel_domain": PANEL_DOMAIN, "admin_path": ADMIN_PATH,
+        "sub_path": SUB_PATH, "api_key": API_KEY, "sub_domains": SUB_DOMAINS or [],
     }
 
-
-# ========================= HTTP helpers =========================
 def _get_base_url(server: Dict[str, Any]) -> str:
     return f"https://{server['panel_domain']}/{server['admin_path']}/api/v2/admin/"
 
@@ -78,16 +57,12 @@ async def _make_request(method: str, url: str, server: Dict[str, Any], **kwargs)
             if retries <= MAX_RETRIES: await asyncio.sleep(BASE_RETRY_DELAY * (2 ** (retries - 1)))
     return None
 
-
-# ========================= Usage extraction =========================
 def _extract_usage_gb(payload: Dict[str, Any]) -> Optional[float]:
     if not isinstance(payload, dict): return None
     for k in ("current_usage_GB", "usage_GB", "used_GB"):
         if k in payload: return float(payload[k])
     return None
 
-
-# ========================= Expanded API helpers =========================
 def _expanded_api_bases_for_server(server: Dict[str, Any]) -> List[str]:
     domain = server.get("panel_domain") or PANEL_DOMAIN
     cpath = (server.get("sub_path") or SUB_PATH or "sub").strip().strip("/")
@@ -124,7 +99,9 @@ async def _get_noauth(url: str, timeout: float = 20.0) -> Tuple[int, Any]:
 async def _expanded_user_update(user_uuid: str, plan_days: int, plan_gb: float) -> bool:
     server = _select_server()
     bases = _expanded_api_bases_for_server(server)
-    if not bases: return False
+    if not bases:
+        logger.error("Expanded API base URL could not be constructed. Check PANEL_SECRET_UUID in config.")
+        return False
     body = {
         "uuid": user_uuid, "package_days": int(plan_days), "usage_limit_GB": float(plan_gb or 0.0),
         "start_date": datetime.now(timezone.utc).isoformat(), "current_usage_GB": 0
@@ -137,13 +114,12 @@ async def _expanded_user_update(user_uuid: str, plan_days: int, plan_gb: float) 
 async def _expanded_update_usage() -> bool:
     server = _select_server()
     bases = _expanded_api_bases_for_server(server)
+    if not bases: return False
     for base in bases:
         status, _ = await _get_noauth(f"{base}/update_usage/", timeout=45.0)
         if status == 200: return True
     return False
 
-
-# ========================= Admin API v2 wrappers =========================
 async def create_hiddify_user(plan_days: int, plan_gb: float, user_telegram_id: str, custom_name: str = "") -> Optional[Dict[str, Any]]:
     server = _select_server()
     endpoint = _get_base_url(server) + "user/"
@@ -170,20 +146,17 @@ async def get_user_info(user_uuid: str) -> Optional[Dict[str, Any]]:
     return await _make_request("get", endpoint, server, timeout=10.0)
 
 async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float) -> Optional[Dict[str, Any]]:
-    # 1. Expanded API POST /user/ to update and reset
     exp_ok = await _expanded_user_update(user_uuid, plan_days, plan_gb)
     if not exp_ok:
-        logger.warning("Expanded user update failed for %s", user_uuid)
-    # 2. Force usage recompute so Admin API reflects changes
+        logger.error("Expanded user update failed for %s. Check PANEL_SECRET_UUID and sub_path.", user_uuid)
     await _expanded_update_usage()
-    await asyncio.sleep(1.0)
-    # 3. Poll info to verify
+    await asyncio.sleep(1.5)
     for _ in range(3):
         info = await get_user_info(user_uuid)
         if isinstance(info, dict) and not info.get("_not_found"):
             used = _extract_usage_gb(info) or 0.0
             if used <= 0.01: return info
-        await asyncio.sleep(0.8)
+        await asyncio.sleep(1.0)
     return await get_user_info(user_uuid)
 
 async def delete_user_from_panel(user_uuid: str) -> bool:
