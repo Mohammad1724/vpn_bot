@@ -5,6 +5,7 @@ import httpx
 import uuid
 import random
 import logging
+import re
 from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime, timezone
 
@@ -71,12 +72,18 @@ def _extract_usage_gb(payload: Dict[str, Any]) -> Optional[float]:
                 return None
     return None
 
+def _looks_like_secret(s: str) -> bool:
+    s = (s or "").strip().strip("/")
+    if not s or s.lower() in ("sub", "api", "v1", "v2", "admin"):
+        return False
+    return re.fullmatch(r"[A-Za-z0-9\-_]{8,64}", s) is not None
+
 def _expanded_api_bases_for_server(server: Dict[str, Any]) -> List[str]:
     """
     ساخت امن مسیر Expanded API:
     - اگر SUB_PATH به‌اشتباه برابر SECRET باشد، از sub/SECRET استفاده می‌کنیم.
     - اگر SECRET از قبل در SUB_PATH هست، دوباره اضافه نمی‌کنیم.
-    - در غیر این صورت، SUB_PATH/SECRET را می‌سازیم.
+    - اگر PANEL_SECRET_UUID خالی بود و SUB_PATH شبیه SECRET بود، از SUB_PATH به‌عنوان SECRET استفاده می‌کنیم.
     """
     domain = (server.get("panel_domain") or PANEL_DOMAIN or "").strip()
     raw_cpath = (server.get("sub_path") or SUB_PATH or "sub")
@@ -84,27 +91,43 @@ def _expanded_api_bases_for_server(server: Dict[str, Any]) -> List[str]:
     secret = (PANEL_SECRET_UUID or "").strip().strip("/")
 
     bases: List[str] = []
-    if not domain or not secret:
+    if not domain:
         return bases
 
     lc_cpath = cpath.lower()
     lc_secret = secret.lower()
 
-    # حالت اشتباه رایج: SUB_PATH == SECRET
-    if lc_cpath == lc_secret:
-        base_path = f"sub/{secret}"
-    else:
-        parts = [p.strip() for p in cpath.split("/") if p.strip()]
-        parts_l = [p.lower() for p in parts]
-        if lc_secret in parts_l:
-            # SECRET از قبل در مسیر هست
-            base_path = cpath
+    base_path: Optional[str] = None
+
+    if secret:
+        # SECRET مشخص است
+        if lc_cpath == lc_secret:
+            base_path = f"sub/{secret}"
         else:
-            # SECRET در مسیر نیست، اضافه‌اش می‌کنیم
-            if cpath:
-                base_path = f"{cpath}/{secret}"
+            parts = [p.strip() for p in cpath.split("/") if p.strip()]
+            parts_l = [p.lower() for p in parts]
+            if lc_secret in parts_l:
+                base_path = cpath  # SECRET از قبل در مسیر است
             else:
-                base_path = f"sub/{secret}"
+                base_path = f"{cpath}/{secret}" if cpath else f"sub/{secret}"
+    else:
+        # SECRET خالی است: سعی می‌کنیم از SUB_PATH استخراج کنیم
+        parts = [p.strip() for p in cpath.split("/") if p.strip()]
+        if not parts:
+            return bases
+        if parts[0].lower() == "sub":
+            if len(parts) >= 2 and _looks_like_secret(parts[1]):
+                base_path = f"sub/{parts[1]}"
+            else:
+                return bases
+        else:
+            if _looks_like_secret(parts[0]):
+                base_path = f"sub/{parts[0]}"
+            else:
+                return bases
+
+    if not base_path:
+        return bases
 
     bases.append(f"https://{domain}/{base_path}/api/v1")
     return bases
@@ -145,7 +168,7 @@ async def _expanded_user_update(user_uuid: str, plan_days: int, plan_gb: float) 
     server = _select_server()
     bases = _expanded_api_bases_for_server(server)
     if not bases:
-        logger.error("Expanded API base URL could not be constructed. Check PANEL_SECRET_UUID in config.")
+        logger.error("Expanded API base URL could not be constructed. Check PANEL_SECRET_UUID/SUB_PATH in config.")
         return False
     body = {
         "uuid": user_uuid,
