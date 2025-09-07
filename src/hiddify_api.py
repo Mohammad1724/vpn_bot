@@ -1,3 +1,4 @@
+# filename: hiddify_api.py
 # -*- coding: utf-8 -*-
 import asyncio
 import httpx
@@ -53,7 +54,8 @@ async def _make_request(method: str, url: str, server: Dict[str, Any], **kwargs)
                 try:
                     return resp.json()
                 except ValueError:
-                    return {}  # support 204 No Content
+                    # 204 No Content یا پاسخ بدون JSON
+                    return {}
         except httpx.HTTPStatusError as e:
             status = e.response.status_code if e.response is not None else None
             text = e.response.text if e.response is not None else str(e)
@@ -163,66 +165,6 @@ async def _get_noauth(url: str, timeout: float = 20.0) -> Tuple[int, Any]:
         logger.debug("GET %s failed: %s", url, e)
         return 0, None
 
-async def _expanded_user_update(user_uuid: str, plan_days: int, plan_gb: float) -> bool:
-    server = _select_server()
-    bases = _expanded_api_bases_for_server(server)
-    if not bases:
-        logger.error("Expanded API base URL could not be constructed. Check PANEL_SECRET_UUID/SUB_PATH in config.")
-        return False
-    body = {
-        "uuid": user_uuid,
-        "package_days": int(plan_days),
-        "usage_limit_GB": float(plan_gb or 0.0),
-        "start_date": datetime.now(timezone.utc).isoformat(),
-        "current_usage_GB": 0
-    }
-    for base in bases:
-        status, _ = await _post_json_noauth(f"{base}/user/", body, timeout=20.0)
-        if 200 <= status < 300:
-            return True
-    return False
-
-async def _expanded_update_usage() -> bool:
-    server = _select_server()
-    bases = _expanded_api_bases_for_server(server)
-    if not bases:
-        return False
-    for base in bases:
-        status, _ = await _get_noauth(f"{base}/update_usage/", timeout=45.0)
-        if 200 <= status < 300:
-            return True
-    return False
-
-async def _admin_renew_fallback(user_uuid: str, plan_days: int, plan_gb: float) -> Optional[Dict[str, Any]]:
-    server = _select_server()
-    url = f"{_get_base_url(server)}user/{user_uuid}/"
-    payload_variants = [
-        {
-            "package_days": int(plan_days),
-            "usage_limit_GB": float(plan_gb or 0.0),
-            "start_date": datetime.now(timezone.utc).isoformat(),
-            "current_usage_GB": 0,
-        },
-        {
-            "package_days": int(plan_days),
-            "usage_limit_GB": float(plan_gb or 0.0),
-            "start_date": datetime.now(timezone.utc).isoformat(),
-        },
-        {
-            "package_days": int(plan_days),
-            "usage_limit_GB": float(plan_gb or 0.0),
-        },
-    ]
-    for method in ("patch", "put"):
-        for p in payload_variants:
-            resp = await _make_request(method, url, server, json=p, timeout=20.0)
-            if resp is not None:
-                info = await get_user_info(user_uuid)
-                logger.info("Renewal via Admin API (%s) applied.", method.upper())
-                return info if isinstance(info, dict) else resp
-    logger.error("Admin API fallback failed for %s", user_uuid)
-    return None
-
 async def create_hiddify_user(plan_days: int, plan_gb: float, user_telegram_id: str, custom_name: str = "") -> Optional[Dict[str, Any]]:
     server = _select_server()
     endpoint = _get_base_url(server) + "user/"
@@ -251,28 +193,133 @@ async def get_user_info(user_uuid: str) -> Optional[Dict[str, Any]]:
     endpoint = f"{_get_base_url(server)}user/{user_uuid}/"
     return await _make_request("get", endpoint, server, timeout=10.0)
 
+def _parse_dt(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(value)
+        except Exception:
+            return None
+    if isinstance(value, str):
+        s = value.strip()
+        try:
+            # ISO 8601
+            s2 = s.replace("Z", "+00:00")
+            return datetime.fromisoformat(s2)
+        except Exception:
+            pass
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(s, fmt)
+            except Exception:
+                continue
+    return None
+
+def _verify_admin_renew(before: Optional[Dict[str, Any]], after: Optional[Dict[str, Any]], plan_days: int, plan_gb: float, expected_start_str: str) -> bool:
+    if not isinstance(after, dict):
+        return False
+    # 1) اگر start_date تغییر کرده باشد => موفق
+    before_start = _parse_dt((before or {}).get("start_date"))
+    after_start = _parse_dt(after.get("start_date"))
+    if after_start:
+        try:
+            expected_dt = datetime.strptime(expected_start_str, "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            expected_dt = None
+        if not before_start or (after_start and expected_dt and abs((after_start - expected_dt).total_seconds()) <= 5 * 60):
+            return True
+        if before_start and after_start and (after_start - before_start).total_seconds() > 60:
+            return True
+
+    # 2) تغییر در محدودیت حجم یا تعداد روز (برای برخی پنل‌ها نشانگر تمدید)
+    try:
+        if float(after.get("usage_limit_GB", -1)) == float(plan_gb):
+            return True
+    except Exception:
+        pass
+    try:
+        if int(after.get("package_days", -1)) == int(plan_days):
+            return True
+    except Exception:
+        pass
+
+    return False
+
+async def _admin_renew_fallback(user_uuid: str, plan_days: int, plan_gb: float, before_info: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """
+    تلاش برای تمدید با Admin API:
+    - start_date با فرمت "YYYY-MM-DD HH:MM:SS" ست می‌شود (فرمت مورد قبول پنل).
+    - پس از هر PATCH/PUT وضعیت کاربر خوانده می‌شود و فقط در صورت تغییر واقعی تایید می‌شود.
+    """
+    server = _select_server()
+    url = f"{_get_base_url(server)}user/{user_uuid}/"
+    # تاریخ با فرمت مورد قبول پنل
+    now_local_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    payload_variants = [
+        {
+            "package_days": int(plan_days),
+            "usage_limit_GB": float(plan_gb or 0.0),
+            "start_date": now_local_str,
+            "current_usage_GB": 0,
+        },
+        {
+            "package_days": int(plan_days),
+            "usage_limit_GB": float(plan_gb or 0.0),
+            "start_date": now_local_str,
+        },
+        {
+            "package_days": int(plan_days),
+            "usage_limit_GB": float(plan_gb or 0.0),
+        },
+    ]
+
+    for method in ("patch", "put"):
+        for p in payload_variants:
+            resp = await _make_request(method, url, server, json=p, timeout=20.0)
+            if resp is None:
+                continue
+            # تایید با خواندن وضعیت جدید
+            after = await get_user_info(user_uuid)
+            if _verify_admin_renew(before_info, after, plan_days, plan_gb, now_local_str):
+                logger.info("Renewal via Admin API (%s) applied.", method.upper())
+                return after if isinstance(after, dict) else resp
+
+    logger.error("Admin API fallback failed for %s", user_uuid)
+    return None
+
 async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float) -> Optional[Dict[str, Any]]:
-    exp_ok = await _expanded_user_update(user_uuid, plan_days, plan_gb)
-    if not exp_ok:
-        logger.error("Expanded user update failed for %s. Check PANEL_SECRET_UUID and sub_path.", user_uuid)
+    """
+    تمدید کاربر:
+    - ابتدا تلاش با Expanded API (اگر SECRET داشته باشید) و راستی‌آزمایی ریست مصرف.
+    - در صورت عدم دسترسی، تلاش با Admin API و راستی‌آزمایی تغییر start_date/پارامترها.
+    """
+    before = await get_user_info(user_uuid)
 
-    if exp_ok:
-        await _expanded_update_usage()
-        await asyncio.sleep(1.0)
-        last_info: Optional[Dict[str, Any]] = None
-        for _ in range(5):
-            info = await get_user_info(user_uuid)
-            if isinstance(info, dict) and not info.get("_not_found"):
-                last_info = info
-                used = _extract_usage_gb(info) or 0.0
-                logger.info("Post-renew check via Expanded API: used=%.3f GB", used)
-                if used <= 0.05:
-                    return info
+    # 1) Expanded API
+    exp_ok = False
+    bases = _expanded_api_bases_for_server(_select_server())
+    if bases:
+        exp_ok = await _expanded_user_update(user_uuid, plan_days, plan_gb)
+        if not exp_ok:
+            logger.error("Expanded user update failed for %s. Check PANEL_SECRET_UUID and sub_path.", user_uuid)
+
+        # تلاش برای بروزرسانی و تایید ریست مصرف
+        if exp_ok:
+            await _expanded_update_usage()
             await asyncio.sleep(1.0)
-        return last_info
+            for _ in range(5):
+                info = await get_user_info(user_uuid)
+                if isinstance(info, dict) and not info.get("_not_found"):
+                    used = _extract_usage_gb(info) or 0.0
+                    if used <= 0.05:
+                        return info
+                await asyncio.sleep(1.0)
 
+    # 2) Admin API fallback با راستی‌آزمایی
     logger.info("Falling back to Admin API for renewal...")
-    fb = await _admin_renew_fallback(user_uuid, plan_days, plan_gb)
+    fb = await _admin_renew_fallback(user_uuid, plan_days, plan_gb, before_info=before)
     return fb
 
 async def delete_user_from_panel(user_uuid: str) -> bool:
