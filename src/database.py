@@ -1,3 +1,4 @@
+# filename: database.py
 # -*- coding: utf-8 -*-
 
 import sqlite3
@@ -9,12 +10,6 @@ from urllib.parse import urlparse
 DB_NAME = "vpn_bot.db"
 logger = logging.getLogger(__name__)
 _db_connection = None
-
-# Optional multi-server config (used to resolve server_name from sub_link)
-try:
-    from config import SERVERS
-except Exception:
-    SERVERS = []
 
 
 def _get_connection():
@@ -90,96 +85,6 @@ def _remove_device_limit_alert_column_if_exists(conn: sqlite3.Connection):
             logger.info("Rebuild completed; device_limit_alert_sent removed.")
     except Exception as e:
         logger.warning(f"Couldn't remove device_limit_alert_sent column: {e}")
-
-
-# ---------- Ensure/repair nodes schema (handles older tables without id) ----------
-def _ensure_nodes_schema(conn: sqlite3.Connection):
-    cur = conn.cursor()
-    try:
-        cur.execute("PRAGMA table_info(nodes)")
-        cols = [row["name"] for row in cur.fetchall()]
-    except sqlite3.Error:
-        cols = []
-
-    # If no table yet, create full schema
-    if not cols:
-        cur.execute('''
-            CREATE TABLE IF NOT EXISTS nodes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                panel_type TEXT NOT NULL DEFAULT 'hiddify',
-                panel_domain TEXT,
-                admin_path TEXT,
-                sub_path TEXT,
-                api_key TEXT,
-                sub_domains TEXT DEFAULT '[]',
-                capacity INTEGER NOT NULL DEFAULT 100,
-                current_users INTEGER NOT NULL DEFAULT 0,
-                is_active INTEGER NOT NULL DEFAULT 1,
-                location TEXT,
-                created_at TEXT NOT NULL DEFAULT (DATETIME('now'))
-            )
-        ''')
-        conn.commit()
-        return
-
-    # If id column missing => rebuild table with full schema and migrate rows
-    if "id" not in cols:
-        logger.info("Rebuilding nodes table to add 'id' primary key and full schema...")
-        cur.execute("BEGIN")
-        cur.execute('''
-            CREATE TABLE IF NOT EXISTS nodes_new (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                panel_type TEXT NOT NULL DEFAULT 'hiddify',
-                panel_domain TEXT,
-                admin_path TEXT,
-                sub_path TEXT,
-                api_key TEXT,
-                sub_domains TEXT DEFAULT '[]',
-                capacity INTEGER NOT NULL DEFAULT 100,
-                current_users INTEGER NOT NULL DEFAULT 0,
-                is_active INTEGER NOT NULL DEFAULT 1,
-                location TEXT,
-                created_at TEXT NOT NULL DEFAULT (DATETIME('now'))
-            )
-        ''')
-
-        # Determine which columns exist in old table to migrate
-        cur.execute("PRAGMA table_info(nodes)")
-        old_cols = [row["name"] for row in cur.fetchall()]
-        migratable = [c for c in old_cols if c in (
-            "name", "panel_type", "panel_domain", "admin_path", "sub_path",
-            "api_key", "sub_domains", "capacity", "current_users", "is_active",
-            "location", "created_at"
-        )]
-        if migratable:
-            cols_list = ", ".join(migratable)
-            cur.execute(f"INSERT INTO nodes_new ({cols_list}) SELECT {cols_list} FROM nodes")
-        else:
-            # Only name existed previously
-            try:
-                cur.execute("INSERT INTO nodes_new (name) SELECT name FROM nodes")
-            except Exception:
-                pass
-
-        cur.execute("DROP TABLE nodes")
-        cur.execute("ALTER TABLE nodes_new RENAME TO nodes")
-        conn.commit()
-        logger.info("Nodes table rebuild completed.")
-
-    # Ensure all required columns exist (for partial older schemas)
-    _add_column_if_not_exists(conn, "nodes", "panel_type", "TEXT NOT NULL DEFAULT 'hiddify'")
-    _add_column_if_not_exists(conn, "nodes", "panel_domain", "TEXT")
-    _add_column_if_not_exists(conn, "nodes", "admin_path", "TEXT")
-    _add_column_if_not_exists(conn, "nodes", "sub_path", "TEXT")
-    _add_column_if_not_exists(conn, "nodes", "api_key", "TEXT")
-    _add_column_if_not_exists(conn, "nodes", "sub_domains", "TEXT DEFAULT '[]'")
-    _add_column_if_not_exists(conn, "nodes", "capacity", "INTEGER NOT NULL DEFAULT 100")
-    _add_column_if_not_exists(conn, "nodes", "current_users", "INTEGER NOT NULL DEFAULT 0")
-    _add_column_if_not_exists(conn, "nodes", "is_active", "INTEGER NOT NULL DEFAULT 1")
-    _add_column_if_not_exists(conn, "nodes", "location", "TEXT")
-    _add_column_if_not_exists(conn, "nodes", "created_at", "TEXT DEFAULT CURRENT_TIMESTAMP")
 
 
 def init_db():
@@ -306,15 +211,7 @@ def init_db():
     ''')
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_traffic_user ON user_traffic(user_id)")
 
-    # nodes: ensure schema (handles legacy tables without id)
-    cursor.execute('''CREATE TABLE IF NOT EXISTS nodes (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE)''')
-    _ensure_nodes_schema(conn)  # rebuild/upgrade if needed
-
-    # Indexes on nodes
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_nodes_active ON nodes(is_active)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_nodes_name ON nodes(name)")
-
-    # service_endpoints: extra endpoints per service (for Subconverter unified link)
+    # service_endpoints: extra endpoints per service (optional)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS service_endpoints (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -348,44 +245,12 @@ def init_db():
 
 def _resolve_server_name_from_link(sub_link: str) -> str | None:
     """
-    Resolve server_name from subscription link host.
-    Priority:
-      1) DB nodes: match host against panel_domain or any sub_domains
-      2) Fallback to config.SERVERS
+    Resolve server_name directly from subscription link host (no nodes/config lookup).
     """
     try:
         parsed = urlparse(sub_link)
-        host = (parsed.netloc or "").split(":")[0].lower()
-        if not host:
-            return None
-
-        # 1) Try DB nodes
-        try:
-            conn = _connect_db()
-            cur = conn.cursor()
-            cur.execute("SELECT name, panel_domain, sub_domains FROM nodes")
-            for row in cur.fetchall():
-                name = row["name"]
-                panel = (row["panel_domain"] or "").lower()
-                # sub_domains stored as JSON string
-                try:
-                    subs_raw = row["sub_domains"]
-                    subs = json.loads(subs_raw) if subs_raw else []
-                    subs = [str(x).lower() for x in subs if str(x).strip()]
-                except Exception:
-                    subs = []
-                if host == panel or host in subs:
-                    return name
-        except Exception:
-            pass
-
-        # 2) Fallback to config.SERVERS
-        for srv in SERVERS or []:
-            panel = str(srv.get("panel_domain", "")).lower()
-            subs = [str(d).lower() for d in (srv.get("sub_domains") or [])]
-            if host == panel or host in subs:
-                return str(srv.get("name"))
-        return None
+        host = (parsed.hostname or "").lower()
+        return host or None
     except Exception:
         return None
 
@@ -558,6 +423,8 @@ def delete_plan_safe(plan_id: int):
 def add_active_service(user_id: int, name: str, sub_uuid: str, sub_link: str, plan_id: int | None, server_name: str | None = None):
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn = _connect_db()
+    if server_name is None:
+        server_name = _resolve_server_name_from_link(sub_link)
     conn.execute(
         "INSERT INTO active_services (user_id, name, sub_uuid, sub_link, plan_id, created_at, server_name) VALUES (?, ?, ?, ?, ?, ?, ?)",
         (user_id, name, sub_uuid, sub_link, plan_id, now_str, server_name)
@@ -728,7 +595,7 @@ def initiate_renewal_transaction(user_id: int, service_id: int, plan_id: int) ->
         return None
 
 def finalize_renewal_transaction(transaction_id: int, new_plan_id: int):
-    """نهایی کردن تراکنش تمدید با مدیریت تراکنش بهتر"""
+    """نهایی کردن تراکنش تمدید با مدیریت تراکنش بهتر (بدون وابستگی به نود)"""
     conn = _connect_db()
     cursor = conn.cursor()
 
@@ -746,7 +613,7 @@ def finalize_renewal_transaction(transaction_id: int, new_plan_id: int):
         # کسر مبلغ از موجودی کاربر
         cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (txn['amount'], txn['user_id']))
 
-        # به‌روزرسانی سرویس
+        # به‌روزرسانی سرویس (صرفاً تغییر plan_id و ریست هشدار مصرف کم)
         cursor.execute("UPDATE active_services SET plan_id = ?, low_usage_alert_sent = 0 WHERE service_id = ?", (new_plan_id, txn['service_id']))
 
         # ثبت در سوابق فروش
@@ -1039,108 +906,9 @@ def get_total_user_traffic(user_id: int) -> float:
     val = cur.fetchone()[0]
     return float(val or 0.0)
 
-# ===================== Nodes (Hiddify) =====================
-def _parse_sub_domains(raw: str | None) -> list[str]:
-    if not raw:
-        return []
-    try:
-        val = json.loads(raw)
-        if isinstance(val, list):
-            return [str(x).strip() for x in val if str(x).strip()]
-    except Exception:
-        pass
-    # fallback: comma-separated
-    return [s.strip() for s in str(raw).split(",") if s.strip()]
-
-def _to_json_list(val) -> str:
-    if val is None:
-        return "[]"
-    if isinstance(val, list):
-        return json.dumps([str(x).strip() for x in val if str(x).strip()], ensure_ascii=False)
-    # string (comma-separated)
-    return json.dumps([s.strip() for s in str(val).split(",") if s.strip()], ensure_ascii=False)
-
-def _node_row_to_dict(row: sqlite3.Row) -> dict:
-    d = dict(row)
-    d["sub_domains"] = _parse_sub_domains(d.get("sub_domains"))
-    return d
-
-def add_node(name: str, panel_type: str, panel_domain: str, admin_path: str,
-             sub_path: str, api_key: str, sub_domains: list[str] | str | None,
-             capacity: int = 100, location: str | None = None, is_active: bool = True) -> int:
-    conn = _connect_db()
-    cur = conn.cursor()
-    cur.execute('''
-        INSERT INTO nodes (name, panel_type, panel_domain, admin_path, sub_path, api_key, sub_domains,
-                           capacity, current_users, is_active, location)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
-    ''', (
-        name.strip(), panel_type.strip() or "hiddify", panel_domain.strip(),
-        admin_path.strip(), sub_path.strip(), api_key.strip(), _to_json_list(sub_domains),
-        int(capacity or 100), 1 if is_active else 0, (location.strip() if location else None)
-    ))
-    conn.commit()
-    return cur.lastrowid
-
-def list_nodes(only_active: bool = False) -> list[dict]:
-    conn = _connect_db()
-    cur = conn.cursor()
-    if only_active:
-        cur.execute("SELECT * FROM nodes WHERE is_active = 1 ORDER BY id ASC")
-    else:
-        cur.execute("SELECT * FROM nodes ORDER BY id ASC")
-    return [_node_row_to_dict(r) for r in cur.fetchall()]
-
-def get_node(node_id: int) -> dict | None:
-    conn = _connect_db()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM nodes WHERE id = ?", (node_id,))
-    row = cur.fetchone()
-    return _node_row_to_dict(row) if row else None
-
-def get_node_by_name(name: str) -> dict | None:
-    conn = _connect_db()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM nodes WHERE name = ? COLLATE NOCASE", (name.strip(),))
-    row = cur.fetchone()
-    return _node_row_to_dict(row) if row else None
-
-def update_node(node_id: int, data: dict):
-    if not data:
-        return
-    allowed = {"name", "panel_type", "panel_domain", "admin_path", "sub_path", "api_key",
-               "sub_domains", "capacity", "current_users", "is_active", "location"}
-    fields, params = [], []
-    for k, v in data.items():
-        if k not in allowed:
-            continue
-        if k == "sub_domains":
-            v = _to_json_list(v)
-        fields.append(f"{k} = ?")
-        params.append(v)
-    if not fields:
-        return
-    params.append(node_id)
-    q = f"UPDATE nodes SET {', '.join(fields)} WHERE id = ?"
-    conn = _connect_db()
-    conn.execute(q, tuple(params))
-    conn.commit()
-
-def delete_node(node_id: int):
-    conn = _connect_db()
-    conn.execute("DELETE FROM nodes WHERE id = ?", (node_id,))
-    conn.commit()
-
-def count_services_on_node(server_name: str) -> int:
-    conn = _connect_db()
-    cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM active_services WHERE server_name = ?", (server_name,))
-    return int(cur.fetchone()[0] or 0)
-
-# ===================== Backfill & Cleanup helpers =====================
 def backfill_active_services_server_names() -> int:
     """
-    برای سرویس‌های فعالی که server_name ندارند، از روی sub_link و جدول nodes مقداردهی می‌کند.
+    برای سرویس‌های فعالی که server_name ندارند، از روی sub_link مقداردهی می‌کند.
     خروجی: تعداد رکوردهای به‌روزرسانی‌شده.
     """
     conn = _connect_db()
@@ -1205,10 +973,10 @@ def delete_user_traffic_not_in_and_older(user_id: int, allowed_servers: list[str
     except Exception as e:
         logger.error("delete_user_traffic_not_in_and_older failed for user %s: %s", user_id, e, exc_info=True)
 
-# ===================== Service Endpoints (for multi-panel unified link) =====================
+# ===================== Service Endpoints (optional) =====================
 def add_service_endpoint(service_id: int, server_name: str | None, sub_uuid: str | None, sub_link: str) -> int:
     """
-    افزودن endpoint اضافه برای یک سرویس (مثلا سرویس روی پنل دوم).
+    افزودن endpoint اضافه برای یک سرویس (مثلا لینک دوم).
     """
     conn = _connect_db()
     cur = conn.cursor()
