@@ -1,4 +1,3 @@
-# filename: app.py
 # -*- coding: utf-8 -*-
 
 import logging
@@ -24,7 +23,8 @@ from bot.handlers.admin import (
     settings as admin_settings, backup as admin_backup, users as admin_users,
     gift_codes as admin_gift
 )
-from bot.handlers.admin import nodes as admin_nodes
+# حذف کامل import مربوط به نودها
+# from bot.handlers.admin import nodes as admin_nodes
 import bot.handlers.admin.trial_settings_ui as trial_ui
 from bot.handlers.trial import get_trial_service as trial_get_trial_service
 from bot.handlers.admin.trial_settings import set_trial_days, set_trial_gb
@@ -344,83 +344,6 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # --------- ADMIN: NODES ----------
-    nodes_conv = ConversationHandler(
-        entry_points=[
-            MessageHandler(filters.Regex(r'^🖥️ مدیریت نودها$') & admin_filter, admin_nodes.nodes_menu),
-            CallbackQueryHandler(admin_nodes.nodes_menu, pattern=r'^admin_nodes$'),
-            CallbackQueryHandler(admin_nodes.list_nodes, pattern=r'^admin_list_nodes$'),
-            CallbackQueryHandler(admin_nodes.node_settings_menu, pattern=r'^admin_node_settings$'),
-        ],
-        states={
-            constants.NODES_MENU: [
-                CallbackQueryHandler(admin_nodes.add_node_start, pattern=r'^admin_add_node$'),
-                CallbackQueryHandler(admin_nodes.list_nodes, pattern=r'^admin_list_nodes$'),
-                CallbackQueryHandler(admin_nodes.node_settings_menu, pattern=r'^admin_node_settings$'),
-                CallbackQueryHandler(admin_c.admin_entry, pattern=r'^admin_back_to_menu$'),
-            ],
-            constants.NODE_SETTINGS_MENU: [
-                CallbackQueryHandler(admin_nodes.toggle_node_setting, pattern=r'^toggle_node_setting_'),
-                CallbackQueryHandler(admin_nodes.edit_node_setting_start, pattern=r'^edit_node_setting_'),
-                CallbackQueryHandler(admin_nodes.nodes_menu, pattern=r'^admin_nodes$'),
-            ],
-            constants.EDIT_NODE_SETTING_VALUE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.edit_node_setting_value_received)
-            ],
-            constants.ADD_NAME: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_name)
-            ],
-            constants.ADD_PANEL_DOMAIN: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_panel_domain)
-            ],
-            constants.ADD_ADMIN_PATH: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_admin_path)
-            ],
-            constants.ADD_SUB_PATH: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_sub_path)
-            ],
-            constants.ADD_API_KEY: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_api_key)
-            ],
-            constants.ADD_SUB_DOMAINS: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_sub_domains)
-            ],
-            constants.ADD_CAPACITY: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_capacity)
-            ],
-            constants.ADD_LOCATION: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_location)
-            ],
-            constants.ADD_CONFIRM: [
-                CallbackQueryHandler(admin_nodes.add_confirm, pattern=r'^node_add_confirm$'),
-                CallbackQueryHandler(admin_nodes.add_cancel, pattern=r'^node_add_cancel$'),
-            ],
-            constants.NODE_DETAILS: [
-                CallbackQueryHandler(admin_nodes.node_details, pattern=r'^admin_node_\d+$'),
-                CallbackQueryHandler(admin_nodes.toggle_node_active, pattern=r'^admin_toggle_node_\d+$'),
-                CallbackQueryHandler(admin_nodes.edit_node_start, pattern=r'^admin_edit_node_\d+$'),
-                CallbackQueryHandler(admin_nodes.delete_node_confirm, pattern=r'^admin_delete_node_\d+$'),
-                CallbackQueryHandler(admin_nodes.ping_node, pattern=r'^admin_node_ping_\d+$'),
-                CallbackQueryHandler(admin_nodes.update_node_usercount, pattern=r'^admin_node_update_count_\d+$'),
-                CallbackQueryHandler(admin_nodes.show_node_usage, pattern=r'^admin_node_usage_\d+$'),
-                CallbackQueryHandler(admin_nodes.list_nodes, pattern=r'^admin_list_nodes$'),
-                CallbackQueryHandler(admin_nodes.nodes_menu, pattern=r'^admin_nodes$'),
-            ],
-            constants.EDIT_FIELD_PICK: [
-                CallbackQueryHandler(admin_nodes.edit_field_pick, pattern=r'^admin_edit_field_')
-            ],
-            constants.EDIT_FIELD_VALUE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.edit_field_value_received)
-            ],
-            constants.DELETE_CONFIRM: [
-                CallbackQueryHandler(admin_nodes.delete_node_execute, pattern=r'^admin_delete_node_yes_\d+$')
-            ],
-        },
-        fallbacks=[CommandHandler('cancel', admin_nodes.cancel)],
-        map_to_parent={ConversationHandler.END: constants.ADMIN_MENU, constants.ADMIN_MENU: constants.ADMIN_MENU},
-        per_user=True, per_chat=True, allow_reentry=True
-    )
-
     # --------- ADMIN ROOT CONVERSATION ----------
     admin_conv = ConversationHandler(
         entry_points=[
@@ -442,7 +365,7 @@ def build_application():
                 CallbackQueryHandler(admin_gift.gift_code_management_menu, pattern=r"^admin_gift$"),
                 CallbackQueryHandler(admin_c.shutdown_bot, pattern=r"^admin_shutdown$"),
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
-                nodes_conv,
+                # حذف کامل nodes_conv از این بخش
                 admin_settings_conv,
                 broadcast_conv,
             ],
@@ -502,20 +425,15 @@ def build_application():
                 CallbackQueryHandler(admin_gift.delete_gift_code_callback, pattern=r'^delete_gift_code_'),
                 MessageHandler(filters.Regex(r'^📋 لیست کدهای تخفیف$') & admin_filter, admin_gift.list_promo_codes),
                 CallbackQueryHandler(admin_gift.delete_promo_code_callback, pattern=r'^delete_promo_code_'),
-
-                # دکمه اصلی با عنوان صحیح
                 MessageHandler(filters.Regex(r'^مدیریت\s+تخفیف\s+و\s+کد\s+هدیه$') & admin_filter, admin_settings.global_discount_submenu),
-                # پشتیبانی از اینلاین در زیرمنو + ادیت مقدار
                 CallbackQueryHandler(admin_settings.global_discount_submenu, pattern=r'^global_discount_submenu$'),
                 CallbackQueryHandler(admin_settings.toggle_global_discount, pattern=r'^toggle_global_discount$'),
                 CallbackQueryHandler(admin_settings.edit_setting_start, pattern=r'^admin_edit_setting_'),
-
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
                 gift_code_create_conv,
                 promo_create_conv,
                 referral_bonus_conv,
             ],
-            # پشتیبانی از دریافت مقدار برای تنظیمات (از جمله تخفیف همگانی)
             constants.AWAIT_SETTING_VALUE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_settings.setting_value_received),
                 MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_backup.backup_target_received),
