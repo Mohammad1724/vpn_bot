@@ -102,7 +102,7 @@ def build_application():
                 CallbackQueryHandler(charge_h.charge_start_payment, pattern="^charge_start_payment_back$"),
             ],
             constants.CHARGE_RECEIPT: [MessageHandler(filters.PHOTO, charge_h.charge_receipt_received)],
-        },
+        ],
         fallbacks=[
             CommandHandler('cancel', charge_h.charge_cancel),
             CallbackQueryHandler(start_h.start, pattern="^home_menu$"),
@@ -123,7 +123,6 @@ def build_application():
     gift_from_balance_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(check_channel_membership(acc_act.create_gift_from_balance_start), pattern="^acc_gift_from_balance_start$")],
         states={
-            # FIX: هندلر ورودی مقدار مبلغ (بدون پارامتر اضافی)
             constants.GIFT_FROM_BALANCE_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, acc_act.create_gift_amount_received)],
             constants.GIFT_FROM_BALANCE_CONFIRM: [CallbackQueryHandler(acc_act.create_gift_confirm, pattern="^gift_confirm_")],
         },
@@ -333,7 +332,7 @@ def build_application():
             constants.DELETE_CONFIRM: [
                 CallbackQueryHandler(admin_nodes.delete_node_execute, pattern=r'^admin_delete_node_yes_\d+$'),
             ],
-        ],
+        },
         fallbacks=[CommandHandler('cancel', admin_nodes.cancel)],
         map_to_parent={ConversationHandler.END: constants.ADMIN_MENU, constants.ADMIN_MENU: constants.ADMIN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
@@ -413,19 +412,18 @@ def build_application():
                 CallbackQueryHandler(admin_users.admin_user_amount_cancel_cb, pattern=r'^admin_user_amount_cancel_\d+$'),
             ],
             constants.GIFT_CODES_MENU: [
-                MessageHandler(filters.Regex(r'^🎁 مدیریت کدهای هدیه$'), admin_gift.admin_gift_codes_submenu),
-                MessageHandler(filters.Regex(r'^💳 مدیریت کدهای تخفیف$'), admin_gift.admin_promo_codes_submenu),
-                MessageHandler(filters.Regex(r'^📋 لیست کدهای هدیه$'), admin_gift.list_gift_codes),
+                MessageHandler(filters.Regex(r'^🎁 مدیریت کدهای هدیه$') & admin_filter, admin_gift.admin_gift_codes_submenu),
+                MessageHandler(filters.Regex(r'^💳 مدیریت کدهای تخفیف$') & admin_filter, admin_gift.admin_promo_codes_submenu),
+                MessageHandler(filters.Regex(r'^📋 لیست کدهای هدیه$') & admin_filter, admin_gift.list_gift_codes),
                 CallbackQueryHandler(admin_gift.delete_gift_code_callback, pattern=r'^delete_gift_code_'),
-                MessageHandler(filters.Regex(r'^📋 لیست کدهای تخفیف$'), admin_gift.list_promo_codes),
+                MessageHandler(filters.Regex(r'^📋 لیست کدهای تخفیف$') & admin_filter, admin_gift.list_promo_codes),
                 CallbackQueryHandler(admin_gift.delete_promo_code_callback, pattern=r'^delete_promo_code_'),
 
-                # دکمه جدید (ReplyKeyboard) با عنوان درخواست‌شده: «مدیرت تخفیف و کد هدیه»
-                MessageHandler(filters.Regex(r'^مدیرت تخفیف و کد هدیه$'), admin_settings.global_discount_submenu),
-                # هندلرهای بازگشتی/سوییچ (Inline)
+                # دکمه اصلی با عنوان موردنظر شما: «مدیرت تخفیف و کد هدیه»
+                MessageHandler(filters.Regex(r'^مدیرت تخفیف و کد هدیه$') & admin_filter, admin_settings.global_discount_submenu),
+                # پشتیبانی از دکمه‌های اینلاین داخل زیرمنو
                 CallbackQueryHandler(admin_settings.global_discount_submenu, pattern=r'^global_discount_submenu$'),
                 CallbackQueryHandler(admin_settings.toggle_global_discount, pattern=r'^toggle_global_discount$'),
-                CallbackQueryHandler(admin_gift.gift_code_management_menu, pattern=r'^admin_gift$'),
 
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
                 gift_code_create_conv,
