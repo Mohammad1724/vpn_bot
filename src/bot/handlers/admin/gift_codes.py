@@ -1,3 +1,4 @@
+# filename: bot/handlers/admin/gift_codes.py
 # -*- coding: utf-8 -*-
 
 import uuid
@@ -22,7 +23,7 @@ def _gift_root_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         [
             ["🎁 مدیریت کدهای هدیه", "💳 مدیریت کدهای تخفیف"],
-            ["💰 تنظیم هدیه دعوت"], # دکمه جدید
+            ["مدیریت تخفیف و کد هدیه", "💰 تنظیم هدیه دعوت"],  # دکمه جدید برای تخفیف همگانی
             [BTN_BACK_TO_ADMIN_MENU]
         ],
         resize_keyboard=True
@@ -30,15 +31,28 @@ def _gift_root_menu_keyboard() -> ReplyKeyboardMarkup:
 
 def _gift_codes_menu_keyboard() -> ReplyKeyboardMarkup:
     """منوی داخلی مدیریت کدهای هدیه"""
-    return ReplyKeyboardMarkup([["➕ ساخت کد هدیه جدید", "📋 لیست کدهای هدیه"], ["بازگشت به منوی کدها"]], resize_keyboard=True)
+    return ReplyKeyboardMarkup(
+        [
+            ["➕ ساخت کد هدیه جدید", "📋 لیست کدهای هدیه"],
+            ["بازگشت به منوی کدها"]
+        ],
+        resize_keyboard=True
+    )
 
 def _promo_codes_menu_keyboard() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup([["➕ ساخت کد تخفیف جدید", "📋 لیست کدهای تخفیف"], ["بازگشت به منوی کدها"]], resize_keyboard=True)
+    """منوی داخلی مدیریت کدهای تخفیف"""
+    return ReplyKeyboardMarkup(
+        [
+            ["➕ ساخت کد تخفیف جدید", "📋 لیست کدهای تخفیف"],
+            ["بازگشت به منوی کدها"]
+        ],
+        resize_keyboard=True
+    )
 
 # --- منوی اصلی مدیریت کدها ---
 async def gift_code_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     em = update.effective_message
-    await em.reply_text("بخش مدیریت کدها", reply_markup=_gift_root_menu_keyboard())
+    await em.reply_text("🎁 مدیریت تخفیف و کد هدیه", reply_markup=_gift_root_menu_keyboard())
     return GIFT_CODES_MENU
 
 # --- زیرمنوی کدهای هدیه (شارژ) ---
