@@ -39,44 +39,36 @@ BASE_RETRY_DELAY = 1.0
 
 # ========================= Server selection =========================
 def _fallback_server_dict() -> Dict[str, Any]:
-    return {
-        "name": DEFAULT_SERVER_NAME or "Main", "panel_domain": PANEL_DOMAIN, "admin_path": ADMIN_PATH,
-        "sub_path": SUB_PATH, "api_key": API_KEY, "sub_domains": SUB_DOMAINS or [],
-        "panel_type": "hiddify", "is_active": 1, "capacity": 0, "current_users": 0,
-    }
+    return {"name": DEFAULT_SERVER_NAME or "Main", "panel_domain": PANEL_DOMAIN, "admin_path": ADMIN_PATH,
+            "sub_path": SUB_PATH, "api_key": API_KEY, "sub_domains": SUB_DOMAINS or [],
+            "panel_type": "hiddify", "is_active": 1, "capacity": 0, "current_users": 0}
 
 def _db_server_from_node(n: dict) -> Dict[str, Any]:
-    return {
-        "name": n["name"], "panel_domain": n["panel_domain"], "admin_path": n["admin_path"],
-        "sub_path": n["sub_path"], "api_key": n["api_key"], "sub_domains": n.get("sub_domains") or [],
-        "panel_type": n.get("panel_type", "hiddify"), "is_active": n.get("is_active", 1),
-        "capacity": int(n.get("capacity") or 0), "current_users": int(n.get("current_users") or 0),
-    }
+    return {"name": n["name"], "panel_domain": n["panel_domain"], "admin_path": n["admin_path"],
+            "sub_path": n["sub_path"], "api_key": n["api_key"], "sub_domains": n.get("sub_domains") or [],
+            "panel_type": n.get("panel_type", "hiddify"), "is_active": n.get("is_active", 1),
+            "capacity": int(n.get("capacity") or 0), "current_users": int(n.get("current_users") or 0)}
 
 def _get_server_by_name_config(name: str) -> Optional[Dict[str, Any]]:
     for s in SERVERS or []:
         if str(s.get("name")) == str(name):
-            return {
-                "name": s.get("name"), "panel_domain": s.get("panel_domain"), "admin_path": s.get("admin_path"),
-                "sub_path": (s.get("sub_path") or s.get("admin_path")), "api_key": s.get("api_key"),
-                "sub_domains": s.get("sub_domains") or [], "panel_type": "hiddify", "is_active": 1,
-                "capacity": 0, "current_users": 0,
-            }
+            return {"name": s.get("name"), "panel_domain": s.get("panel_domain"), "admin_path": s.get("admin_path"),
+                    "sub_path": (s.get("sub_path") or s.get("admin_path")), "api_key": s.get("api_key"),
+                    "sub_domains": s.get("sub_domains") or [], "panel_type": "hiddify", "is_active": 1,
+                    "capacity": 0, "current_users": 0}
     return None
 
 def _db_list_active_hiddify_servers() -> List[Dict[str, Any]]:
     try:
         nodes = db.list_nodes(only_active=True)
         return [_db_server_from_node(n) for n in nodes if str(n.get("panel_type", "hiddify")).lower() == "hiddify"]
-    except Exception:
-        return []
+    except Exception: return []
 
 def _db_get_server_by_name(name: str) -> Optional[Dict[str, Any]]:
     try:
         n = db.get_node_by_name(name)
         return _db_server_from_node(n) if n and str(n.get("panel_type", "hiddify")).lower() == "hiddify" else None
-    except Exception:
-        return None
+    except Exception: return None
 
 def _pick_least_loaded(servers: List[Dict[str, Any]]) -> Dict[str, Any]:
     best, best_free = None, -1
@@ -107,7 +99,6 @@ def _select_server(server_name: Optional[str] = None) -> Dict[str, Any]:
             if srv: return srv
         return _get_server_by_name_config(SERVERS[0].get("name")) or _fallback_server_dict()
     return _fallback_server_dict()
-
 
 # ========================= HTTP helpers =========================
 def _get_base_url(server: Dict[str, Any]) -> str:
@@ -143,7 +134,6 @@ async def _make_request(method: str, url: str, server: Dict[str, Any], **kwargs)
             if retries <= MAX_RETRIES: await asyncio.sleep(BASE_RETRY_DELAY * (2 ** (retries - 1)))
     return None
 
-
 # ========================= Usage extraction =========================
 def _extract_usage_gb(payload: Dict[str, Any]) -> Optional[float]:
     if not isinstance(payload, dict): return None
@@ -151,12 +141,11 @@ def _extract_usage_gb(payload: Dict[str, Any]) -> Optional[float]:
         if k in payload: return float(payload[k])
     return None
 
-
 # ========================= Expanded API helpers =========================
 def _expanded_api_bases_for_server(server: Dict[str, Any]) -> List[str]:
     domain = server.get("panel_domain") or PANEL_DOMAIN
     cpath = (server.get("sub_path") or SUB_PATH or "sub").strip().strip("/")
-    bases = []
+    bases: List[str] = []
     if PANEL_SECRET_UUID: bases.append(f"https://{domain}/{cpath}/{PANEL_SECRET_UUID}/api/v1")
     return bases
 
@@ -205,7 +194,6 @@ async def _expanded_update_usage_on_server(server: Dict[str, Any]) -> bool:
         if status == 200: return True
     return False
 
-
 # ========================= Admin API v2 wrappers =========================
 async def create_hiddify_user(plan_days: int, plan_gb: float, user_telegram_id: str, custom_name: str = "", server_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
     server = _select_server(server_name)
@@ -241,7 +229,7 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
     # 2. Force usage recompute on target node so Admin API reflects changes
     await _expanded_update_usage_on_server(server)
     await asyncio.sleep(1.0)
-    # 3. Poll info (up to 3 tries) to verify
+    # 3. Poll info to verify
     for _ in range(3):
         info = await get_user_info(user_uuid, server_name=server["name"])
         if isinstance(info, dict) and not info.get("_not_found"):
