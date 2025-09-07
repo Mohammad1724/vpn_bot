@@ -504,7 +504,10 @@ def build_application():
                 CallbackQueryHandler(admin_gift.delete_promo_code_callback, pattern=r'^delete_promo_code_'),
 
                 # دکمه اصلی با عنوان موردنظر شما: «مدیرت تخفیف و کد هدیه»
-                MessageHandler(filters.Regex(r'^مدیرت تخفیف و کد هدیه$') & admin_filter, admin_settings.global_discount_submenu),
+                MessageHandler(
+    filters.Regex(r'^(?:مدیریت|مدیرت)\s+تخفیف\s+و\s+کد\s+هدیه$') & admin_filter,
+    admin_settings.global_discount_submenu
+),
                 # پشتیبانی از اینلاین در زیرمنو
                 CallbackQueryHandler(admin_settings.global_discount_submenu, pattern=r'^global_discount_submenu$'),
                 CallbackQueryHandler(admin_settings.toggle_global_discount, pattern=r'^toggle_global_discount$'),
