@@ -1,330 +1,446 @@
-# filename: hiddify_api.py
+# filename: bot/handlers/user_services.py
 # -*- coding: utf-8 -*-
-import asyncio
-import httpx
-import uuid
-import random
-import logging
-import re
-from typing import Optional, Dict, Any, List, Tuple
-from datetime import datetime, timezone
 
-from config import (
-    PANEL_DOMAIN, ADMIN_PATH, API_KEY, SUB_DOMAINS, SUB_PATH,
-    PANEL_SECRET_UUID, HIDDIFY_API_VERIFY_SSL
-)
+import io
+import json
+import logging
+import httpx
+from typing import List, Optional
+
+from telegram.ext import ContextTypes
+from telegram import Update, Message, InputFile
+from telegram.error import BadRequest
+from telegram.constants import ParseMode
+
+import database as db
+import hiddify_api
+from config import ADMIN_ID, NODELESS_MODE, PANEL_INTEGRATION_ENABLED
+from bot import utils
+from bot.utils import create_service_info_caption, get_service_status
+from bot.ui import nav_row, markup, chunk, btn, confirm_row
+
+try:
+    from config import SUBCONVERTER_ENABLED, SUBCONVERTER_DEFAULT_TARGET
+except Exception:
+    SUBCONVERTER_ENABLED = False
+    SUBCONVERTER_DEFAULT_TARGET = "v2ray"
 
 logger = logging.getLogger(__name__)
 
-MAX_RETRIES = 3
-BASE_RETRY_DELAY = 1.0
 
-
-def _select_server() -> Dict[str, Any]:
-    return {
-        "name": "Main",
-        "panel_domain": PANEL_DOMAIN,
-        "admin_path": ADMIN_PATH,
-        "sub_path": SUB_PATH,
-        "api_key": API_KEY,
-        "sub_domains": SUB_DOMAINS or [],
-    }
-
-def _get_base_url(server: Dict[str, Any]) -> str:
-    return f"https://{server['panel_domain']}/{server['admin_path']}/api/v2/admin/"
-
-def _get_api_headers(server: Dict[str, Any]) -> dict:
-    return {"Hiddify-API-Key": server["api_key"], "Content-Type": "application/json", "Accept": "application/json"}
-
-async def _make_client(timeout: float = 20.0) -> httpx.AsyncClient:
-    return httpx.AsyncClient(timeout=timeout, verify=HIDDIFY_API_VERIFY_SSL)
-
-async def _make_request(method: str, url: str, server: Dict[str, Any], **kwargs) -> Optional[Dict[str, Any]]:
-    headers = kwargs.pop("headers", None) or _get_api_headers(server)
-    delay = BASE_RETRY_DELAY
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            async with await _make_client(timeout=kwargs.get("timeout", 20.0)) as client:
-                resp = await getattr(client, method.lower())(url, headers=headers, **kwargs)
-                resp.raise_for_status()
-                try:
-                    return resp.json()
-                except ValueError:
-                    return {}  # 204/بدون JSON
-        except httpx.HTTPStatusError as e:
-            status = e.response.status_code if e.response is not None else None
-            text = e.response.text if e.response is not None else str(e)
-            logger.warning("%s %s -> %s: %s (attempt %d/%d)", method.upper(), url, status, text, attempt, MAX_RETRIES)
-            if status == 404:
-                return {"_not_found": True}
-            if status in (401, 403, 422):
-                break
-        except Exception as e:
-            logger.error("%s %s unexpected: %s", method.upper(), url, str(e), exc_info=True)
-        if attempt < MAX_RETRIES:
-            await asyncio.sleep(delay)
-            delay *= 2
-    return None
-
-def _extract_usage_gb(payload: Dict[str, Any]) -> Optional[float]:
-    if not isinstance(payload, dict):
-        return None
-    for k in ("current_usage_GB", "usage_GB", "used_GB"):
-        if k in payload:
-            try:
-                return float(payload[k])
-            except Exception:
-                return None
-    return None
-
-def _looks_like_secret(s: str) -> bool:
-    s = (s or "").strip().strip("/")
-    if not s or s.lower() in ("sub", "api", "v1", "v2", "admin"):
+def _panel_enabled() -> bool:
+    try:
+        return (not NODELESS_MODE) and bool(PANEL_INTEGRATION_ENABLED)
+    except Exception:
         return False
-    return re.fullmatch(r"[A-Za-z0-9\-_]{8,64}", s) is not None
 
-def _expanded_api_bases_for_server(server: Dict[str, Any]) -> List[str]:
-    domain = (server.get("panel_domain") or PANEL_DOMAIN or "").strip()
-    raw_cpath = (server.get("sub_path") or SUB_PATH or "sub")
-    cpath = str(raw_cpath).strip().strip("/")
-    secret = (PANEL_SECRET_UUID or "").strip().strip("/")
 
-    bases: List[str] = []
-    if not domain:
-        return bases
+def _link_label(link_type: str) -> str:
+    lt = utils.normalize_link_type(link_type)
+    return {
+        "sub": "V2Ray (sub)", "auto": "هوشمند (Auto)", "sub64": "Base64 (sub64)",
+        "singbox": "SingBox", "xray": "Xray", "clash": "Clash", "clashmeta": "Clash Meta",
+        "unified": "لینک واحد (Subconverter)",
+    }.get(lt, "V2Ray (sub)")
 
-    lc_cpath = cpath.lower()
-    lc_secret = secret.lower()
-    base_path: Optional[str] = None
 
-    if secret:
-        if lc_cpath == lc_secret:
-            base_path = f"sub/{secret}"
-        else:
-            parts = [p.strip() for p in cpath.split("/") if p.strip()]
-            parts_l = [p.lower() for p in parts]
-            if lc_secret in parts_l:
-                base_path = cpath
-            else:
-                base_path = f"{cpath}/{secret}" if cpath else f"sub/{secret}"
-    else:
-        parts = [p.strip() for p in cpath.split("/") if p.strip()]
-        if not parts:
-            return bases
-        if parts[0].lower() == "sub":
-            if len(parts) >= 2 and _looks_like_secret(parts[1]):
-                base_path = f"sub/{parts[1]}"
-            else:
-                return bases
-        else:
-            if _looks_like_secret(parts[0]):
-                base_path = f"sub/{parts[0]}"
-            else:
-                return bases
-
-    if not base_path:
-        return bases
-
-    bases.append(f"https://{domain}/{base_path}/api/v1")
-    return bases
-
-async def _post_json_noauth(url: str, body: Any, timeout: float = 20.0) -> Tuple[int, Any]:
+def _get_default_link_type() -> str:
     try:
-        async with await _make_client(timeout) as client:
-            resp = await client.post(url, json=body)
-            data = None
-            try:
-                data = resp.json()
-            except Exception:
-                data = None
-            if resp.status_code >= 400:
-                logger.warning("POST %s -> %s: %s", url, resp.status_code, data)
-            return resp.status_code, data
-    except Exception as e:
-        logger.debug("POST %s failed: %s", url, e)
-        return 0, None
+        v = db.get_setting("default_sub_link_type")
+        if v:
+            return utils.normalize_link_type(str(v))
+    except Exception:
+        pass
+    return "sub"
 
-async def _get_noauth(url: str, timeout: float = 20.0) -> Tuple[int, Any]:
+
+async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    services = db.get_user_services(user_id)
+    if not services:
+        await context.bot.send_message(chat_id=user_id, text="شما در حال حاضر هیچ سرویس فعالی ندارید.")
+        return
+    keyboard = [[btn(f"⚙️ {s['name'] or 'سرویس بدون نام'}", f"view_service_{s['service_id']}")] for s in services]
+    keyboard.append(nav_row(home_cb="home_menu"))
+    await context.bot.send_message(
+        chat_id=user_id,
+        text="لطفاً سرویسی که می‌خواهید مدیریتش کنید را انتخاب نمایید:",
+        reply_markup=markup(keyboard)
+    )
+
+
+async def view_service_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    service_id = int(q.data.split('_')[-1])
+    if q.message:
+        try:
+            await q.message.delete()
+        except BadRequest:
+            pass
+    msg = await context.bot.send_message(chat_id=q.from_user.id, text="در حال دریافت اطلاعات سرویس... ⏳")
+    await send_service_details(context, q.from_user.id, service_id, original_message=msg, is_from_menu=True)
+
+
+async def send_service_details(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    service_id: int,
+    original_message: Message | None = None,
+    is_from_menu: bool = False,
+    minimal: bool = False
+):
+    service = db.get_service(service_id)
+    if not service:
+        text = "❌ سرویس مورد نظر یافت نشد."
+        if original_message:
+            await original_message.edit_text(text)
+        else:
+            await context.bot.send_message(chat_id=chat_id, text=text)
+        return
     try:
-        async with await _make_client(timeout) as client:
-            resp = await client.get(url)
-            data = None
-            try:
-                data = resp.json()
-            except Exception:
-                data = None
-            if resp.status_code >= 400:
-                logger.warning("GET %s -> %s: %s", url, resp.status_code, data)
-            return resp.status_code, data
-    except Exception as e:
-        logger.debug("GET %s failed: %s", url, e)
-        return 0, None
+        info = await hiddify_api.get_user_info(service['sub_uuid'])
+        if not info or (isinstance(info, dict) and info.get('_not_found')):
+            kb = [
+                [btn("🗑️ حذف سرویس از ربات", f"delete_service_{service['service_id']}")],
+                [btn("🔄 تلاش مجدد", f"refresh_{service['service_id']}")],
+                nav_row(back_cb="back_to_services", home_cb="home_menu")
+            ]
+            text = "❌ اطلاعات این سرویس یافت نشد. احتمالاً حذف شده است.\nمی‌خواهید این سرویس از ربات هم حذف شود؟"
+            if original_message:
+                await original_message.edit_text(text, reply_markup=markup(kb))
+            else:
+                await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=markup(kb))
+            return
 
-# -------------------- Renewal helpers --------------------
-def _parse_dt(value: Any) -> Optional[datetime]:
-    if not value:
-        return None
-    if isinstance(value, (int, float)):
+        admin_default_type = _get_default_link_type()
+        config_name = (info.get('name', 'config') if isinstance(info, dict) else 'config') or 'config'
+        safe_name = config_name.replace(' ', '_')
+
+        base_link = utils.build_subscription_url(service['sub_uuid'])
+        base = (base_link or "").rstrip("/")
+
+        preferred_url = base_link if admin_default_type == "sub" else f"{base}/{admin_default_type.replace('clashmeta', 'clash-meta')}/?name={safe_name}"
+
+        caption = utils.create_service_info_caption(info, service_db_record=service, override_sub_url=preferred_url)
+        keyboard_rows = []
+        if not minimal:
+            keyboard_rows.append([
+                btn("🔄 به‌روزرسانی اطلاعات", f"refresh_{service['service_id']}"),
+                btn("🔗 لینک‌های بیشتر", f"more_links_{service['sub_uuid']}"),
+            ])
+            if plan := (db.get_plan(service['plan_id']) if service.get('plan_id') else None):
+                keyboard_rows.append([btn(f"⏳ تمدید سرویس ({int(plan['price']):,} تومان)", f"renew_{service['service_id']}")])
+            keyboard_rows.append([btn("🗑️ حذف سرویس", f"delete_service_{service['service_id']}")])
+            if is_from_menu:
+                keyboard_rows.append(nav_row(back_cb="back_to_services", home_cb="home_menu"))
+
+        if original_message:
+            try:
+                await original_message.delete()
+            except BadRequest:
+                pass
+        await context.bot.send_message(
+            chat_id=chat_id, text=caption, parse_mode=ParseMode.MARKDOWN, reply_markup=markup(keyboard_rows)
+        )
+    except Exception as e:
+        logger.error("send_service_details error for service_id %s: %s", service_id, e, exc_info=True)
+        text = "❌ خطا در دریافت اطلاعات سرویس. لطفاً بعداً دوباره تلاش کنید."
+        if original_message:
+            await original_message.edit_text(text)
+        else:
+            await context.bot.send_message(chat_id=chat_id, text=text)
+
+
+async def more_links_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    uuid = q.data.split('_')[-1]
+    service = db.get_service_by_uuid(uuid)
+    if not service:
+        await q.edit_message_text("سرویس یافت نشد.")
+        return
+    await show_link_options_menu(q.message, uuid, service['service_id'], is_edit=True, context=context)
+
+
+async def show_link_options_menu(message: Message, user_uuid: str, service_id: int, is_edit: bool = True, context: ContextTypes.DEFAULT_TYPE = None):
+    buttons = [
+        btn("V2ray (sub)", f"getlink_sub_{user_uuid}"), btn("هوشمند (Auto)", f"getlink_auto_{user_uuid}"),
+        btn("Base64 (sub64)", f"getlink_sub64_{user_uuid}"), btn("SingBox", f"getlink_singbox_{user_uuid}"),
+        btn("Xray", f"getlink_xray_{user_uuid}"), btn("Clash", f"getlink_clash_{user_uuid}"),
+        btn("Clash Meta", f"getlink_clashmeta_{user_uuid}"),
+    ]
+    # دکمه کانفیگ‌های تکی فقط وقتی پنل فعال است
+    if _panel_enabled():
+        buttons.append(btn("📄 کانفیگ‌های تکی", f"getlink_full_{user_uuid}"))
+
+    rows = chunk(buttons, cols=2)
+    rows.append(nav_row(back_cb=f"refresh_{service_id}", home_cb="home_menu"))
+    text = "لطفاً نوع لینک اشتراک مورد نظر را انتخاب کنید:"
+    try:
+        if is_edit:
+            if getattr(message, "photo", None):
+                await message.delete()
+                await context.bot.send_message(chat_id=message.chat_id, text=text, reply_markup=markup(rows))
+            else:
+                await message.edit_text(text, reply_markup=markup(rows))
+        else:
+            await message.reply_text(text, reply_markup=markup(rows))
+    except BadRequest as e:
+        if "message is not modified" not in str(e):
+            logger.error("show_link_options_menu error: %s", e)
+
+
+async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    parts = q.data.split('_')
+    link_type, user_uuid = parts[1], parts[2]
+    service = db.get_service_by_uuid(user_uuid)
+    if not service:
+        await q.edit_message_text("❌ سرویس یافت نشد.")
+        return
+
+    info = await hiddify_api.get_user_info(user_uuid)
+    config_name = (info.get('name', 'config') if isinstance(info, dict) else 'config') or 'config'
+    safe_name = config_name.replace(' ', '_')
+    base_link = utils.build_subscription_url(user_uuid)
+    base = (base_link or "").rstrip("/")
+
+    if link_type == "full":
+        if not _panel_enabled():
+            await q.edit_message_text("❌ این گزینه در حالت فعلی در دسترس نیست.")
+            return
         try:
-            return datetime.fromtimestamp(value)
-        except Exception:
-            return None
-    if isinstance(value, str):
-        s = value.strip()
+            await q.edit_message_text("در حال دریافت کانفیگ‌های تکی... ⏳")
+            full_link = f"{base}/all.txt"
+            async with httpx.AsyncClient(timeout=20) as c:
+                resp = await c.get(full_link)
+                resp.raise_for_status()
+            await q.message.delete()
+            await context.bot.send_document(
+                chat_id=q.from_user.id, document=InputFile(io.BytesIO(resp.content), filename=f"{safe_name}_configs.txt"),
+                caption="📄 کانفیگ‌های تکی شما به صورت فایل ارسال شد.",
+                reply_markup=markup([nav_row(back_cb=f"more_links_{user_uuid}", home_cb="home_menu")])
+            )
+        except Exception as e:
+            logger.error("Failed to fetch/send full configs: %s", e, exc_info=True)
+            await q.edit_message_text("❌ دریافت کانفیگ‌های تکی با خطا مواجه شد.")
+        return
+
+    url_link_type = utils.normalize_link_type(link_type).replace('clashmeta', 'clash-meta')
+    final_link = f"{base}/{url_link_type}/?name={safe_name}"
+
+    qr_bio = utils.make_qr_bytes(final_link)
+    caption = f"نام کانفیگ: **{config_name}**\nنوع لینک: **{_link_label(link_type)}**\n\n`{final_link}`"
+    try:
+        await q.message.delete()
+    except BadRequest:
+        pass
+    await context.bot.send_photo(
+        chat_id=q.message.chat_id, photo=qr_bio, caption=caption, parse_mode=ParseMode.MARKDOWN,
+        reply_markup=markup([nav_row(back_cb=f"more_links_{user_uuid}", home_cb="home_menu")])
+    )
+
+
+async def refresh_service_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    service_id = int(q.data.split('_')[1])
+    service = db.get_service(service_id)
+
+    if not service or service['user_id'] != q.from_user.id:
+        await q.answer("خطا: این سرویس متعلق به شما نیست.", show_alert=True)
+        return
+
+    try:
+        await q.message.delete()
+    except BadRequest:
+        pass
+    msg = await context.bot.send_message(chat_id=q.from_user.id, text="در حال به‌روزرسانی اطلاعات...")
+    if q.from_user.id == ADMIN_ID:
         try:
-            s2 = s.replace("Z", "+00:00")
-            return datetime.fromisoformat(s2)
+            info = await hiddify_api.get_user_info(service['sub_uuid'])
+            if info:
+                await context.bot.send_message(
+                    chat_id=q.from_user.id,
+                    text=f"-- DEBUG INFO --\n<pre>{json.dumps(info, indent=2, ensure_ascii=False)}</pre>",
+                    parse_mode=ParseMode.HTML
+                )
+        except Exception as e:
+            await context.bot.send_message(chat_id=q.from_user.id, text=f"Debug error: {e}")
+    await send_service_details(context, q.from_user.id, service_id, original_message=msg, is_from_menu=True)
+
+
+async def back_to_services_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    try:
+        await q.message.delete()
+    except BadRequest:
+        pass
+    await list_my_services(update, context)
+
+
+async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    data = q.data
+    try:
+        service_id = int(data.split('_')[-1])
+    except Exception:
+        await q.edit_message_text("❌ ورودی نامعتبر.")
+        return
+
+    service = db.get_service(service_id)
+    if not service or service['user_id'] != q.from_user.id:
+        await q.edit_message_text("❌ سرویس یافت نشد یا متعلق به شما نیست.")
+        return
+
+    if data.startswith("delete_service_cancel_"):
+        await send_service_details(context, q.from_user.id, service_id, original_message=q.message, is_from_menu=True)
+        return
+
+    if not data.startswith("delete_service_confirm_"):
+        kb = markup([confirm_row(f"delete_service_confirm_{service_id}", f"delete_service_cancel_{service_id}")])
+        await q.edit_message_text(
+            "آیا از حذف این سرویس مطمئن هستید؟ این عمل قابل بازگشت نیست.",
+            reply_markup=kb
+        )
+        return
+
+    try:
+        await q.edit_message_text("در حال حذف سرویس... ⏳")
+    except BadRequest:
+        pass
+    try:
+        success = await hiddify_api.delete_user_from_panel(service['sub_uuid'])
+        if not success:
+            probe = await hiddify_api.get_user_info(service['sub_uuid'])
+            if isinstance(probe, dict) and probe.get("_not_found"):
+                success = True
+        if not success:
+            await q.edit_message_text("❌ حذف سرویس با خطا مواجه شد.")
+            return
+        db.delete_service(service_id)
+        await q.edit_message_text("✅ سرویس با موفقیت حذف شد.")
+        kb = markup([nav_row(back_cb="back_to_services", home_cb="home_menu")])
+        await context.bot.send_message(chat_id=q.from_user.id, text="عملیات حذف کامل شد.", reply_markup=kb)
+    except Exception as e:
+        logger.error("Delete service %s failed: %s", service_id, e, exc_info=True)
+        await q.edit_message_text("❌ حذف سرویس با خطای ناشناخته مواجه شد.")
+
+
+async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    q = update.callback_query
+    await q.answer()
+    try:
+        await q.message.delete()
+    except BadRequest:
+        pass
+
+    service_id = int(q.data.split('_')[1])
+    user_id = q.from_user.id
+    service = db.get_service(service_id)
+    if not service:
+        await context.bot.send_message(chat_id=user_id, text="❌ سرویس نامعتبر است.")
+        return
+    plan = db.get_plan(service['plan_id']) if service.get('plan_id') else None
+    if not plan:
+        await context.bot.send_message(chat_id=user_id, text="❌ پلن تمدید یافت نشد.")
+        return
+    user = db.get_or_create_user(user_id)
+    if user['balance'] < plan['price']:
+        await context.bot.send_message(chat_id=user_id, text=f"موجودی کافی نیست! (نیاز به {int(plan['price']):,} تومان)")
+        return
+    info = await hiddify_api.get_user_info(service['sub_uuid'])
+    if not info:
+        await context.bot.send_message(chat_id=user_id, text="❌ دریافت اطلاعات سرویس ممکن نیست.")
+        return
+
+    usage_limit = float(info.get('usage_limit_GB', 0))
+    current_usage = float(info.get('current_usage_GB', 0))
+    remaining_gb = max(usage_limit - current_usage, 0.0)
+    _, jalali_exp, _ = utils.get_service_status(info)
+    context.user_data['renewal_service_id'] = service_id
+    context.user_data['renewal_plan_id'] = plan['plan_id']
+    text = f"""⚠️ هشدار تمدید
+با تمدید، اعتبار زمانی و حجمی باقیمانده شما ریست می‌شود.
+وضعیت فعلی: {jalali_exp} | {remaining_gb:.2f} گیگ باقیمانده
+مشخصات تمدید: {plan['days']} روز | {plan['gb']} گیگ | {int(plan['price']):,} تومان
+آیا تایید می‌کنید؟""".strip()
+    kb = [confirm_row("confirmrenew", "cancelrenew"), nav_row(f"refresh_{service_id}", "home_menu")]
+    await context.bot.send_message(chat_id=user_id, text=text, reply_markup=markup(kb), parse_mode=ParseMode.MARKDOWN)
+
+
+async def confirm_renewal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    q = update.callback_query
+    await q.answer()
+    await proceed_with_renewal(update, context, original_message=q.message)
+
+
+async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYPE, original_message=None):
+    q = update.callback_query
+    user_id = q.from_user.id if q else update.effective_user.id
+
+    service_id = context.user_data.get('renewal_service_id')
+    plan_id = context.user_data.get('renewal_plan_id')
+    if not service_id or not plan_id:
+        await _send_renewal_error(original_message, "❌ خطای داخلی: اطلاعات تمدید یافت نشد.")
+        return
+
+    if original_message:
+        await original_message.edit_text("در حال ارسال درخواست تمدید... ⏳")
+
+    service = db.get_service(service_id)
+    plan = db.get_plan(plan_id)
+    if not service or not plan or service['user_id'] != user_id:
+        await _send_renewal_error(original_message, "❌ اطلاعات سرویس یا پلن نامعتبر است.")
+        return
+
+    logger.info(f"Renewal Attempt: user={user_id}, service={service_id}, plan={plan_id}, uuid={service['sub_uuid']}, days={plan['days']}, gb={plan['gb']}")
+
+    txn_id = db.initiate_renewal_transaction(user_id, service_id, plan_id)
+    if not txn_id:
+        await _send_renewal_error(original_message, "❌ مشکلی در شروع تمدید پیش آمد (مثلاً عدم موجودی).")
+        return
+
+    try:
+        new_info = await hiddify_api.renew_user_subscription(
+            user_uuid=service['sub_uuid'],
+            plan_days=int(plan['days']),
+            plan_gb=float(plan['gb'])
+        )
+
+        # تایید فقط زمانی که واقعاً وضعیت جدید دریافت شده باشد
+        if not isinstance(new_info, dict) or new_info.get("_not_found"):
+            logger.error(f"Renewal failed for UUID {service['sub_uuid']}: verification failed.")
+            raise ValueError("Verification failed")
+
+        db.finalize_renewal_transaction(txn_id, plan_id)
+
+        if original_message:
+            await original_message.edit_text("✅ سرویس با موفقیت تمدید شد!")
+        await send_service_details(context, user_id, service_id, original_message=original_message, is_from_menu=True)
+
+    except Exception as e:
+        logger.error(f"Service renewal failed for UUID {service['sub_uuid']}: {e}", exc_info=True)
+        db.cancel_renewal_transaction(txn_id)
+        await _send_renewal_error(original_message, "❌ تمدید اعمال نشد. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.")
+    finally:
+        context.user_data.pop('renewal_service_id', None)
+        context.user_data.pop('renewal_plan_id', None)
+
+
+async def _send_renewal_error(message, error_text: str):
+    if message:
+        try:
+            await message.edit_text(error_text)
         except Exception:
             pass
-        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
-            try:
-                return datetime.strptime(s, fmt)
-            except Exception:
-                continue
-    return None
 
-def _verify_admin_renew(before: Optional[Dict[str, Any]], after: Optional[Dict[str, Any]], plan_days: int, plan_gb: float, expected_start_str: str) -> bool:
-    if not isinstance(after, dict):
-        return False
-    before_start = _parse_dt((before or {}).get("start_date"))
-    after_start = _parse_dt(after.get("start_date"))
-    # تغییر start_date یا نزدیک به now => موفق
-    if after_start:
-        try:
-            expected_dt = datetime.strptime(expected_start_str, "%Y-%m-%d %H:%M:%S")
-        except Exception:
-            expected_dt = None
-        if not before_start:
-            return True
-        if expected_dt and abs((after_start - expected_dt).total_seconds()) <= 5 * 60:
-            return True
-        if (after_start - before_start).total_seconds() > 60:
-            return True
-    # تغییر پارامترهای پلن نیز نشانه اعمال است
-    try:
-        if float(after.get("usage_limit_GB", -1)) == float(plan_gb):
-            return True
-    except Exception:
-        pass
-    try:
-        if int(after.get("package_days", -1)) == int(plan_days):
-            return True
-    except Exception:
-        pass
-    return False
 
-async def _admin_renew_fallback(user_uuid: str, plan_days: int, plan_gb: float, before_info: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    server = _select_server()
-    url = f"{_get_base_url(server)}user/{user_uuid}/"
-    now_local_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    payload_variants = [
-        {"package_days": int(plan_days), "usage_limit_GB": float(plan_gb or 0.0), "start_date": now_local_str, "current_usage_GB": 0},
-        {"package_days": int(plan_days), "usage_limit_GB": float(plan_gb or 0.0), "start_date": now_local_str},
-        {"package_days": int(plan_days), "usage_limit_GB": float(plan_gb or 0.0)},
-    ]
-    for method in ("patch", "put"):
-        for p in payload_variants:
-            resp = await _make_request(method, url, server, json=p, timeout=20.0)
-            if resp is None:
-                continue
-            after = await get_user_info(user_uuid)
-            if _verify_admin_renew(before_info, after, plan_days, plan_gb, now_local_str):
-                logger.info("Renewal via Admin API (%s) applied.", method.upper())
-                return after if isinstance(after, dict) else resp
-    logger.error("Admin API fallback failed for %s", user_uuid)
-    return None
-# ---------------------------------------------------------
-
-async def create_hiddify_user(plan_days: int, plan_gb: float, user_telegram_id: str, custom_name: str = "") -> Optional[Dict[str, Any]]:
-    server = _select_server()
-    endpoint = _get_base_url(server) + "user/"
-    random_suffix = uuid.uuid4().hex[:4]
-    base_name = custom_name if custom_name else f"tg-{user_telegram_id.split(':')[-1]}"
-    unique_user_name = f"{base_name}-{random_suffix}"
-    payload = {"name": unique_user_name, "package_days": int(plan_days), "comment": user_telegram_id}
-    try:
-        usage_limit_gb = float(plan_gb)
-    except Exception:
-        usage_limit_gb = 0.0
-    if usage_limit_gb > 0:
-        payload["usage_limit_GB"] = usage_limit_gb
-    data = await _make_request("post", endpoint, server, json=payload, timeout=20.0)
-    if not data or not data.get("uuid"):
-        logger.error("create_hiddify_user: failed or UUID missing")
-        return None
-    user_uuid = data.get("uuid")
-    sub_path = server.get("sub_path") or SUB_PATH or "sub"
-    sub_domains = server.get("sub_domains") or []
-    sub_domain = random.choice(sub_domains) if sub_domains else server["panel_domain"]
-    return {"full_link": f"https://{sub_domain}/{sub_path}/{user_uuid}/", "uuid": user_uuid, "server_name": "Main"}
-
-async def get_user_info(user_uuid: str) -> Optional[Dict[str, Any]]:
-    server = _select_server()
-    endpoint = f"{_get_base_url(server)}user/{user_uuid}/"
-    return await _make_request("get", endpoint, server, timeout=10.0)
-
-async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float) -> Optional[Dict[str, Any]]:
-    before = await get_user_info(user_uuid)
-
-    # 1) تلاش با Expanded API (اگر Secret موجود باشد)
-    bases = _expanded_api_bases_for_server(_select_server())
-    exp_ok = False
-    if bases:
-        server = _select_server()
-        body = {
-            "uuid": user_uuid,
-            "package_days": int(plan_days),
-            "usage_limit_GB": float(plan_gb or 0.0),
-            "start_date": datetime.now(timezone.utc).isoformat(),
-            "current_usage_GB": 0
-        }
-        for base in bases:
-            status, _ = await _post_json_noauth(f"{base}/user/", body, timeout=20.0)
-            if 200 <= status < 300:
-                exp_ok = True
-                break
-        if not exp_ok:
-            logger.error("Expanded user update failed for %s. Check PANEL_SECRET_UUID and SUB_PATH.", user_uuid)
-        else:
-            # به‌روزرسانی و راستی‌آزمایی ریست مصرف
-            for base in bases:
-                await _get_noauth(f"{base}/update_usage/", timeout=45.0)
-            await asyncio.sleep(1.0)
-            for _ in range(5):
-                info = await get_user_info(user_uuid)
-                if isinstance(info, dict) and not info.get("_not_found"):
-                    used = _extract_usage_gb(info) or 0.0
-                    if used <= 0.05:
-                        return info
-                await asyncio.sleep(1.0)
-
-    # 2) Admin API fallback با راستی‌آزمایی
-    logger.info("Falling back to Admin API for renewal...")
-    fb = await _admin_renew_fallback(user_uuid, plan_days, plan_gb, before_info=before)
-    return fb
-
-async def delete_user_from_panel(user_uuid: str) -> bool:
-    server = _select_server()
-    data = await _make_request("delete", f"{_get_base_url(server)}user/{user_uuid}/", server, timeout=15.0)
-    if data == {}:
-        return True
-    if isinstance(data, dict) and data.get("_not_found"):
-        return True
-    if data is None:
-        probe = await get_user_info(user_uuid)
-        if isinstance(probe, dict) and probe.get("_not_found"):
-            return True
-    return False
-
-async def check_api_connection() -> bool:
-    try:
-        server = _select_server()
-        r = await _make_request("get", _get_base_url(server) + "user/?page=1&per_page=1", server, timeout=5.0)
-        return r is not None
-    except Exception:
-        return False
-
-# استاب برای سازگاری با هر ارجاعی به همگام‌سازی نود
-async def push_nodes_to_panel(bases: Optional[List[str]] = None) -> bool:
-    logger.info("push_nodes_to_panel: no bases to push; skipping.")
-    return True
+async def cancel_renewal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    q = update.callback_query
+    await q.answer()
+    await q.edit_message_text("عملیات تمدید لغو شد.")
