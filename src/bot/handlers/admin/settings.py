@@ -42,32 +42,31 @@ async def _send_or_edit(
     update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup=None, parse_mode=ParseMode.MARKDOWN
 ):
     q = getattr(update, "callback_query", None)
-    try_text = text
     if q:
         await q.answer()
         try:
-            await q.edit_message_text(try_text, reply_markup=reply_markup, parse_mode=parse_mode)
+            await q.edit_message_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
         except BadRequest as e:
             emsg = str(e).lower()
             if "can't parse entities" in emsg or "can't find end of the entity" in emsg:
-                try:
-                    await q.edit_message_text(try_text, reply_markup=reply_markup, parse_mode=None)
-                except Exception:
-                    pass
+                try: await q.edit_message_text(text, reply_markup=reply_markup, parse_mode=None)
+                except Exception: pass
             else:
                 try:
-                    await context.bot.send_message(chat_id=q.from_user.id, text=try_text, reply_markup=reply_markup, parse_mode=parse_mode)
+                    await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=reply_markup, parse_mode=parse_mode)
                 except BadRequest as e2:
                     emsg2 = str(e2).lower()
                     if "can't parse entities" in emsg2 or "can't find end of the entity" in emsg2:
-                        await context.bot.send_message(chat_id=q.from_user.id, text=try_text, reply_markup=reply_markup, parse_mode=None)
+                        await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=reply_markup, parse_mode=None)
+        except Exception:
+            await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=reply_markup, parse_mode=parse_mode)
     else:
         try:
-            await update.effective_message.reply_text(try_text, reply_markup=reply_markup, parse_mode=parse_mode)
+            await update.effective_message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
         except BadRequest as e:
             emsg = str(e).lower()
             if "can't parse entities" in emsg or "can't find end of the entity" in emsg:
-                await update.effective_message.reply_text(try_text, reply_markup=reply_markup, parse_mode=None)
+                await update.effective_message.reply_text(text, reply_markup=reply_markup, parse_mode=None)
 
 # --- Main Settings Menu ---
 async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -106,6 +105,7 @@ async def payment_and_guides_submenu(update: Update, context: ContextTypes.DEFAU
         [_admin_edit_btn("✍️ راهنمای اتصال", "guide_connection")],
         [_admin_edit_btn("✍️ راهنمای خرید", "guide_buying")],
         [_admin_edit_btn("✍️ راهنمای شارژ", "guide_charging")],
+        # دکمه «تخفیف همگانی» را اینجا نمی‌آوریم (طبق درخواست، به زیرمنوی کد هدیه منتقل شد)
         [_back_to_settings_btn()]
     ])
     await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN); return ADMIN_SETTINGS_MENU
@@ -188,6 +188,53 @@ async def usage_aggregation_submenu(update: Update, context: ContextTypes.DEFAUL
     ])
     await _send_or_edit(update, context, text, kb, parse_mode=None); return ADMIN_SETTINGS_MENU
 
+# --- Global Discount submenu (دکمه‌اش در منوی کد هدیه قرار می‌گیرد) ---
+async def global_discount_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    enabled = "فعال ✅" if _get_bool("global_discount_enabled") else "غیرفعال ❌"
+    percent = _get("global_discount_percent", "0")
+    starts_raw = _get("global_discount_starts_at", "(تعریف نشده)")
+    expires_raw = _get("global_discount_expires_at", "(تعریف نشده)")
+
+    def _fmt(ts: str) -> str:
+        if ts in ("", "(تعریف نشده)"):
+            return "(تعریف نشده)"
+        try:
+            dt = utils.parse_date_flexible(ts)
+            if dt:
+                return dt.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            pass
+        return ts
+
+    starts = _fmt(starts_raw)
+    expires = _fmt(expires_raw)
+
+    text = (
+        f"٪ **تخفیف همگانی روی همه پلن‌ها**\n\n"
+        f"- وضعیت: {enabled}\n"
+        f"- درصد: {percent}%\n"
+        f"- شروع از: {starts}\n"
+        f"- پایان در: {expires}\n\n"
+        f"راهنما:\n"
+        f"- تاریخ‌ها را با فرمت‌های رایج یا ISO ارسال کنید (مثال: `2025-12-31 23:59` یا `2025-12-31T23:59:59+03:30`).\n"
+        f"- اگر تاریخ شروع/پایان خالی باشد، از همین لحظه تا اطلاع بعدی اعمال می‌شود."
+    )
+
+    kb = _kb([
+        [InlineKeyboardButton("تغییر وضعیت تخفیف همگانی", callback_data="toggle_global_discount")],
+        [_admin_edit_btn("✍️ درصد تخفیف", "global_discount_percent")],
+        [_admin_edit_btn("✍️ تاریخ شروع", "global_discount_starts_at")],
+        [_admin_edit_btn("✍️ تاریخ پایان", "global_discount_expires_at")],
+        # بازگشت به منوی مدیریت کد هدیه
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_gift")]
+    ])
+    await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN)
+    return ADMIN_SETTINGS_MENU
+
+async def toggle_global_discount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _toggle("global_discount_enabled", False)
+    return await global_discount_submenu(update, context)
+
 def _infer_return_target(key: str) -> str:
     if key.startswith("payment_card_") or key == "payment_instruction_text": return "payment_info"
     if key.startswith("first_charge_"): return "first_charge_promo"
@@ -196,6 +243,7 @@ def _infer_return_target(key: str) -> str:
     if key in ("maintenance_message", "force_join_channel"): return "maintenance_join"
     if key.startswith("expiry_reminder_"): return "reports_reminders"
     if key.startswith("usage_"): return "usage_aggregation"
+    if key.startswith("global_discount_"): return "global_discount"
     return "settings_root"
 
 async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -207,11 +255,12 @@ async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     tip = ""
     if key.startswith("payment_card_"): tip = "\n(برای پاک کردن، `-` ارسال کنید)"
     elif "sub_domains" in key: tip = "\n(دامنه‌ها را با کاما جدا کنید)"
-    elif key == "first_charge_expires_at": tip = "\n(فرمت: 2025-12-31T23:59:59+03:30)"
+    elif key in ("first_charge_expires_at", "global_discount_starts_at", "global_discount_expires_at"): tip = "\n(فرمت: 2025-12-31T23:59:59+03:30 یا 2025-12-31 23:59)"
     elif key == "usage_update_interval_min": tip = "\n(عدد صحیح مثبت)"
+    elif key == "global_discount_percent": tip = "\n(عدد درصد؛ مثال: 10)"
     text = f"✍️ مقدار جدید برای **{key}** را ارسال کنید.{tip}\n/cancel برای انصراف\n\n**مقدار فعلی:**\n`{cur}`"
-    # استفاده از هِلپر با فالبک خودکار روی خطای Markdown
-    await _send_or_edit(update, context, text, reply_markup=None, parse_mode=ParseMode.MARKDOWN)
+    if q: await q.answer(); await q.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
+    else: await update.effective_message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
     return AWAIT_SETTING_VALUE
 
 async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -223,6 +272,12 @@ async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_T
         try:
             intval = int(float(val)); assert intval > 0; val = str(intval)
         except Exception: await update.message.reply_text("❌ عدد صحیح مثبت وارد کنید."); return AWAIT_SETTING_VALUE
+    if key == "global_discount_percent":
+        try:
+            p = float(val); assert p >= 0; val = str(int(p))
+        except Exception:
+            await update.message.reply_text("❌ درصد نامعتبر است."); return AWAIT_SETTING_VALUE
+
     db.set_setting(key, val)
     await update.message.reply_text(f"✅ مقدار «{key}» ذخیره شد.")
     dest = context.user_data.pop('settings_return_to', None) or _infer_return_target(key)
@@ -234,6 +289,7 @@ async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_T
     if dest == "maintenance_join": return await maintenance_and_join_submenu(update, context)
     if dest == "reports_reminders": return await reports_and_reminders_submenu(update, context)
     if dest == "usage_aggregation": return await usage_aggregation_submenu(update, context)
+    if dest == "global_discount": return await global_discount_submenu(update, context)
     return await settings_menu(update, context)
 
 async def toggle_maintenance(update: Update, context: ContextTypes.DEFAULT_TYPE):
