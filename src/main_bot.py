@@ -1,3 +1,4 @@
+# filename: main_bot.py
 # -*- coding: utf-8 -*-
 
 import asyncio
@@ -6,7 +7,7 @@ from logging.handlers import RotatingFileHandler
 
 from app import build_application
 import database as db
-from config import REFERRAL_BONUS_AMOUNT
+from config import REFERRAL_BONUS_AMOUNT, NODELESS_MODE, PANEL_INTEGRATION_ENABLED
 
 # --- Logging Configuration ---
 log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -52,16 +53,24 @@ def main() -> None:
     if db.get_setting('referral_bonus_amount') is None:
         db.set_setting('referral_bonus_amount', str(REFERRAL_BONUS_AMOUNT))
 
+    # لاگ وضعیت اجرا: بدون نود/بدون پنل یا متصل به پنل
+    mode = "NODELESS (local-only, no panel)" if (NODELESS_MODE or not PANEL_INTEGRATION_ENABLED) else "PANEL-INTEGRATED"
+    logging.getLogger(__name__).info("Starting bot in mode: %s", mode)
+
     application = build_application()
 
     logging.getLogger(__name__).info("Bot is running.")
 
-    # بهبود long-poll و کاهش نویز خطای ReadError
-    application.run_polling(
-        timeout=60,               # long-poll timeout
-        poll_interval=0.0,        # start next poll immediately
-        drop_pending_updates=True # صف قدیمی را نخوان
-    )
+    try:
+        # بهبود long-poll و کاهش نویز خطای ReadError
+        application.run_polling(
+            timeout=60,               # long-poll timeout
+            poll_interval=0.0,        # start next poll immediately
+            drop_pending_updates=True # صف قدیمی را نخوان
+        )
+    finally:
+        # بستن تمیز اتصال دیتابیس هنگام خروج
+        db.close_db()
 
 
 if __name__ == "__main__":
