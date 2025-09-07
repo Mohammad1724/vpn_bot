@@ -1,3 +1,4 @@
+# filename: bot/handlers/start.py
 # -*- coding: utf-8 -*-
 
 import logging
@@ -11,7 +12,7 @@ import database as db
 from bot.keyboards import get_main_menu_keyboard, get_admin_menu_keyboard
 from bot.constants import ADMIN_MENU
 from bot.handlers.charge import _get_payment_info_text
-from config import SUPPORT_USERNAME, REFERRAL_BONUS_AMOUNT
+from config import REFERRAL_BONUS_AMOUNT
 from bot.ui import nav_row, chunk, btn  # UI helpers
 
 try:
@@ -47,13 +48,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if update.callback_query:
         q = update.callback_query
-        # برای حالت «☰ منوی اصلی»، فقط پیام قبلی را پاک می‌کنیم
         await q.answer()
         try:
             await q.message.delete()
         except Exception:
             pass
-        await q.from_user.send_message(text, reply_markup=reply_markup)
+        await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=reply_markup)
     else:
         await update.message.reply_text(text, reply_markup=reply_markup)
 
@@ -85,7 +85,7 @@ async def show_account_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     referral_count = db.get_user_referral_count(user_id)
     join_date = user.get('join_date', 'N/A')
 
-    # مجموع مصرف روی تمام نودها (بر اساس اسنپ‌شات‌های دوره‌ای)
+    # مصرف کل کاربر (بر اساس اسنپ‌شات‌های دوره‌ای)
     try:
         total_usage_gb = db.get_total_user_traffic(user_id)
     except Exception:
@@ -104,7 +104,7 @@ async def show_account_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"▫️ شناسه عددی: `{user_id}`\n"
         f"▫️ موجودی کیف پول: **{user['balance']:.0f} تومان**\n"
         f"▫️ تعداد سرویس‌های فعال: **{services_count}**\n"
-        f"▫️ مصرف کل روی تمام نودها: **{total_usage_gb:.2f} GB**\n"
+        f"▫️ مصرف کل: **{total_usage_gb:.2f} GB**\n"
         f"▫️ تعداد دوستان دعوت‌شده: **{referral_count}**\n"
         f"▫️ تاریخ عضویت: **{join_date_jalali}**"
     )
@@ -120,11 +120,11 @@ async def show_account_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.callback_query:
         await update.callback_query.answer()
         try:
-            await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+            await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
         except Exception:
-            await context.bot.send_message(user_id, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+            await context.bot.send_message(user_id, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
     else:
-        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
 
 
 async def show_purchase_history_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -145,7 +145,7 @@ async def show_purchase_history_callback(update: Update, context: ContextTypes.D
         msg += f"🔹 {sale['plan_name'] or 'پلن حذف شده'} | {sale['price']:.0f} تومان | {sale_date}\n"
 
     kb = [nav_row(back_cb="acc_back_to_main", home_cb="home_menu")]
-    await q.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+    await q.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
 
 async def show_charge_history_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -166,7 +166,7 @@ async def show_charge_history_callback(update: Update, context: ContextTypes.DEF
         msg += f"🔹 {ch['amount']:.0f} تومان | {charge_date}\n"
 
     kb = [nav_row(back_cb="acc_back_to_main", home_cb="home_menu")]
-    await q.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+    await q.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
 
 async def show_charging_guide_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -174,7 +174,7 @@ async def show_charging_guide_callback(update: Update, context: ContextTypes.DEF
     await q.answer()
     guide = _get_payment_info_text()
     kb = [nav_row(back_cb="acc_back_to_main", home_cb="home_menu")]
-    await q.edit_message_text(guide, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+    await q.edit_message_text(guide, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
 
 async def show_guide(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -245,7 +245,11 @@ async def back_to_guide_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     ]
     rows = chunk(buttons, cols=2)
     rows.append(nav_row(home_cb="home_menu"))
-    await q.from_user.send_message("📚 لطفاً موضوع راهنمای مورد نظر خود را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(rows))
+    await context.bot.send_message(
+        chat_id=q.from_user.id,
+        text="📚 لطفاً موضوع راهنمای مورد نظر خود را انتخاب کنید:",
+        reply_markup=InlineKeyboardMarkup(rows)
+    )
 
 
 async def show_referral_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -264,4 +268,4 @@ async def show_referral_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"`{referral_link}`\n\n"
         f"با اولین خرید دوست شما، مبلغ **{bonus:,.0f} تومان** به کیف پول شما و **{bonus:,.0f} تومان** به کیف پول دوستتان اضافه می‌شود."
     )
-    await update.message.reply_text(text, parse_mode="Markdown")
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
