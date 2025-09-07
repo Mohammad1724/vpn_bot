@@ -1,3 +1,4 @@
+# filename: app.py
 # -*- coding: utf-8 -*-
 
 import logging
@@ -23,8 +24,7 @@ from bot.handlers.admin import (
     settings as admin_settings, backup as admin_backup, users as admin_users,
     gift_codes as admin_gift
 )
-# حذف کامل import مربوط به نودها
-# from bot.handlers.admin import nodes as admin_nodes
+# نودها حذف شدند (هیچ import یا handler مرتبط با نود وجود ندارد)
 import bot.handlers.admin.trial_settings_ui as trial_ui
 from bot.handlers.trial import get_trial_service as trial_get_trial_service
 from bot.handlers.admin.trial_settings import set_trial_days, set_trial_gb
@@ -365,7 +365,7 @@ def build_application():
                 CallbackQueryHandler(admin_gift.gift_code_management_menu, pattern=r"^admin_gift$"),
                 CallbackQueryHandler(admin_c.shutdown_bot, pattern=r"^admin_shutdown$"),
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
-                # حذف کامل nodes_conv از این بخش
+                # نودها به‌طور کامل حذف شده‌اند
                 admin_settings_conv,
                 broadcast_conv,
             ],
@@ -394,7 +394,7 @@ def build_application():
                 CallbackQueryHandler(admin_backup.edit_auto_backup_start, pattern=r'^edit_auto_backup$'),
                 CallbackQueryHandler(admin_backup.edit_backup_interval_start, pattern=r'^edit_backup_interval$'),
                 CallbackQueryHandler(admin_backup.set_backup_interval, pattern=r'^set_backup_interval_\d+$'),
-                CallbackQueryHandler(admin_backup.edit_backup_target_start, pattern=r'^edit_backup_target$'),
+                CallbackQueryHandler(admin_backup.edit_backup_target_start، pattern=r'^edit_backup_target$'),
                 CallbackQueryHandler(admin_backup.admin_confirm_restore_callback, pattern=r'^admin_confirm_restore$'),
                 CallbackQueryHandler(admin_backup.admin_cancel_restore_callback, pattern=r'^admin_cancel_restore$'),
             ],
