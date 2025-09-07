@@ -110,14 +110,13 @@ def _expanded_api_bases_for_server(server: Dict[str, Any]) -> List[str]:
     base_path: Optional[str] = None
 
     if secret:
-        # SECRET مشخص است
         if lc_cpath == lc_secret:
             base_path = f"sub/{secret}"
         else:
             parts = [p.strip() for p in cpath.split("/") if p.strip()]
             parts_l = [p.lower() for p in parts]
             if lc_secret in parts_l:
-                base_path = cpath  # SECRET از قبل در مسیر حضور دارد
+                base_path = cpath  # SECRET قبلاً داخل مسیر هست
             else:
                 base_path = f"{cpath}/{secret}" if cpath else f"sub/{secret}"
     else:
@@ -232,7 +231,9 @@ async def _admin_renew_fallback(user_uuid: str, plan_days: int, plan_gb: float) 
         resp = await _make_request("patch", url, server, json=p, timeout=20.0)
         if resp is not None:
             info = await get_user_info(user_uuid)
+            logger.info("Renewal via Admin API fallback executed (payload_variant_ok).")
             return info if isinstance(info, dict) else resp
+    logger.error("Admin API fallback failed for %s", user_uuid)
     return None
 
 async def create_hiddify_user(plan_days: int, plan_gb: float, user_telegram_id: str, custom_name: str = "") -> Optional[Dict[str, Any]]:
@@ -284,6 +285,7 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
             if isinstance(info, dict) and not info.get("_not_found"):
                 last_info = info
                 used = _extract_usage_gb(info) or 0.0
+                logger.info("Post-renew check via Expanded API: used=%.3f GB", used)
                 if used <= 0.05:
                     return info
             await asyncio.sleep(1.0)
@@ -291,6 +293,7 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
         return last_info
 
     # Fallback با Admin API
+    logger.info("Falling back to Admin API for renewal...")
     fb = await _admin_renew_fallback(user_uuid, plan_days, plan_gb)
     return fb
 
