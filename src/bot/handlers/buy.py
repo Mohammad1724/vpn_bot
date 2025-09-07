@@ -83,7 +83,7 @@ def _short_label(p: dict) -> str:
     vol = _vol_label(gb)
     price_str = _short_price(p.get('price', 0))
     days_fa = utils.to_persian_digits(str(days))
-    # یک برچسب کوتاه برای تخفیف همگانی اضافه می‌کنیم (اگر فعال باشد)
+    # برچسب کوتاه برای نمایش تخفیف همگانی (اگر فعال باشد)
     gd_active, gd_percent = _is_global_discount_active()
     off_tag = f" | {int(gd_percent)}٪ آف" if gd_active and gd_percent > 0 else ""
     label = f"{name} | {days_fa} روز | {vol} | {price_str}{off_tag}"
