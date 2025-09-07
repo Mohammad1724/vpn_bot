@@ -23,6 +23,7 @@ PANEL_ENABLED = getattr(_cfg, "PANEL_ENABLED", False)
 PANEL_DOMAIN = getattr(_cfg, "PANEL_DOMAIN", "")
 ADMIN_PATH = getattr(_cfg, "ADMIN_PATH", "")
 SUB_PATH = getattr(_cfg, "SUB_PATH", "sub")
+PANEL_SECRET_UUID = getattr(_cfg, "PANEL_SECRET_UUID", "")
 SUB_DOMAINS = getattr(_cfg, "SUB_DOMAINS", [])
 SUBCONVERTER_DEFAULT_TARGET = getattr(_cfg, "SUBCONVERTER_DEFAULT_TARGET", "v2ray")
 
@@ -107,19 +108,28 @@ def _clean_path(seg: Optional[str]) -> str:
     return (seg or "").strip().strip("/")
 
 
+def _client_base_path() -> str:
+    p = _clean_path(SUB_PATH) or "sub"
+    s = _clean_path(PANEL_SECRET_UUID)
+    if not s:
+        return p
+    parts = [seg.strip().lower() for seg in p.split("/") if seg.strip()]
+    if s.lower() in parts:
+        return p
+    return f"{p}/{s}" if p else f"sub/{s}"
+
+
 def build_subscription_url(user_uuid: str) -> str:
     """
     ساخت لینک اشتراک:
       - اگر پنل خاموش باشد: لینک محلی
-      - اگر پنل روشن باشد: بر پایه دامنه و sub_path
+      - اگر پنل روشن باشد: https://<subdomain-or-panel>/<client_base_path>/<uuid>/
     """
     if not PANEL_ENABLED:
         return f"{LOCAL_SUB_BASE}/{user_uuid}/"
-    sub_path = _clean_path(SUB_PATH) or "sub"
-    domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
-    if isinstance(domain, str):
-        domain = domain.strip()
-    return f"https://{domain}/{sub_path}/{user_uuid}/"
+    base_path = _client_base_path()
+    domain = (random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN) or PANEL_DOMAIN
+    return f"https://{domain}/{base_path}/{user_uuid}/"
 
 
 def _sanitize_sublink(url: str) -> str:
@@ -131,6 +141,7 @@ def _sanitize_sublink(url: str) -> str:
 
 
 def make_qr_bytes(data: str) -> io.BytesIO:
+    import qrcode
     img = qrcode.make(data)
     bio = io.BytesIO()
     bio.name = "qr.png"
@@ -196,7 +207,6 @@ def create_service_info_caption(
     if unlimited and isinstance(service_name, str) and "0 گیگ" in service_name:
         service_name = service_name.replace("0 گیگ", "نامحدود")
 
-    # انتخاب لینک اشتراک
     if override_sub_url:
         sub_url = override_sub_url
     elif service_db_record and service_db_record.get('sub_link'):
@@ -206,9 +216,9 @@ def create_service_info_caption(
 
     sub_url = _sanitize_sublink(sub_url or "")
     traffic_line = (
-        f"حجم: نامحدود | مصرف: {used_gb}GB"
+        "حجم: نامحدود | مصرف: {}GB".format(used_gb)
         if unlimited
-        else f"حجم: {used_gb}/{total_gb}GB (باقی: {round(max(total_gb - used_gb, 0.0), 2)}GB)"
+        else "حجم: {}/{}GB (باقی: {}GB)".format(used_gb, total_gb, round(max(total_gb - used_gb, 0.0), 2))
     )
 
     return (
