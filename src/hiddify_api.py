@@ -1,6 +1,14 @@
 # filename: hiddify_api.py
 # -*- coding: utf-8 -*-
 """
+Hiddify API client for the bot (async, HTTPX)
+
+Key points:
+- Admin API v2 (/api/v2/admin/): create/get/renew/delete user
+- Expanded API (panel-side helpers): push nodes.json & hidybotconfigs.json
+- FIX: renew_user_subscription resets quota by sending start_date=now and
+       tries fallback POSTs to reset_* endpoints if quota didn't reset.
+"""
 
 import asyncio
 import httpx
@@ -57,7 +65,7 @@ def _fallback_server_dict() -> Dict[str, Any]:
 
 
 def _db_server_from_node(n: dict) -> Dict[str, Any]:
-    # تبدیل رکورد دیتابیس نود به ساختار سرور
+    # Convert DB node row to server dict
     return {
         "name": n["name"],
         "panel_domain": n["panel_domain"],
@@ -75,7 +83,7 @@ def _db_server_from_node(n: dict) -> Dict[str, Any]:
 def _get_server_by_name_config(name: str) -> Optional[Dict[str, Any]]:
     for s in SERVERS or []:
         if str(s.get("name")) == str(name):
-            # همگن‌سازی کلیدها برای سازگاری
+            # Normalize keys
             return {
                 "name": s.get("name"),
                 "panel_domain": s.get("panel_domain"),
@@ -117,10 +125,7 @@ def _db_get_server_by_name(name: str) -> Optional[Dict[str, Any]]:
 
 
 def _pick_least_loaded(servers: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """
-    انتخاب نود با بیشترین ظرفیت خالی (capacity - current_users).
-    اگر current_users در DB به‌روز نباشد، شمارش زنده سرویس‌ها از active_services گرفته می‌شود.
-    """
+    """Pick node with the most free capacity (capacity - current_users)."""
     best = None
     best_free = -1
     for s in servers:
@@ -140,15 +145,12 @@ def _pick_least_loaded(servers: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 def _select_server(server_name: Optional[str] = None) -> Dict[str, Any]:
     """
-    انتخاب نود/سرور برای عملیات:
-    1) اگر server_name مشخص باشد: ابتدا بین نودهای DB، سپس در config.SERVERS جست‌وجو می‌شود.
-    2) اگر نودهای فعال در DB موجود باشند: طبق SERVER_SELECTION_POLICY انتخاب می‌شود
-       - least_loaded: بیشترین ظرفیت خالی
-       - by_name: اگر DEFAULT_SERVER_NAME در DB موجود و فعال باشد، همان؛ وگرنه اولین نود
-       - first (پیش‌فرض): اولین نود فعال
-    3) در صورت نبود نود در DB: از config.SERVERS (اگر MULTI_SERVER_ENABLED) یا تک‌سرور fallback استفاده می‌شود.
+    Selection logic:
+    1) If server_name is given: try DB nodes, then config.SERVERS
+    2) If DB has active nodes: apply SERVER_SELECTION_POLICY
+       - least_loaded/by_name/first
+    3) Else: use SERVERS (when MULTI_SERVER_ENABLED) or fallback single server
     """
-    # 1) نام مشخص
     if server_name:
         srv = _db_get_server_by_name(server_name)
         if srv:
@@ -157,7 +159,6 @@ def _select_server(server_name: Optional[str] = None) -> Dict[str, Any]:
         if srv:
             return srv
 
-    # 2) ترجیح DB
     db_servers = _db_list_active_hiddify_servers()
     if db_servers:
         policy = str(SERVER_SELECTION_POLICY or "first").lower()
@@ -169,20 +170,16 @@ def _select_server(server_name: Optional[str] = None) -> Dict[str, Any]:
             if named and int(named.get("is_active", 1)) == 1:
                 return named
             return db_servers[0]
-        # first (default)
         return db_servers[0]
 
-    # 3) fallback config
     if MULTI_SERVER_ENABLED and SERVERS:
         policy = str(SERVER_SELECTION_POLICY or "first").lower()
         if policy == "by_name" and DEFAULT_SERVER_NAME:
             srv = _get_server_by_name_config(DEFAULT_SERVER_NAME)
             if srv:
                 return srv
-        # first
         return _get_server_by_name_config(SERVERS[0].get("name")) or _fallback_server_dict()
 
-    # 4) تک‌سرور
     return _fallback_server_dict()
 
 
@@ -210,8 +207,7 @@ async def _make_client(timeout: float = 20.0) -> httpx.AsyncClient:
 
 async def _make_request(method: str, url: str, server: Dict[str, Any], **kwargs) -> Optional[Dict[str, Any]]:
     """
-    اجرای درخواست HTTP با retry. 404 => {"_not_found": True}. پاسخ بدون بدنه => {}.
-    از نشت کلاینت جلوگیری می‌کند.
+    HTTP with retries. 404 -> {"_not_found": True}. Empty body -> {}.
     """
     retries = 0
     headers = kwargs.pop("headers", None) or _get_api_headers(server)
@@ -229,7 +225,7 @@ async def _make_request(method: str, url: str, server: Dict[str, Any], **kwargs)
             status = e.response.status_code if e.response is not None else None
             text = e.response.text if e.response is not None else str(e)
             if status == 404:
-                logger.info("%s %s -> 404 Not Found (returning _not_found)", method.upper(), url)
+                logger.info("%s %s -> 404 (returning _not_found)", method.upper(), url)
                 return {"_not_found": True}
             if status in (401, 403, 422):
                 logger.error("%s %s -> %s: %s", method.upper(), url, status, text)
@@ -263,13 +259,10 @@ def _bytes_to_gb(n: Any) -> float:
 
 
 def _extract_usage_gb(payload: Dict[str, Any]) -> Optional[float]:
-    """
-    تلاش برای استخراج مصرف کاربر (GB) از پاسخ API هیدیفای با در نظر گرفتن تغییرات نسخه‌ها.
-    """
+    """Try to extract current usage (GB) from various API shapes."""
     if not isinstance(payload, dict):
         return None
 
-    # 1) رایج‌ترین کلیدهای GB
     direct_gb_keys = [
         "current_usage_GB", "usage_GB", "total_usage_GB",
         "used_GB", "used_gb", "usageGb", "currentUsageGB"
@@ -281,7 +274,6 @@ def _extract_usage_gb(payload: Dict[str, Any]) -> Optional[float]:
             except Exception:
                 pass
 
-    # برخی APIها دیتا را در یک زیر-آبجکت می‌گذارند (مثل "stats" یا "usage")
     for container_key in ("stats", "usage", "data"):
         sub = payload.get(container_key)
         if isinstance(sub, dict):
@@ -292,7 +284,6 @@ def _extract_usage_gb(payload: Dict[str, Any]) -> Optional[float]:
                     except Exception:
                         pass
 
-    # 2) upload/download
     def pick_from(d: Dict[str, Any]) -> Optional[float]:
         up = d.get("upload"); down = d.get("download")
         up_gb = d.get("upload_GB"); down_gb = d.get("download_GB")
@@ -316,7 +307,6 @@ def _extract_usage_gb(payload: Dict[str, Any]) -> Optional[float]:
     if v is not None:
         return v
 
-    # 3) فیلدهای کلی
     generic_keys = [
         "current_usage", "usage", "used_traffic",
         "total_used_bytes", "total_bytes", "bytes", "traffic", "used_bytes"
@@ -324,19 +314,18 @@ def _extract_usage_gb(payload: Dict[str, Any]) -> Optional[float]:
     for k in generic_keys:
         if k in payload:
             val = _to_float(payload.get(k), 0.0)
-            if abs(val) > 1024 * 1024:  # bytes
+            if abs(val) > 1024 * 1024:
                 return _bytes_to_gb(val)
-            return val  # GB فرضی
+            return val
     for container_key in ("stats", "usage", "data"):
         sub = payload.get(container_key)
         if isinstance(sub, dict):
             for k in generic_keys:
                 if k in sub:
                     val = _to_float(sub.get(k), 0.0)
-                    if abs(val) > 1024 * 1024:  # bytes
+                    if abs(val) > 1024 * 1024:
                         return _bytes_to_gb(val)
                     return val
-
     return None
 
 
@@ -349,9 +338,7 @@ async def create_hiddify_user(
     server_name: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """
-    ساخت کاربر در هیدیفای.
-    - اگر server_name مشخص نباشد، از بین نودهای فعال DB انتخاب می‌شود (سیاست انتخاب قابل تنظیم است).
-    - اگر DB خالی باشد، به config برمی‌گردد.
+    Create user on target panel.
     """
     server = _select_server(server_name)
     endpoint = _get_base_url(server) + "user/"
@@ -396,9 +383,7 @@ async def get_user_info(user_uuid: str, server_name: Optional[str] = None) -> Op
 
 
 async def get_user_usage_gb(user_uuid: str, server_name: Optional[str] = None) -> Optional[float]:
-    """
-    دریافت مصرف کاربر (GB) به‌صورت دقیق و مقاوم در برابر تغییرات API:
-    """
+    """Get current usage in GB."""
     info = await get_user_info(user_uuid, server_name=server_name)
     if not isinstance(info, dict) or info.get("_not_found"):
         return None
@@ -407,7 +392,7 @@ async def get_user_usage_gb(user_uuid: str, server_name: Optional[str] = None) -
 
 async def _try_reset_usage(user_uuid: str, server: Dict[str, Any]) -> bool:
     """
-    تلاش برای ریست‌کردن مصرف از طریق اندپوینت‌های احتمالی reset_* (فالبک).
+    Best-effort: try reset endpoints if panel supports them.
     """
     base = _get_base_url(server)
     for ep in ("reset_traffic", "reset_usage", "reset"):
@@ -426,11 +411,10 @@ async def _try_reset_usage(user_uuid: str, server: Dict[str, Any]) -> bool:
 
 async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float, server_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
-    تمدید سرویس + ریست حجم:
-    - package_days را به‌روزرسانی می‌کند
-    - start_date را الان می‌گذارد (ریست دوره)
-    - reset_traffic=True (اگر API پشتیبانی کند)
-    - فالبک: تلاش برای اندپوینت‌های reset_traffic/reset_usage
+    Renew subscription and reset quota:
+    - PATCH user with package_days and start_date=now
+    - send reset_traffic/reset_usage flags (if supported)
+    - fallback POST to reset_* endpoints if usage didn't reset
     """
     server = _select_server(server_name)
     endpoint = f"{_get_base_url(server)}user/{user_uuid}/"
@@ -438,7 +422,6 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
     payload: Dict[str, Any] = {
         "package_days": int(plan_days),
         "start_date": datetime.now(timezone.utc).isoformat(),
-        # پارامترهای معمول (اگر API پشتیبانی کند بی‌اثر نیست)
         "reset_traffic": True,
         "reset_usage": True,
     }
@@ -451,12 +434,10 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
 
     _ = await _make_request("patch", endpoint, server, json=payload, timeout=30.0)
 
-    # دریافت اطلاعات جدید
     info = await get_user_info(user_uuid, server_name=server["name"])
     if not isinstance(info, dict) or info.get("_not_found"):
         return None
 
-    # اگر مصرف هنوز ریست نشده، تلاش برای reset_* فالبک
     used = _extract_usage_gb(info)
     if used is not None and used > 0.01:
         ok = await _try_reset_usage(user_uuid, server)
@@ -467,9 +448,7 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
 
 
 async def delete_user_from_panel(user_uuid: str, server_name: Optional[str] = None) -> bool:
-    """
-    حذف کاربر از پنل هیدیفای (idempotent)
-    """
+    """Delete user (idempotent)."""
     server = _select_server(server_name)
     endpoint = f"{_get_base_url(server)}user/{user_uuid}/"
     data = await _make_request("delete", endpoint, server, timeout=15.0)
@@ -485,16 +464,14 @@ async def delete_user_from_panel(user_uuid: str, server_name: Optional[str] = No
     if data is None:
         probe = await get_user_info(user_uuid, server_name=server["name"])
         if isinstance(probe, dict) and probe.get("_not_found"):
-            logger.info("Delete treated as success for %s (verified _not_found after delete).", user_uuid)
+            logger.info("Delete treated as success for %s (verified _not_found).", user_uuid)
             return True
 
     return False
 
 
 async def check_api_connection(server_name: Optional[str] = None) -> bool:
-    """
-    بررسی اتصال به API و صحت کلید API
-    """
+    """Quick sanity check."""
     try:
         server = _select_server(server_name)
         endpoint = _get_base_url(server) + "user/?page=1&per_page=1"
@@ -507,9 +484,7 @@ async def check_api_connection(server_name: Optional[str] = None) -> bool:
 
 # ========================= Expanded API (push nodes/configs) =========================
 def _panel_api_base_for_push() -> List[str]:
-    """
-    کاندیدهای مسیر API پنل برای پوش‌کردن nodes.json و hidybotconfigs.json
-    """
+    """Candidate bases to push nodes/configs to Expanded API."""
     domain = PANEL_DOMAIN
     cpath = (SUB_PATH or "sub").strip().strip("/")
 
@@ -522,7 +497,7 @@ def _panel_api_base_for_push() -> List[str]:
         bases.append(f"https://{domain}/{ADMIN_PATH}/{PANEL_SECRET_UUID}/api/v1")
     bases.append(f"https://{domain}/{ADMIN_PATH}/api/v1")
 
-    # حذف تکراری‌ها با حفظ ترتیب
+    # Dedup while preserving order
     seen = set()
     uniq = []
     for b in bases:
@@ -534,9 +509,7 @@ def _panel_api_base_for_push() -> List[str]:
 
 
 async def _post_json_noauth(url: str, body: Any, timeout: float = 20.0) -> Tuple[int, Any]:
-    """
-    درخواست POST ساده (بدون هدر ویژه) برای Expanded API.
-    """
+    """Simple POST without special headers (for Expanded API)."""
     try:
         async with httpx.AsyncClient(timeout=timeout, verify=HIDDIFY_API_VERIFY_SSL) as client:
             resp = await client.post(url, json=body)
@@ -552,10 +525,7 @@ async def _post_json_noauth(url: str, body: Any, timeout: float = 20.0) -> Tuple
 
 
 async def push_nodes_to_panel(base_urls: List[str]) -> bool:
-    """
-    به‌روزرسانی nodes.json روی پنل اصلی
-    """
-    # پاک‌سازی و یکتا
+    """Update nodes.json on main panel."""
     cleaned: List[str] = []
     seen = set()
     for u in base_urls or []:
@@ -577,9 +547,7 @@ async def push_nodes_to_panel(base_urls: List[str]) -> bool:
 
 
 async def push_hidybot_configs(cfg: Dict[str, Any]) -> bool:
-    """
-    به‌روزرسانی hidybotconfigs.json روی پنل اصلی
-    """
+    """Update hidybotconfigs.json on main panel."""
     body = cfg or {}
     for base in _panel_api_base_for_push():
         status, data = await _post_json_noauth(f"{base}/configs/", body)
