@@ -72,11 +72,41 @@ def _extract_usage_gb(payload: Dict[str, Any]) -> Optional[float]:
     return None
 
 def _expanded_api_bases_for_server(server: Dict[str, Any]) -> List[str]:
-    domain = server.get("panel_domain") or PANEL_DOMAIN
-    cpath = (server.get("sub_path") or SUB_PATH or "sub").strip().strip("/")
+    """
+    ساخت امن مسیر Expanded API:
+    - اگر SUB_PATH به‌اشتباه برابر SECRET باشد، از sub/SECRET استفاده می‌کنیم.
+    - اگر SECRET از قبل در SUB_PATH هست، دوباره اضافه نمی‌کنیم.
+    - در غیر این صورت، SUB_PATH/SECRET را می‌سازیم.
+    """
+    domain = (server.get("panel_domain") or PANEL_DOMAIN or "").strip()
+    raw_cpath = (server.get("sub_path") or SUB_PATH or "sub")
+    cpath = str(raw_cpath).strip().strip("/")
+    secret = (PANEL_SECRET_UUID or "").strip().strip("/")
+
     bases: List[str] = []
-    if PANEL_SECRET_UUID:
-        bases.append(f"https://{domain}/{cpath}/{PANEL_SECRET_UUID}/api/v1")
+    if not domain or not secret:
+        return bases
+
+    lc_cpath = cpath.lower()
+    lc_secret = secret.lower()
+
+    # حالت اشتباه رایج: SUB_PATH == SECRET
+    if lc_cpath == lc_secret:
+        base_path = f"sub/{secret}"
+    else:
+        parts = [p.strip() for p in cpath.split("/") if p.strip()]
+        parts_l = [p.lower() for p in parts]
+        if lc_secret in parts_l:
+            # SECRET از قبل در مسیر هست
+            base_path = cpath
+        else:
+            # SECRET در مسیر نیست، اضافه‌اش می‌کنیم
+            if cpath:
+                base_path = f"{cpath}/{secret}"
+            else:
+                base_path = f"sub/{secret}"
+
+    bases.append(f"https://{domain}/{base_path}/api/v1")
     return bases
 
 async def _post_json_noauth(url: str, body: Any, timeout: float = 20.0) -> Tuple[int, Any]:
@@ -178,7 +208,6 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
     if not exp_ok:
         logger.error("Expanded user update failed for %s. Check PANEL_SECRET_UUID and sub_path.", user_uuid)
 
-    # تلاش برای به‌روزرسانی مصرف و سپس اعتبارسنجی ریست مصرف
     await _expanded_update_usage()
     await asyncio.sleep(1.0)
 
@@ -192,11 +221,8 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
                 return info
         await asyncio.sleep(1.0)
 
-    # اگر نتوانستیم ریست را تایید کنیم:
     if exp_ok:
-        # احتمالاً پنل با تاخیر مقادیر را اعمال می‌کند؛ اطلاعات آخر را برمی‌گردانیم.
         return last_info
-    # به عنوان شکست گزارش شود تا لایه بالاتر تراکنش را نهایی نکند.
     return None
 
 async def delete_user_from_panel(user_uuid: str) -> bool:
@@ -218,4 +244,22 @@ async def check_api_connection() -> bool:
         r = await _make_request("get", _get_base_url(server) + "user/?page=1&per_page=1", server, timeout=5.0)
         return r is not None
     except Exception:
+        return False
+
+# --- Optional stub to satisfy bot.nodes_sync usage ---
+async def push_nodes_to_panel(bases: Optional[List[str]] = None) -> bool:
+    """
+    استاب ساده برای جلوگیری از خطای AttributeError در nodes_sync.
+    اگر بعداً نیاز به همگام‌سازی واقعی داشتید، پیاده‌سازی را اینجا اضافه کنید.
+    """
+    try:
+        if bases is None:
+            bases = _expanded_api_bases_for_server(_select_server())
+        if not bases:
+            logger.info("push_nodes_to_panel: no bases to push; skipping.")
+            return True
+        logger.info("push_nodes_to_panel: stub called; bases=%s", bases)
+        return True
+    except Exception as e:
+        logger.warning("push_nodes_to_panel stub failed: %s", e)
         return False
