@@ -21,7 +21,6 @@ BASE_RETRY_DELAY = 1.0
 
 
 def _select_server() -> Dict[str, Any]:
-    """برگشت تنظیمات پنل اصلی."""
     return {
         "name": "Main",
         "panel_domain": PANEL_DOMAIN,
@@ -55,6 +54,7 @@ async def _make_request(method: str, url: str, server: Dict[str, Any], **kwargs)
                 try:
                     return resp.json()
                 except ValueError:
+                    # 204 No Content یا پاسخ بدون JSON
                     return {}
         except httpx.HTTPStatusError as e:
             status = e.response.status_code if e.response is not None else None
@@ -86,16 +86,9 @@ def _looks_like_secret(s: str) -> bool:
     s = (s or "").strip().strip("/")
     if not s or s.lower() in ("sub", "api", "v1", "v2", "admin"):
         return False
-    # توکن Secret معمولاً از کاراکترهای الفبایی-عددی و - یا _ با طول مناسب تشکیل می‌شود
     return re.fullmatch(r"[A-Za-z0-9\-_]{8,64}", s) is not None
 
 def _expanded_api_bases_for_server(server: Dict[str, Any]) -> List[str]:
-    """
-    ساخت امن مسیر Expanded API:
-    - اگر SUB_PATH == SECRET باشد، از sub/SECRET استفاده می‌کنیم.
-    - اگر SECRET از قبل در SUB_PATH هست، دوباره اضافه نمی‌کنیم.
-    - اگر PANEL_SECRET_UUID خالی بود و SUB_PATH شبیه SECRET بود، از SUB_PATH به‌عنوان SECRET استفاده می‌کنیم.
-    """
     domain = (server.get("panel_domain") or PANEL_DOMAIN or "").strip()
     raw_cpath = (server.get("sub_path") or SUB_PATH or "sub")
     cpath = str(raw_cpath).strip().strip("/")
@@ -116,11 +109,10 @@ def _expanded_api_bases_for_server(server: Dict[str, Any]) -> List[str]:
             parts = [p.strip() for p in cpath.split("/") if p.strip()]
             parts_l = [p.lower() for p in parts]
             if lc_secret in parts_l:
-                base_path = cpath  # SECRET قبلاً داخل مسیر هست
+                base_path = cpath
             else:
                 base_path = f"{cpath}/{secret}" if cpath else f"sub/{secret}"
     else:
-        # SECRET خالی است: سعی می‌کنیم از SUB_PATH استخراج کنیم
         parts = [p.strip() for p in cpath.split("/") if p.strip()]
         if not parts:
             return bases
@@ -204,35 +196,32 @@ async def _expanded_update_usage() -> bool:
     return False
 
 async def _admin_renew_fallback(user_uuid: str, plan_days: int, plan_gb: float) -> Optional[Dict[str, Any]]:
-    """
-    وقتی Expanded API در دسترس نیست: با Admin API پلن را به‌روزرسانی می‌کنیم.
-    چند payload مختلف تست می‌شود تا با نسخه‌های مختلف پنل سازگار باشد.
-    """
     server = _select_server()
     url = f"{_get_base_url(server)}user/{user_uuid}/"
-    payloads = [
-        {  # کامل
+    payload_variants = [
+        {
             "package_days": int(plan_days),
             "usage_limit_GB": float(plan_gb or 0.0),
             "start_date": datetime.now(timezone.utc).isoformat(),
-            "current_usage_GB": 0
+            "current_usage_GB": 0,
         },
-        {  # بدون current_usage_GB
+        {
             "package_days": int(plan_days),
             "usage_limit_GB": float(plan_gb or 0.0),
-            "start_date": datetime.now(timezone.utc).isoformat()
+            "start_date": datetime.now(timezone.utc).isoformat(),
         },
-        {  # حداقلی
+        {
             "package_days": int(plan_days),
-            "usage_limit_GB": float(plan_gb or 0.0)
+            "usage_limit_GB": float(plan_gb or 0.0),
         },
     ]
-    for p in payloads:
-        resp = await _make_request("patch", url, server, json=p, timeout=20.0)
-        if resp is not None:
-            info = await get_user_info(user_uuid)
-            logger.info("Renewal via Admin API fallback executed (payload_variant_ok).")
-            return info if isinstance(info, dict) else resp
+    for method in ("patch", "put"):
+        for p in payload_variants:
+            resp = await _make_request(method, url, server, json=p, timeout=20.0)
+            if resp is not None:
+                info = await get_user_info(user_uuid)
+                logger.info("Renewal via Admin API (%s) applied.", method.upper())
+                return info if isinstance(info, dict) else resp
     logger.error("Admin API fallback failed for %s", user_uuid)
     return None
 
@@ -265,13 +254,6 @@ async def get_user_info(user_uuid: str) -> Optional[Dict[str, Any]]:
     return await _make_request("get", endpoint, server, timeout=10.0)
 
 async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float) -> Optional[Dict[str, Any]]:
-    """
-    تمدید کاربر:
-    - اگر Expanded API در دسترس باشد، با آن ریست کامل انجام می‌دهیم و انتظار داریم مصرف ~0 شود.
-    - اگر در دسترس نباشد یا شکست بخورد، با Admin API پلن را به‌روزرسانی می‌کنیم (fallback).
-    - در نهایت اطلاعات کاربر را برمی‌گردانیم (None یعنی شکست قطعی).
-    """
-    # تلاش با Expanded API
     exp_ok = await _expanded_user_update(user_uuid, plan_days, plan_gb)
     if not exp_ok:
         logger.error("Expanded user update failed for %s. Check PANEL_SECRET_UUID and sub_path.", user_uuid)
@@ -289,7 +271,6 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
                 if used <= 0.05:
                     return info
             await asyncio.sleep(1.0)
-        # اگر نتوانستیم ریست را تایید کنیم، همان اطلاعات آخر را برگردانیم
         return last_info
 
     # Fallback با Admin API
@@ -318,12 +299,8 @@ async def check_api_connection() -> bool:
     except Exception:
         return False
 
-# --- استاب برای بی‌خیال شدن از نودها در همگام‌سازی ---
+# --- استاب نودها ---
 async def push_nodes_to_panel(bases: Optional[List[str]] = None) -> bool:
-    """
-    استاب ساده برای جلوگیری از خطای AttributeError در nodes_sync.
-    اگر بعداً نیاز به همگام‌سازی واقعی داشتید، پیاده‌سازی را اینجا اضافه کنید.
-    """
     try:
         if bases is None:
             bases = _expanded_api_bases_for_server(_select_server())
