@@ -9,7 +9,7 @@ from telegram.error import BadRequest
 
 import database as db
 from bot import utils
-from bot.constants import ADMIN_MENU, AWAIT_SETTING_VALUE, ADMIN_SETTINGS_MENU
+from bot.constants import ADMIN_MENU, AWAIT_SETTING_VALUE, ADMIN_SETTINGS_MENU, GIFT_CODES_MENU
 from bot.keyboards import get_admin_menu_keyboard
 from bot.ui import nav_row, btn
 
@@ -105,7 +105,7 @@ async def payment_and_guides_submenu(update: Update, context: ContextTypes.DEFAU
         [_admin_edit_btn("✍️ راهنمای اتصال", "guide_connection")],
         [_admin_edit_btn("✍️ راهنمای خرید", "guide_buying")],
         [_admin_edit_btn("✍️ راهنمای شارژ", "guide_charging")],
-        # دکمه «تخفیف همگانی» را اینجا نمی‌آوریم (طبق درخواست، به زیرمنوی کد هدیه منتقل شد)
+        # دکمه «تخفیف همگانی» به خواست شما به منوی کد هدیه منتقل شد
         [_back_to_settings_btn()]
     ])
     await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN); return ADMIN_SETTINGS_MENU
@@ -229,10 +229,17 @@ async def global_discount_submenu(update: Update, context: ContextTypes.DEFAULT_
         [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_gift")]
     ])
     await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN)
-    return ADMIN_SETTINGS_MENU
+    return GIFT_CODES_MENU
 
 async def toggle_global_discount(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    _toggle("global_discount_enabled", False)
+    q = update.callback_query
+    await q.answer()
+    cur = db.get_setting("global_discount_enabled")
+    new_val = "0"
+    if str(cur).lower() not in ("1","true","on","yes"):
+        new_val = "1"
+    db.set_setting("global_discount_enabled", new_val)
+    # نمایش مجدد همان زیرمنو
     return await global_discount_submenu(update, context)
 
 def _infer_return_target(key: str) -> str:
