@@ -1,3 +1,4 @@
+# filename: constants.py
 # -*- coding: utf-8 -*-
 
 # Commands
@@ -84,22 +85,4 @@ AWAIT_REFERRAL_BONUS = 600
     BROADCAST_TO_USER_MESSAGE,
 ) = range(700, 705)
 
-# Node Management States
-(
-    NODES_MENU,
-    ADD_NAME,
-    ADD_PANEL_DOMAIN,
-    ADD_ADMIN_PATH,
-    ADD_SUB_PATH,
-    ADD_API_KEY,
-    ADD_SUB_DOMAINS,
-    ADD_CAPACITY,
-    ADD_LOCATION,
-    ADD_CONFIRM,
-    NODE_DETAILS,
-    EDIT_FIELD_PICK,
-    EDIT_FIELD_VALUE,
-    DELETE_CONFIRM,
-    NODE_SETTINGS_MENU,
-    EDIT_NODE_SETTING_VALUE,
-) = range(800, 816)
+# توجه: Stateهای مدیریت نود حذف شدند تا وابستگی به نودها به‌طور کامل از ربات حذف شود.
