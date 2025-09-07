@@ -1,14 +1,5 @@
 # filename: hiddify_api.py
 # -*- coding: utf-8 -*-
-"""
-Hiddify API client for the bot (async, HTTPX)
-
-- Admin API v2 (/api/v2/admin/): create/get/delete user
-- Expanded API v1 (/<sub_path>/<SECRET>/api/v1): renew user, push nodes/configs
-- Renew Fix: Renewal is now done exclusively via the Expanded API on the target node
-  to ensure both date and usage are properly reset, bypassing Admin API v2 bugs.
-"""
-
 import asyncio
 import httpx
 import uuid
@@ -165,7 +156,7 @@ def _extract_usage_gb(payload: Dict[str, Any]) -> Optional[float]:
 def _expanded_api_bases_for_server(server: Dict[str, Any]) -> List[str]:
     domain = server.get("panel_domain") or PANEL_DOMAIN
     cpath = (server.get("sub_path") or SUB_PATH or "sub").strip().strip("/")
-    bases: List[str] = []
+    bases = []
     if PANEL_SECRET_UUID: bases.append(f"https://{domain}/{cpath}/{PANEL_SECRET_UUID}/api/v1")
     return bases
 
@@ -250,7 +241,7 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
     # 2. Force usage recompute on target node so Admin API reflects changes
     await _expanded_update_usage_on_server(server)
     await asyncio.sleep(1.0)
-    # 3. Poll info to verify
+    # 3. Poll info (up to 3 tries) to verify
     for _ in range(3):
         info = await get_user_info(user_uuid, server_name=server["name"])
         if isinstance(info, dict) and not info.get("_not_found"):
