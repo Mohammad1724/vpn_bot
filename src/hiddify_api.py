@@ -3,11 +3,12 @@
 """
 Hiddify API client for the bot (async, HTTPX)
 
-Key points:
+Goals:
 - Admin API v2 (/api/v2/admin/): create/get/renew/delete user
-- Expanded API (panel-side helpers): push nodes.json & hidybotconfigs.json
-- Renew fix: after renewing, if usage didn't reset, fallback to Expanded API
-  bulk update to force current_usage_GB=0 (works with your API).
+- Expanded API v1 (/<sub or proxy>/<SECRET>/api/v1): push nodes/configs and user update
+- Renew fix: if Admin API PATCH doesn't reset quota/date, use Expanded API:
+    1) POST /api/v1/user/ with {"uuid", "package_days", "usage_limit_GB", "start_date", "current_usage_GB": 0}
+    2) As last resort, POST /api/v1/bulkusers/?update=1 with [{"uuid","current_usage_GB":0,"start_date":now}]
 """
 
 import asyncio
@@ -384,107 +385,7 @@ async def get_user_usage_gb(user_uuid: str, server_name: Optional[str] = None) -
     return _extract_usage_gb(info)
 
 
-async def _expanded_bulk_zero_usage(user_uuid: str, server: Dict[str, Any]) -> bool:
-    """
-    Fallback via Expanded API:
-    POST /<sub or proxy>/<SECRET>/api/v1/bulkusers/?update=1
-    Body: [{"uuid": ..., "current_usage_GB": 0, "start_date": now}]
-    """
-    bases = _panel_api_base_for_push()
-    if not bases:
-        return False
-    body = [{
-        "uuid": user_uuid,
-        "current_usage_GB": 0,
-        "start_date": datetime.now(timezone.utc).isoformat()
-    }]
-    for base in bases:
-        url = f"{base}/bulkusers/?update=1"
-        try:
-            status, data = await _post_json_noauth(url, body, timeout=15.0)
-            if status == 200:
-                return True
-        except Exception:
-            continue
-    return False
-
-
-async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float, server_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """
-    Renew subscription and reset quota:
-    - PATCH user with package_days and start_date=now (reset period)
-    - Send reset flags (if supported by API)
-    - If usage didn't reset, use Expanded API bulk update to force current_usage_GB=0
-    """
-    server = _select_server(server_name)
-    endpoint = f"{_get_base_url(server)}user/{user_uuid}/"
-
-    payload: Dict[str, Any] = {
-        "package_days": int(plan_days),
-        "start_date": datetime.now(timezone.utc).isoformat(),
-        "reset_traffic": True,
-        "reset_usage": True,
-    }
-    try:
-        usage_limit_gb = float(plan_gb)
-    except Exception:
-        usage_limit_gb = 0.0
-    if usage_limit_gb > 0:
-        payload["usage_limit_GB"] = usage_limit_gb
-
-    _ = await _make_request("patch", endpoint, server, json=payload, timeout=30.0)
-
-    info = await get_user_info(user_uuid, server_name=server["name"])
-    if not isinstance(info, dict) or info.get("_not_found"):
-        return None
-
-    used = _extract_usage_gb(info)
-    if used is not None and used > 0.01:
-        # Admin API didn't reset; use Expanded API to force 0 GB
-        ok = await _expanded_bulk_zero_usage(user_uuid, server)
-        if ok:
-            info = await get_user_info(user_uuid, server_name=server["name"])
-
-    return info
-
-
-async def delete_user_from_panel(user_uuid: str, server_name: Optional[str] = None) -> bool:
-    """Delete user (idempotent)."""
-    server = _select_server(server_name)
-    endpoint = f"{_get_base_url(server)}user/{user_uuid}/"
-    data = await _make_request("delete", endpoint, server, timeout=15.0)
-
-    if data == {}:
-        logger.info("Successfully deleted user %s from panel.", user_uuid)
-        return True
-
-    if isinstance(data, dict) and data.get("_not_found"):
-        logger.info("Successfully deleted/not-found user %s from panel.", user_uuid)
-        return True
-
-    if data is None:
-        probe = await get_user_info(user_uuid, server_name=server["name"])
-        if isinstance(probe, dict) and probe.get("_not_found"):
-            logger.info("Delete treated as success for %s (verified _not_found).", user_uuid)
-            return True
-
-    return False
-
-
-async def check_api_connection(server_name: Optional[str] = None) -> bool:
-    """Quick sanity check."""
-    try:
-        server = _select_server(server_name)
-        endpoint = _get_base_url(server) + "user/?page=1&per_page=1"
-        response = await _make_request("get", endpoint, server, timeout=5.0)
-        return response is not None
-    except Exception as e:
-        logger.error("API connection check failed: %s", e, exc_info=True)
-        return False
-
-
-# ========================= Expanded API (push nodes/configs) =========================
-def _panel_api_base_for_push() -> List[str]:
+async def _panel_api_base_for_push() -> List[str]:
     """Candidate bases to push nodes/configs to Expanded API."""
     domain = PANEL_DOMAIN
     cpath = (SUB_PATH or "sub").strip().strip("/")
@@ -527,34 +428,134 @@ async def _post_json_noauth(url: str, body: Any, timeout: float = 20.0) -> Tuple
         return 0, None
 
 
-async def push_nodes_to_panel(base_urls: List[str]) -> bool:
-    """Update nodes.json on main panel."""
-    cleaned: List[str] = []
-    seen = set()
-    for u in base_urls or []:
-        u = (u or "").strip().rstrip("/")
-        if u and u not in seen:
-            cleaned.append(u)
-            seen.add(u)
+async def _expanded_user_update(user_uuid: str, plan_days: int, plan_gb: float) -> bool:
+    """
+    Use Expanded API to renew user properly:
+      POST /api/v1/user/
+      JSON: {"uuid", "package_days", "usage_limit_GB", "start_date", "current_usage_GB": 0}
+    """
+    bases = await _panel_api_base_for_push()
+    if not bases:
+        return False
+    body: Dict[str, Any] = {
+        "uuid": user_uuid,
+        "package_days": int(plan_days),
+        "usage_limit_GB": float(plan_gb or 0.0),
+        "start_date": datetime.now(timezone.utc).isoformat(),
+        "current_usage_GB": 0
+    }
+    for base in bases:
+        url = f"{base}/user/"
+        status, _ = await _post_json_noauth(url, body, timeout=20.0)
+        if status == 200:
+            return True
+    return False
 
-    if not cleaned:
-        logger.info("push_nodes_to_panel: empty list, skipping push.")
+
+async def _expanded_bulk_zero_usage(user_uuid: str) -> bool:
+    """
+    Fallback via Expanded API bulk update:
+      POST /api/v1/bulkusers/?update=1
+      Body: [{"uuid": ..., "current_usage_GB": 0, "start_date": now}]
+    """
+    bases = await _panel_api_base_for_push()
+    if not bases:
+        return False
+    body = [{
+        "uuid": user_uuid,
+        "current_usage_GB": 0,
+        "start_date": datetime.now(timezone.utc).isoformat()
+    }]
+    for base in bases:
+        url = f"{base}/bulkusers/?update=1"
+        status, _ = await _post_json_noauth(url, body, timeout=15.0)
+        if status == 200:
+            return True
+    return False
+
+
+async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float, server_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """
+    Renew subscription and reset quota/date:
+    1) Try Admin API v2 PATCH with package_days + start_date=now + reset flags
+    2) If usage/date didn't change, use Expanded API POST /user/ with start_date & current_usage_GB=0
+    3) If still not, bulk update zero usage
+    """
+    server = _select_server(server_name)
+    endpoint = f"{_get_base_url(server)}user/{user_uuid}/"
+
+    payload: Dict[str, Any] = {
+        "package_days": int(plan_days),
+        "start_date": datetime.now(timezone.utc).isoformat(),
+        "reset_traffic": True,
+        "reset_usage": True,
+    }
+    try:
+        usage_limit_gb = float(plan_gb)
+    except Exception:
+        usage_limit_gb = 0.0
+    if usage_limit_gb > 0:
+        payload["usage_limit_GB"] = usage_limit_gb
+
+    _ = await _make_request("patch", endpoint, server, json=payload, timeout=30.0)
+
+    # read info
+    before = await get_user_info(user_uuid, server_name=server["name"])
+    if not isinstance(before, dict) or before.get("_not_found"):
+        return None
+    used_before = _extract_usage_gb(before) or 0.0
+
+    # If usage didn't reset (or date check fails), use Expanded API update
+    if used_before > 0.01:
+        exp_ok = await _expanded_user_update(user_uuid, plan_days, plan_gb)
+        if exp_ok:
+            after = await get_user_info(user_uuid, server_name=server["name"])
+            if isinstance(after, dict):
+                used_after = _extract_usage_gb(after) or 0.0
+                if used_after <= 0.01:
+                    return after
+
+        # last resort: bulk zero
+        bulk_ok = await _expanded_bulk_zero_usage(user_uuid)
+        if bulk_ok:
+            after2 = await get_user_info(user_uuid, server_name=server["name"])
+            if isinstance(after2, dict):
+                return after2
+
+    # Otherwise, Admin API was enough
+    return before
+
+
+async def delete_user_from_panel(user_uuid: str, server_name: Optional[str] = None) -> bool:
+    """Delete user (idempotent)."""
+    server = _select_server(server_name)
+    endpoint = f"{_get_base_url(server)}user/{user_uuid}/"
+    data = await _make_request("delete", endpoint, server, timeout=15.0)
+
+    if data == {}:
+        logger.info("Successfully deleted user %s from panel.", user_uuid)
         return True
 
-    for base in _panel_api_base_for_push():
-        status, data = await _post_json_noauth(f"{base}/sub/", cleaned)
-        if status == 200 and isinstance(data, dict) and int(data.get("status", 0)) == 200:
+    if isinstance(data, dict) and data.get("_not_found"):
+        logger.info("Successfully deleted/not-found user %s from panel.", user_uuid)
+        return True
+
+    if data is None:
+        probe = await get_user_info(user_uuid, server_name=server["name"])
+        if isinstance(probe, dict) and probe.get("_not_found"):
+            logger.info("Delete treated as success for %s (verified _not_found).", user_uuid)
             return True
-    logger.warning("push_nodes_to_panel failed on all bases.")
+
     return False
 
 
-async def push_hidybot_configs(cfg: Dict[str, Any]) -> bool:
-    """Update hidybotconfigs.json on main panel."""
-    body = cfg or {}
-    for base in _panel_api_base_for_push():
-        status, data = await _post_json_noauth(f"{base}/configs/", body)
-        if status == 200 and isinstance(data, dict) and int(data.get("status", 0)) == 200:
-            return True
-    logger.warning("push_hidybot_configs failed on all bases.")
-    return False
+async def check_api_connection(server_name: Optional[str] = None) -> bool:
+    """Quick sanity check."""
+    try:
+        server = _select_server(server_name)
+        endpoint = _get_base_url(server) + "user/?page=1&per_page=1"
+        response = await _make_request("get", endpoint, server, timeout=5.0)
+        return response is not None
+    except Exception as e:
+        logger.error("API connection check failed: %s", e, exc_info=True)
+        return False
