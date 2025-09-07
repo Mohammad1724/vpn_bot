@@ -15,11 +15,6 @@ import database as db
 from config import PANEL_DOMAIN, ADMIN_PATH, SUB_PATH, SUB_DOMAINS
 
 try:
-    from config import MULTI_SERVER_ENABLED, SERVERS
-except Exception:
-    MULTI_SERVER_ENABLED = False
-    SERVERS = []
-try:
     from config import SUBCONVERTER_ENABLED, SUBCONVERTER_URL, SUBCONVERTER_DEFAULT_TARGET
 except Exception:
     SUBCONVERTER_ENABLED = False
@@ -63,8 +58,7 @@ def parse_date_flexible(date_str: str) -> Union[datetime, None]:
     if re.match(r"^\d+$", s):
         try:
             ts = int(s)
-            if 946684800 <= ts <= 2145916800:
-                return datetime.fromtimestamp(ts, tz=timezone.utc).astimezone()
+            if 946684800 <= ts <= 2145916800: return datetime.fromtimestamp(ts, tz=timezone.utc).astimezone()
         except (ValueError, OverflowError): pass
     logger.error(f"Date parse failed for '{date_str}'.")
     return None
@@ -72,31 +66,14 @@ def parse_date_flexible(date_str: str) -> Union[datetime, None]:
 def normalize_link_type(t: str) -> str:
     return (t or "sub").strip().lower().replace("clash-meta", "clashmeta")
 
-def link_type_to_subconverter_target(link_type: str) -> str:
-    lt = normalize_link_type(link_type)
-    if lt in ("sub", "sub64"): return "v2ray"
-    if lt == "auto": return (SUBCONVERTER_DEFAULT_TARGET or "v2ray").strip().lower()
-    if lt in ("xray", "singbox", "clash", "clashmeta"): return lt
-    if lt == "unified": return (SUBCONVERTER_DEFAULT_TARGET or "v2ray").strip().lower()
-    return "v2ray"
-
 def _clean_path(seg: Optional[str]) -> str:
     return (seg or "").strip().strip("/")
 
-def build_subscription_url(user_uuid: str, server_name: Optional[str] = None) -> str:
-    main_sub_path = _clean_path(SUB_PATH) or "sub"
-    main_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
-    if isinstance(main_domain, str): main_domain = main_domain.strip()
-    if not server_name: return f"https://{main_domain}/{main_sub_path}/{user_uuid}"
-    if MULTI_SERVER_ENABLED and SERVERS:
-        server = next((s for s in SERVERS if str(s.get("name")) == str(server_name)), None)
-        if not server: return f"https://{main_domain}/{main_sub_path}/{user_uuid}"
-        sub_path = _clean_path(server.get("sub_path")) or main_sub_path
-        sub_domains = [d.strip() for d in (server.get("sub_domains") or []) if isinstance(d, str) and d.strip()]
-        sub_domain = random.choice(sub_domains) if sub_domains else (server.get("panel_domain") or main_domain)
-        if isinstance(sub_domain, str): sub_domain = sub_domain.strip()
-        return f"https://{sub_domain}/{sub_path}/{user_uuid}"
-    return f"https://{main_domain}/{main_sub_path}/{user_uuid}"
+def build_subscription_url(user_uuid: str) -> str:
+    sub_path = _clean_path(SUB_PATH) or "sub"
+    domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
+    if isinstance(domain, str): domain = domain.strip()
+    return f"https://{domain}/{sub_path}/{user_uuid}"
 
 def _sanitize_sublink(url: str) -> str:
     if not isinstance(url, str) or not url.strip(): return url
@@ -104,29 +81,10 @@ def _sanitize_sublink(url: str) -> str:
     admin, sub = _clean_path(ADMIN_PATH), (_clean_path(SUB_PATH) or "sub")
     return u.replace(f"/{admin}/", f"/{sub}/")
 
-def build_subconverter_link(urls: List[str], target: Optional[str] = None) -> Optional[str]:
-    try:
-        if not SUBCONVERTER_ENABLED: return None
-        base = (SUBCONVERTER_URL or "").rstrip("/")
-        if not base: return None
-        cleaned = [_sanitize_sublink(u.strip()) for u in (urls or []) if u and u.strip()]
-        seen, sources = set(), []
-        for u in cleaned:
-            if u not in seen:
-                sources.append(u)
-                seen.add(u)
-        if not sources: return None
-        tgt = (target or SUBCONVERTER_DEFAULT_TARGET or "v2ray").strip().lower()
-        src_enc = quote_plus("|".join(sources), safe=":/?&=%|")
-        return f"{base}/sub?target={tgt}&url={src_enc}"
-    except Exception as e:
-        logger.error("build_subconverter_link failed: %s", e, exc_info=True)
-        return None
-
 def make_qr_bytes(data: str) -> io.BytesIO:
     img = qrcode.make(data)
     bio = io.BytesIO()
-    bio.name, bio.seek(0, 2)
+    bio.name = "qr.png"
     img.save(bio, "PNG")
     bio.seek(0)
     return bio
@@ -146,17 +104,8 @@ def _panel_expiry_from_info(user_data: dict) -> Optional[datetime]:
         except Exception: pass
     return None
 
-def _format_expiry_and_days(user_data: dict, service_db_record: Optional[dict] = None) -> Tuple[str, int]:
+def _format_expiry_and_days(user_data: dict) -> Tuple[str, int]:
     expire_dt = _panel_expiry_from_info(user_data)
-    if expire_dt is None and service_db_record:
-        plan_id = service_db_record.get('plan_id')
-        start_dt = parse_date_flexible(service_db_record.get('created_at'))
-        if start_dt:
-            package_days = 0
-            if plan_id and (plan := db.get_plan(plan_id)):
-                try: package_days = int(plan.get('days', 0))
-                except Exception: package_days = 0
-            if package_days > 0: expire_dt = start_dt + timedelta(days=package_days)
     now_aware = datetime.now().astimezone()
     expire_jalali, days_left = "نامشخص", 0
     if expire_dt:
@@ -168,7 +117,7 @@ def _format_expiry_and_days(user_data: dict, service_db_record: Optional[dict] =
 def create_service_info_caption(user_data: dict, service_db_record: Optional[dict] = None, title: str = "🎉 سرویس شما!", override_sub_url: Optional[str] = None) -> str:
     used_gb, total_gb = round(float(user_data.get('current_usage_GB', 0.0)), 2), round(float(user_data.get('usage_limit_GB', 0.0)), 2)
     unlimited = (total_gb <= 0.0)
-    expire_jalali, days_left = _format_expiry_and_days(user_data, service_db_record)
+    expire_jalali, days_left = _format_expiry_and_days(user_data)
     is_active = not (user_data.get('status') in ('disabled', 'limited') or days_left <= 0 or (not unlimited and total_gb > 0 and used_gb >= total_gb))
     status_text = "✅ فعال" if is_active else "❌ غیرفعال"
     service_name = user_data.get('name') or user_data.get('uuid', 'N/A')
@@ -176,11 +125,7 @@ def create_service_info_caption(user_data: dict, service_db_record: Optional[dic
     if override_sub_url:
         sub_url = override_sub_url
     else:
-        sub_url = None
-        if service_db_record and service_db_record.get("sub_link"):
-            sub_url = _sanitize_sublink(service_db_record["sub_link"])
-        if not sub_url:
-            sub_url = build_subscription_url(user_data['uuid'], server_name=(service_db_record or {}).get("server_name"))
+        sub_url = build_subscription_url(user_data['uuid'])
     traffic_line = f"حجم: نامحدود | مصرف: {used_gb}GB" if unlimited else f"حجم: {used_gb}/{total_gb}GB (باقی: {round(max(total_gb - used_gb, 0.0), 2)}GB)"
     return (f"{title}\n{service_name}\n\nوضعیت: {status_text}\n{traffic_line}\nانقضا: {expire_jalali} | باقیمانده: {days_left} روز\n\nلینک اشتراک:\n`{sub_url}`")
 
@@ -205,12 +150,3 @@ def get_service_status(hiddify_info: dict) -> Tuple[str, str, bool]:
         try: expire_j = jdatetime.date.fromgregorian(date=expiry_dt_utc.astimezone().date()).strftime('%Y/%m/%d')
         except Exception: pass
     return "🔴 منقضی شده" if is_expired else "🟢 فعال", expire_j, is_expired
-
-def is_valid_sqlite(filepath: str) -> bool:
-    try:
-        with sqlite3.connect(filepath) as conn:
-            cur = conn.cursor()
-            cur.execute("PRAGMA integrity_check;")
-            result = cur.fetchone()
-        return result and result[0] == 'ok'
-    except sqlite3.DatabaseError: return False
