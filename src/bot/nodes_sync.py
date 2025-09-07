@@ -4,6 +4,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# نودها به‌طور کامل غیرفعال شده‌اند؛ این استاب‌ها از هرگونه اقدام یا خطا جلوگیری می‌کنند.
+
 async def sync_nodes_once(*args, **kwargs):
     logger.info("nodes_sync disabled: sync_nodes_once skipped.")
 
