@@ -404,15 +404,12 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
             plan_gb=float(plan['gb'])
         )
 
-        # اعتبارسنجی موفقیت
         if not new_info:
             logger.error(f"Renewal failed: API did not confirm reset for UUID {service['sub_uuid']}")
             raise ValueError("API did not confirm renewal")
 
-        # تراکنش تمدید را نهایی کن
         db.finalize_renewal_transaction(txn_id, plan_id)
 
-        # پیام موفقیت و نمایش اطلاعات جدید
         if original_message:
             await original_message.edit_text("✅ سرویس با موفقیت تمدید شد!")
         await send_service_details(context, user_id, service_id, original_message=original_message, is_from_menu=True)
@@ -422,7 +419,6 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
         db.cancel_renewal_transaction(txn_id)
         await _send_renewal_error(original_message, "❌ خطا در تمدید سرویس. لطفاً با پشتیبانی تماس بگیرید.")
     finally:
-        # فقط کلیدهای مربوط به تمدید را پاک می‌کنیم
         context.user_data.pop('renewal_service_id', None)
         context.user_data.pop('renewal_plan_id', None)
 
