@@ -2,6 +2,8 @@
 # -*- coding: utf-8 -*-
 
 import logging
+from datetime import datetime, timedelta
+
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
@@ -41,16 +43,12 @@ def _back_to_settings_btn(): return InlineKeyboardButton("🔙 بازگشت به
 async def _send_or_edit(
     update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup=None, parse_mode=ParseMode.MARKDOWN
 ):
-    """
-    ارسال/ادیت امن با فالبک خودکار از Markdown به متن ساده در صورت خطای Parse.
-    """
     q = getattr(update, "callback_query", None)
     if q:
         await q.answer()
         try:
             await q.edit_message_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
         except BadRequest as e:
-            # فالبک به بدون پارس
             emsg = str(e).lower()
             if "can't parse entities" in emsg or "can't find end of the entity" in emsg:
                 try: await q.edit_message_text(text, reply_markup=reply_markup, parse_mode=None)
@@ -109,7 +107,7 @@ async def payment_and_guides_submenu(update: Update, context: ContextTypes.DEFAU
         [_admin_edit_btn("✍️ راهنمای اتصال", "guide_connection")],
         [_admin_edit_btn("✍️ راهنمای خرید", "guide_buying")],
         [_admin_edit_btn("✍️ راهنمای شارژ", "guide_charging")],
-        # دکمه «تخفیف همگانی» به خواست شما به منوی کد هدیه منتقل شد
+        # دکمه «تخفیف همگانی» به منوی کد هدیه منتقل شد
         [_back_to_settings_btn()]
     ])
     await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN); return ADMIN_SETTINGS_MENU
@@ -192,15 +190,18 @@ async def usage_aggregation_submenu(update: Update, context: ContextTypes.DEFAUL
     ])
     await _send_or_edit(update, context, text, kb, parse_mode=None); return ADMIN_SETTINGS_MENU
 
-# --- Global Discount submenu (زیر منوی «مدیریت کد هدیه») ---
+# --- Global Discount submenu (مدت‌محور) ---
 async def global_discount_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     enabled = "فعال ✅" if _get_bool("global_discount_enabled") else "غیرفعال ❌"
     percent = _get("global_discount_percent", "0")
-    starts_raw = _get("global_discount_starts_at", "(تعریف نشده)")
-    expires_raw = _get("global_discount_expires_at", "(تعریف نشده)")
+    days = _get("global_discount_days", "0")
+
+    # اطلاعات محاسبه‌شده (فقط نمایش؛ نیاز به ورود تاریخ نیست)
+    starts_raw = _get("global_discount_starts_at", "")
+    expires_raw = _get("global_discount_expires_at", "")
 
     def _fmt(ts: str) -> str:
-        if ts in ("", "(تعریف نشده)"):
+        if not ts:
             return "(تعریف نشده)"
         try:
             dt = utils.parse_date_flexible(ts)
@@ -210,25 +211,22 @@ async def global_discount_submenu(update: Update, context: ContextTypes.DEFAULT_
             pass
         return ts
 
-    starts = _fmt(starts_raw)
-    expires = _fmt(expires_raw)
-
     text = (
-        f"٪ **تخفیف همگانی روی همه پلن‌ها**\n\n"
+        f"٪ **تخفیف همگانی** (مدت‌محور)\n\n"
         f"- وضعیت: {enabled}\n"
         f"- درصد: {percent}%\n"
-        f"- شروع از: {starts}\n"
-        f"- پایان در: {expires}\n\n"
+        f"- مدت: {days} روز\n"
+        f"- شروع از: {_fmt(starts_raw)}\n"
+        f"- پایان در: {_fmt(expires_raw)}\n\n"
         f"راهنما:\n"
-        f"- تاریخ‌ها را با فرمت‌های رایج یا ISO ارسال کنید (مثال: `2025-12-31 23:59` یا `2025-12-31T23:59:59+03:30`).\n"
-        f"- اگر تاریخ شروع/پایان خالی باشد، از همین لحظه تا اطلاع بعدی اعمال می‌شود."
+        f"- فقط «درصد» و «مدت (روز)» را تنظیم کنید. با روشن‌کردن، از همین لحظه به مدت تعیین‌شده فعال می‌شود.\n"
+        f"- اگر «مدت» صفر باشد، تخفیف تا زمانی که خاموش کنید نامحدود است."
     )
 
     kb = _kb([
         [InlineKeyboardButton("تغییر وضعیت تخفیف همگانی", callback_data="toggle_global_discount")],
         [_admin_edit_btn("✍️ درصد تخفیف", "global_discount_percent")],
-        [_admin_edit_btn("✍️ تاریخ شروع", "global_discount_starts_at")],
-        [_admin_edit_btn("✍️ تاریخ پایان", "global_discount_expires_at")],
+        [_admin_edit_btn("✍️ مدت (روز)", "global_discount_days")],
         [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_gift")]
     ])
     await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN)
@@ -237,11 +235,27 @@ async def global_discount_submenu(update: Update, context: ContextTypes.DEFAULT_
 async def toggle_global_discount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    cur = db.get_setting("global_discount_enabled")
-    new_val = "0"
-    if str(cur).lower() not in ("1","true","on","yes"):
-        new_val = "1"
-    db.set_setting("global_discount_enabled", new_val)
+    currently_on = _get_bool("global_discount_enabled")
+    if not currently_on:
+        # روشن کردن: از همین لحظه به مدت (روز) فعال شود
+        db.set_setting("global_discount_enabled", "1")
+        try:
+            days = int(float(_get("global_discount_days", "0") or 0))
+        except Exception:
+            days = 0
+        now = datetime.now().astimezone()
+        db.set_setting("global_discount_starts_at", now.isoformat())
+        if days > 0:
+            db.set_setting("global_discount_expires_at", (now + timedelta(days=days)).isoformat())
+        else:
+            db.set_setting("global_discount_expires_at", "")
+    else:
+        # خاموش کردن
+        db.set_setting("global_discount_enabled", "0")
+        # تاریخ‌ها را نگه می‌داریم (برای اطلاع). اگر خواستی پاک شوند، این دو خط را باز کن:
+        # db.set_setting("global_discount_starts_at", "")
+        # db.set_setting("global_discount_expires_at", "")
+
     return await global_discount_submenu(update, context)
 
 # --- Edit/Save Setting value ---
@@ -257,9 +271,6 @@ def _infer_return_target(key: str) -> str:
     return "settings_root"
 
 async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    نمایش فرم ویرایش مقدار تنظیم (با فالبک امن روی Markdown)
-    """
     q = getattr(update, "callback_query", None)
     key = (q.data if q else "").replace("admin_edit_setting_", "").strip()
     context.user_data['editing_setting_key'] = key
@@ -268,9 +279,10 @@ async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     tip = ""
     if key.startswith("payment_card_"): tip = "\n(برای پاک کردن، `-` ارسال کنید)"
     elif "sub_domains" in key: tip = "\n(دامنه‌ها را با کاما جدا کنید)"
-    elif key in ("first_charge_expires_at", "global_discount_starts_at", "global_discount_expires_at"): tip = "\n(فرمت: 2025-12-31T23:59:59+03:30 یا 2025-12-31 23:59)"
+    elif key in ("first_charge_expires_at"): tip = "\n(فرمت: 2025-12-31T23:59:59+03:30 یا 2025-12-31 23:59)"
     elif key == "usage_update_interval_min": tip = "\n(عدد صحیح مثبت)"
     elif key == "global_discount_percent": tip = "\n(عدد درصد؛ مثال: 10)"
+    elif key == "global_discount_days": tip = "\n(تعداد روز؛ مثال: 5. اگر 0 بزنید، نامحدود می‌شود.)"
     text = f"✍️ مقدار جدید برای **{key}** را ارسال کنید.{tip}\n/cancel برای انصراف\n\n**مقدار فعلی:**\n`{cur}`"
     await _send_or_edit(update, context, text, reply_markup=None, parse_mode=ParseMode.MARKDOWN)
     return AWAIT_SETTING_VALUE
@@ -289,8 +301,27 @@ async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_T
             p = float(val); assert p >= 0; val = str(int(p))
         except Exception:
             await update.message.reply_text("❌ درصد نامعتبر است."); return AWAIT_SETTING_VALUE
+    if key == "global_discount_days":
+        try:
+            d = int(float(val)); assert d >= 0; val = str(int(d))
+        except Exception:
+            await update.message.reply_text("❌ تعداد روز نامعتبر است."); return AWAIT_SETTING_VALUE
 
     db.set_setting(key, val)
+
+    # اگر مدت را تغییر داد و الان تخفیف روشن است → تاریخ پایان را با شروع موجود به‌روز کن
+    if key == "global_discount_days" and _get_bool("global_discount_enabled"):
+        try:
+            d = int(_get("global_discount_days", "0") or 0)
+        except Exception:
+            d = 0
+        starts_raw = _get("global_discount_starts_at", "")
+        starts_dt = utils.parse_date_flexible(starts_raw) if starts_raw else datetime.now().astimezone()
+        if d > 0:
+            db.set_setting("global_discount_expires_at", (starts_dt + timedelta(days=d)).isoformat())
+        else:
+            db.set_setting("global_discount_expires_at", "")
+
     await update.message.reply_text(f"✅ مقدار «{key}» ذخیره شد.")
     dest = context.user_data.pop('settings_return_to', None) or _infer_return_target(key)
     context.user_data.pop('editing_setting_key', None)
