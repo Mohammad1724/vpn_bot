@@ -17,7 +17,6 @@ import hiddify_api
 from config import ADMIN_ID
 from bot.utils import get_service_status
 from bot.handlers.admin.reports import send_daily_summary, send_weekly_summary
-from bot.nodes_sync import sync_nodes_into_panel  # اضافه شد
 
 # Optional usage aggregation configs
 try:
@@ -25,14 +24,6 @@ try:
 except Exception:
     USAGE_AGGREGATION_ENABLED = False
     USAGE_UPDATE_INTERVAL_MIN = 10
-
-# Optional node health-check configs
-try:
-    from config import NODES_HEALTH_ENABLED, NODES_HEALTH_INTERVAL_MIN, NODES_AUTO_DISABLE_AFTER_FAILS
-except Exception:
-    NODES_HEALTH_ENABLED = True
-    NODES_HEALTH_INTERVAL_MIN = 10
-    NODES_AUTO_DISABLE_AFTER_FAILS = 3
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +114,19 @@ async def check_low_usage(context: ContextTypes.DEFAULT_TYPE):
     logger.info("Job: checking low-usage services... (not implemented)")
 
 
+# Helper: extract usage GB from user info payload
+def _extract_usage_gb(payload: dict) -> float | None:
+    if not isinstance(payload, dict):
+        return None
+    for k in ("current_usage_GB", "usage_GB", "used_GB"):
+        if k in payload:
+            try:
+                return float(payload[k])
+            except Exception:
+                return None
+    return None
+
+
 # ========== Expiry reminder (settings-driven) ==========
 async def expiry_reminder_job(context: ContextTypes.DEFAULT_TYPE):
     """
@@ -148,7 +152,7 @@ async def expiry_reminder_job(context: ContextTypes.DEFAULT_TYPE):
 
         for svc in services:
             try:
-                info = await hiddify_api.get_user_info(svc["sub_uuid"], server_name=svc.get("server_name"))
+                info = await hiddify_api.get_user_info(svc["sub_uuid"])
                 if isinstance(info, dict) and info.get("_not_found"):
                     await _remove_stale_service(svc, context)
                     continue
@@ -207,12 +211,12 @@ async def _remove_stale_service(service: dict, context: ContextTypes.DEFAULT_TYP
         logger.error("Failed to remove stale service %s: %s", service["service_id"], e, exc_info=True)
 
 
-# ========== Usage aggregation across servers (+ endpoints for Subconverter) ==========
+# ========== Usage aggregation (per service and optional endpoints) ==========
 async def update_user_usage_snapshot(context: ContextTypes.DEFAULT_TYPE):
     """
-    برای هر سرویس فعال، مصرف را از پنل مربوطه خوانده و
-    مجموع مصرف هر کاربر را به تفکیک سرور به‌روزرسانی می‌کند.
-    - شامل service_endpoints نیز می‌شود (برای حالت Subconverter/چندنودی)
+    برای هر سرویس فعال، مصرف را می‌خواند و مجموع مصرف هر کاربر را به تفکیک server_name به‌روزرسانی می‌کند.
+    - شامل service_endpoints نیز می‌شود (اختیاری)
+    - در حالت NODELESS، مصرف گزارش‌شده 0 خواهد بود و آسیبی به سیستم نمی‌زند.
     """
     try:
         base_services = db.get_all_active_services() or []
@@ -221,9 +225,9 @@ async def update_user_usage_snapshot(context: ContextTypes.DEFAULT_TYPE):
         # Normalize both lists into unified tasks: (user_id, sub_uuid, server_name)
         tasks_data = []
         for s in base_services:
-            tasks_data.append((s["user_id"], s.get("server_name") or "Unknown", s["sub_uuid"]))
+            tasks_data.append((s["user_id"], s["sub_uuid"], s.get("server_name") or "Unknown"))
         for ep in endpoints:
-            tasks_data.append((ep["user_id"], ep.get("server_name") or "Unknown", ep.get("sub_uuid")))
+            tasks_data.append((ep["user_id"], ep.get("sub_uuid"), ep.get("server_name") or "Unknown"))
 
         if not tasks_data:
             return
@@ -231,19 +235,22 @@ async def update_user_usage_snapshot(context: ContextTypes.DEFAULT_TYPE):
         # Concurrency control
         sem = asyncio.Semaphore(8)
 
-        async def fetch_usage(user_id: int, server_name: str, sub_uuid: str):
+        async def fetch_usage(user_id: int, sub_uuid: str, server_name: str):
             async with sem:
                 if not sub_uuid:
                     return None
                 try:
-                    usage = await hiddify_api.get_user_usage_gb(sub_uuid, server_name=server_name)
+                    info = await hiddify_api.get_user_info(sub_uuid)
+                    if not info or (isinstance(info, dict) and info.get("_not_found")):
+                        return None
+                    usage = _extract_usage_gb(info)
                     if usage is None:
                         return None
                     return (user_id, server_name or "Unknown", float(usage))
                 except Exception:
                     return None
 
-        coros = [fetch_usage(uid, srv, uuid) for (uid, srv, uuid) in tasks_data]
+        coros = [fetch_usage(uid, uuid, srv) for (uid, uuid, srv) in tasks_data]
         results = await asyncio.gather(*coros, return_exceptions=False)
 
         # Aggregate per (user_id, server_name) and collect seen servers per user
@@ -285,80 +292,10 @@ async def update_user_usage_snapshot(context: ContextTypes.DEFAULT_TYPE):
         logger.error("update_user_usage_snapshot failed: %s", e, exc_info=True)
 
 
-# ========== Node health-check and live user count ==========
-async def node_health_job(context: ContextTypes.DEFAULT_TYPE):
-    """
-    - هلس‌چک نودهای فعال (DB یا config)، با استفاده از hiddify_api.check_api_connection
-    - بروزرسانی current_users هر نود از روی active_services
-    - اختیاری: در صورت چند خطای متوالی، نود به‌صورت خودکار غیرفعال می‌شود و به ادمین اطلاع داده می‌شود.
-    """
-    try:
-        nodes = db.list_nodes()  # همه‌ی نودها (فعال/غیرفعال)
-        if not nodes:
-            return
-
-        # تنظیمات از DB یا config
-        try:
-            auto_disable_after = int(db.get_setting("nodes_auto_disable_after_fails") or NODES_AUTO_DISABLE_AFTER_FAILS)
-        except Exception:
-            auto_disable_after = NODES_AUTO_DISABLE_AFTER_FAILS
-
-        bot_data = context.application.bot_data.setdefault("node_failures", {})
-        sem = asyncio.Semaphore(6)
-
-        async def check_node(n: dict):
-            if str(n.get("panel_type", "hiddify")).lower() != "hiddify":
-                return  # فعلاً فقط هیدیفای
-            name = n["name"]
-            node_id = n["id"]
-
-            async with sem:
-                ok = False
-                try:
-                    ok = await hiddify_api.check_api_connection(server_name=name)
-                except Exception:
-                    ok = False
-
-                # به‌روزرسانی شمار کاربران زنده روی این نود
-                try:
-                    cnt = db.count_services_on_node(name)
-                    db.update_node(node_id, {"current_users": int(cnt)})
-                except Exception:
-                    pass
-
-                # مدیریت خطاهای متوالی و غیرفعال‌سازی خودکار
-                try:
-                    fails = int(bot_data.get(name, 0))
-                except Exception:
-                    fails = 0
-
-                if ok:
-                    if fails:
-                        bot_data[name] = 0
-                else:
-                    fails += 1
-                    bot_data[name] = fails
-                    if fails >= auto_disable_after and int(n.get("is_active", 1)) == 1:
-                        try:
-                            db.update_node(node_id, {"is_active": 0})
-                            await context.bot.send_message(
-                                chat_id=ADMIN_ID,
-                                text=f"⚠️ نود «{name}» به دلیل {fails} خطای متوالی در health-check غیرفعال شد."
-                            )
-                            logger.warning("Node %s auto-disabled after %d fails.", name, fails)
-                        except Exception as e:
-                            logger.error("Failed to auto-disable node %s: %s", name, e)
-
-        await asyncio.gather(*(check_node(n) for n in nodes))
-
-    except Exception as e:
-        logger.error("node_health_job failed: %s", e, exc_info=True)
-
-
 # ========== One-time Backfill ==========
 async def initial_backfill_job(context: ContextTypes.DEFAULT_TYPE):
     """
-    یک‌بار پس از استارت: server_name سرویس‌های فاقد مقدار را از روی لینک و جدول نودها پر می‌کند.
+    یک‌بار پس از استارت: server_name سرویس‌های فاقد مقدار را از روی sub_link پر می‌کند.
     """
     try:
         updated = db.backfill_active_services_server_names()
@@ -366,18 +303,6 @@ async def initial_backfill_job(context: ContextTypes.DEFAULT_TYPE):
             logger.info("Initial backfill: updated server_name for %d services.", updated)
     except Exception as e:
         logger.error("Initial backfill failed: %s", e, exc_info=True)
-
-
-# ========== One-time Push nodes.json to panel ==========
-async def sync_nodes_once(context: ContextTypes.DEFAULT_TYPE):
-    """
-    یک‌بار پس از استارت: لیست نودهای فعال DB را به پنل پوش می‌کند (nodes.json).
-    """
-    try:
-        await sync_nodes_into_panel()
-        logger.info("Nodes synced into panel (nodes.json) once after startup.")
-    except Exception as e:
-        logger.error("sync_nodes_into_panel failed: %s", e, exc_info=True)
 
 
 # ========== Scheduler hooks ==========
@@ -403,9 +328,6 @@ async def post_init(app: Application):
 
         # Backfill یک‌باره‌ی server_name سرویس‌های قدیمی
         jq.run_once(initial_backfill_job, when=timedelta(seconds=2), name="initial_backfill")
-
-        # Sync nodes.json در پنل (یک‌بار پس از استارت)
-        jq.run_once(sync_nodes_once, when=timedelta(seconds=3), name="sync_nodes_once")
 
         # گزارش‌ها (حمایت از نام کلید قدیمی و جدید)
         if _is_on(["report_daily_enabled", "daily_report_enabled"], default="0"):
@@ -454,20 +376,6 @@ async def post_init(app: Application):
                 name="usage_aggregation_job",
             )
             logger.info("Usage aggregation job scheduled every %d minutes.", interval_min)
-
-        # Node health-check job
-        if _is_on(["nodes_health_enabled"], default="1" if NODES_HEALTH_ENABLED else "0"):
-            try:
-                nh_interval = int(db.get_setting("nodes_health_interval_min") or NODES_HEALTH_INTERVAL_MIN or 10)
-            except Exception:
-                nh_interval = NODES_HEALTH_INTERVAL_MIN or 10
-            jq.run_repeating(
-                node_health_job,
-                interval=timedelta(minutes=nh_interval),
-                first=timedelta(minutes=1),
-                name="node_health_job",
-            )
-            logger.info("Node health-check job scheduled every %d minutes.", nh_interval)
 
         logger.info("JobQueue: jobs scheduled.")
     except Exception as e:
