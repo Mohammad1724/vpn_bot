@@ -9,8 +9,10 @@ import re
 from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime, timezone
 
-import database as db
-from config import PANEL_DOMAIN, ADMIN_PATH, API_KEY, SUB_DOMAINS, SUB_PATH, PANEL_SECRET_UUID, HIDDIFY_API_VERIFY_SSL
+from config import (
+    PANEL_DOMAIN, ADMIN_PATH, API_KEY, SUB_DOMAINS, SUB_PATH,
+    PANEL_SECRET_UUID, HIDDIFY_API_VERIFY_SSL
+)
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +21,7 @@ BASE_RETRY_DELAY = 1.0
 
 
 def _select_server() -> Dict[str, Any]:
-    """همیشه تنظیمات پنل اصلی را برمی‌گرداند."""
+    """برگشت تنظیمات پنل اصلی."""
     return {
         "name": "Main",
         "panel_domain": PANEL_DOMAIN,
@@ -33,7 +35,11 @@ def _get_base_url(server: Dict[str, Any]) -> str:
     return f"https://{server['panel_domain']}/{server['admin_path']}/api/v2/admin/"
 
 def _get_api_headers(server: Dict[str, Any]) -> dict:
-    return {"Hiddify-API-Key": server["api_key"], "Content-Type": "application/json", "Accept": "application/json"}
+    return {
+        "Hiddify-API-Key": server["api_key"],
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
 
 async def _make_client(timeout: float = 20.0) -> httpx.AsyncClient:
     return httpx.AsyncClient(timeout=timeout, verify=HIDDIFY_API_VERIFY_SSL)
@@ -80,13 +86,13 @@ def _looks_like_secret(s: str) -> bool:
     s = (s or "").strip().strip("/")
     if not s or s.lower() in ("sub", "api", "v1", "v2", "admin"):
         return False
-    # توکن‌های Secret معمولاً طولانی و حروف/عدد/خط تیره/زیرخط دارند
+    # توکن Secret معمولاً از کاراکترهای الفبایی-عددی و - یا _ با طول مناسب تشکیل می‌شود
     return re.fullmatch(r"[A-Za-z0-9\-_]{8,64}", s) is not None
 
 def _expanded_api_bases_for_server(server: Dict[str, Any]) -> List[str]:
     """
     ساخت امن مسیر Expanded API:
-    - اگر SUB_PATH به‌اشتباه برابر SECRET باشد، از sub/SECRET استفاده می‌کنیم.
+    - اگر SUB_PATH == SECRET باشد، از sub/SECRET استفاده می‌کنیم.
     - اگر SECRET از قبل در SUB_PATH هست، دوباره اضافه نمی‌کنیم.
     - اگر PANEL_SECRET_UUID خالی بود و SUB_PATH شبیه SECRET بود، از SUB_PATH به‌عنوان SECRET استفاده می‌کنیم.
     """
@@ -101,7 +107,6 @@ def _expanded_api_bases_for_server(server: Dict[str, Any]) -> List[str]:
 
     lc_cpath = cpath.lower()
     lc_secret = secret.lower()
-
     base_path: Optional[str] = None
 
     if secret:
@@ -112,7 +117,7 @@ def _expanded_api_bases_for_server(server: Dict[str, Any]) -> List[str]:
             parts = [p.strip() for p in cpath.split("/") if p.strip()]
             parts_l = [p.lower() for p in parts]
             if lc_secret in parts_l:
-                base_path = cpath  # SECRET از قبل در مسیر است
+                base_path = cpath  # SECRET از قبل در مسیر حضور دارد
             else:
                 base_path = f"{cpath}/{secret}" if cpath else f"sub/{secret}"
     else:
@@ -282,7 +287,7 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
                 if used <= 0.05:
                     return info
             await asyncio.sleep(1.0)
-        # اگر ریست را نتوانستیم تایید کنیم، همان اطلاعات آخر را برگردان
+        # اگر نتوانستیم ریست را تایید کنیم، همان اطلاعات آخر را برگردانیم
         return last_info
 
     # Fallback با Admin API
