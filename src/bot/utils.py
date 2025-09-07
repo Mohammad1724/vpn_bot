@@ -15,6 +15,11 @@ import database as db
 from config import PANEL_DOMAIN, ADMIN_PATH, SUB_PATH, SUB_DOMAINS
 
 try:
+    from config import MULTI_SERVER_ENABLED, SERVERS
+except Exception:
+    MULTI_SERVER_ENABLED = False
+    SERVERS = []
+try:
     from config import SUBCONVERTER_ENABLED, SUBCONVERTER_URL, SUBCONVERTER_DEFAULT_TARGET
 except Exception:
     SUBCONVERTER_ENABLED = False
@@ -58,13 +63,22 @@ def parse_date_flexible(date_str: str) -> Union[datetime, None]:
     if re.match(r"^\d+$", s):
         try:
             ts = int(s)
-            if 946684800 <= ts <= 2145916800: return datetime.fromtimestamp(ts, tz=timezone.utc).astimezone()
+            if 946684800 <= ts <= 2145916800:
+                return datetime.fromtimestamp(ts, tz=timezone.utc).astimezone()
         except (ValueError, OverflowError): pass
     logger.error(f"Date parse failed for '{date_str}'.")
     return None
 
 def normalize_link_type(t: str) -> str:
     return (t or "sub").strip().lower().replace("clash-meta", "clashmeta")
+
+def link_type_to_subconverter_target(link_type: str) -> str:
+    lt = normalize_link_type(link_type)
+    if lt in ("sub", "sub64"): return "v2ray"
+    if lt == "auto": return (SUBCONVERTER_DEFAULT_TARGET or "v2ray").strip().lower()
+    if lt in ("xray", "singbox", "clash", "clashmeta"): return lt
+    if lt == "unified": return (SUBCONVERTER_DEFAULT_TARGET or "v2ray").strip().lower()
+    return "v2ray"
 
 def _clean_path(seg: Optional[str]) -> str:
     return (seg or "").strip().strip("/")
@@ -150,3 +164,12 @@ def get_service_status(hiddify_info: dict) -> Tuple[str, str, bool]:
         try: expire_j = jdatetime.date.fromgregorian(date=expiry_dt_utc.astimezone().date()).strftime('%Y/%m/%d')
         except Exception: pass
     return "🔴 منقضی شده" if is_expired else "🟢 فعال", expire_j, is_expired
+
+def is_valid_sqlite(filepath: str) -> bool:
+    try:
+        with sqlite3.connect(filepath) as conn:
+            cur = conn.cursor()
+            cur.execute("PRAGMA integrity_check;")
+            result = cur.fetchone()
+        return result and result[0] == 'ok'
+    except sqlite3.DatabaseError: return False
