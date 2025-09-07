@@ -7,9 +7,11 @@ import random
 import logging
 import re
 from typing import Optional, Dict, Any, List, Tuple
-from datetime import datetime, timezone
+from datetime import datetime
 
 from config import (
+    NODELESS_MODE,
+    PANEL_INTEGRATION_ENABLED,
     PANEL_DOMAIN, ADMIN_PATH, API_KEY, SUB_DOMAINS, SUB_PATH,
     PANEL_SECRET_UUID, HIDDIFY_API_VERIFY_SSL
 )
@@ -20,7 +22,19 @@ MAX_RETRIES = 3
 BASE_RETRY_DELAY = 1.0
 
 
+def _panel_enabled() -> bool:
+    """
+    True فقط وقتی که واقعا می‌خواهیم به پنل وصل شویم.
+    """
+    try:
+        return (not NODELESS_MODE) and bool(PANEL_INTEGRATION_ENABLED)
+    except Exception:
+        # برای سازگاری با کانفیگ‌های قدیمی
+        return False
+
+
 def _select_server() -> Dict[str, Any]:
+    # پیکربندی تک‌سرور (بدون جدول نود)
     return {
         "name": "Main",
         "panel_domain": PANEL_DOMAIN,
@@ -165,7 +179,44 @@ async def _get_noauth(url: str, timeout: float = 20.0) -> Tuple[int, Any]:
         logger.debug("GET %s failed: %s", url, e)
         return 0, None
 
+# ----------------------------- Local stubs (NODELESS) -----------------------------
+def _make_local_sub_link(uuid_str: str) -> str:
+    # لینک محلی امن با host ثابت برای سازگاری با parser ها
+    return f"https://local.service/sub/{uuid_str}/"
+
+async def _nodless_create_user(plan_days: int, plan_gb: float, user_telegram_id: str, custom_name: str = "") -> Dict[str, Any]:
+    uid = uuid.uuid4().hex
+    return {"full_link": _make_local_sub_link(uid), "uuid": uid, "server_name": "Local"}
+
+async def _nodless_get_info(user_uuid: str) -> Dict[str, Any]:
+    now_local_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return {
+        "uuid": user_uuid,
+        "start_date": now_local_str,
+        "package_days": 0,
+        "usage_limit_GB": 0.0,
+        "current_usage_GB": 0.0,
+    }
+
+async def _nodless_renew(user_uuid: str, plan_days: int, plan_gb: float) -> Dict[str, Any]:
+    now_local_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return {
+        "uuid": user_uuid,
+        "start_date": now_local_str,
+        "package_days": int(plan_days),
+        "usage_limit_GB": float(plan_gb or 0.0),
+        "current_usage_GB": 0.0,
+    }
+
+# ----------------------------- Public API -----------------------------
 async def create_hiddify_user(plan_days: int, plan_gb: float, user_telegram_id: str, custom_name: str = "") -> Optional[Dict[str, Any]]:
+    """
+    اگر پنل غیرفعال است، یک UUID محلی و لینک محلی برمی‌گرداند.
+    در حالت پنل، کاربر را از طریق Admin API می‌سازد.
+    """
+    if not _panel_enabled():
+        return await _nodless_create_user(plan_days, plan_gb, user_telegram_id, custom_name)
+
     server = _select_server()
     endpoint = _get_base_url(server) + "user/"
     random_suffix = uuid.uuid4().hex[:4]
@@ -186,9 +237,11 @@ async def create_hiddify_user(plan_days: int, plan_gb: float, user_telegram_id: 
     sub_path = server.get("sub_path") or SUB_PATH or "sub"
     sub_domains = server.get("sub_domains") or []
     sub_domain = random.choice(sub_domains) if sub_domains else server["panel_domain"]
-    return {"full_link": f"https://{sub_domain}/{sub_path}/{user_uuid}/", "uuid": user_uuid, "server_name": "Main"}
+    return {"full_link": f"https://{sub_domain}/{sub_path}/{user_uuid}/", "uuid": user_uuid, "server_name": server.get("name") or "Main"}
 
 async def get_user_info(user_uuid: str) -> Optional[Dict[str, Any]]:
+    if not _panel_enabled():
+        return await _nodless_get_info(user_uuid)
     server = _select_server()
     endpoint = f"{_get_base_url(server)}user/{user_uuid}/"
     return await _make_request("get", endpoint, server, timeout=10.0)
@@ -232,7 +285,7 @@ def _verify_admin_renew(before: Optional[Dict[str, Any]], after: Optional[Dict[s
         if before_start and after_start and (after_start - before_start).total_seconds() > 60:
             return True
 
-    # 2) تغییر در محدودیت حجم یا تعداد روز (برای برخی پنل‌ها نشانگر تمدید)
+    # 2) تغییر در محدودیت حجم یا تعداد روز
     try:
         if float(after.get("usage_limit_GB", -1)) == float(plan_gb):
             return True
@@ -249,12 +302,13 @@ def _verify_admin_renew(before: Optional[Dict[str, Any]], after: Optional[Dict[s
 async def _admin_renew_fallback(user_uuid: str, plan_days: int, plan_gb: float, before_info: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """
     تلاش برای تمدید با Admin API:
-    - start_date با فرمت "YYYY-MM-DD HH:MM:SS" ست می‌شود (فرمت مورد قبول پنل).
-    - پس از هر PATCH/PUT وضعیت کاربر خوانده می‌شود و فقط در صورت تغییر واقعی تایید می‌شود.
+    - start_date با فرمت "YYYY-MM-DD HH:MM:SS" ست می‌شود.
     """
+    if not _panel_enabled():
+        return await _nodless_renew(user_uuid, plan_days, plan_gb)
+
     server = _select_server()
     url = f"{_get_base_url(server)}user/{user_uuid}/"
-    # تاریخ با فرمت مورد قبول پنل
     now_local_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     payload_variants = [
@@ -289,15 +343,42 @@ async def _admin_renew_fallback(user_uuid: str, plan_days: int, plan_gb: float, 
     logger.error("Admin API fallback failed for %s", user_uuid)
     return None
 
+# ---------- Expanded API stubs (to avoid runtime errors if enabled) ----------
+async def _expanded_user_update(user_uuid: str, plan_days: int, plan_gb: float) -> bool:
+    """
+    استاب امن برای Expanded API.
+    اگر بعداً خواستی فعالش کنی، می‌تونی اینجا درخواست واقعی بسازی.
+    """
+    bases = _expanded_api_bases_for_server(_select_server())
+    if not bases:
+        return False
+    # تلاش نمادین؛ چون پروتکل دقیق مشخص نیست
+    url = f"{bases[0]}/user/{user_uuid}/"
+    payload = {
+        "package_days": int(plan_days),
+        "usage_limit_GB": float(plan_gb or 0.0),
+        "start_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "current_usage_GB": 0,
+    }
+    status, _ = await _post_json_noauth(url, payload, timeout=15.0)
+    return 200 <= status < 300
+
+async def _expanded_update_usage() -> None:
+    # استاب: اگر نیاز شد، می‌توان endpoint مناسب را فراخوانی کرد.
+    return None
+
 async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float) -> Optional[Dict[str, Any]]:
     """
     تمدید کاربر:
-    - ابتدا تلاش با Expanded API (اگر SECRET داشته باشید) و راستی‌آزمایی ریست مصرف.
-    - در صورت عدم دسترسی، تلاش با Admin API و راستی‌آزمایی تغییر start_date/پارامترها.
+    - در حالت NODELESS: صرفاً مقدار ساختگی سازگار برمی‌گرداند.
+    - در حالت پنل: ابتدا تلاش Expanded (اختیاری)، سپس Admin API fallback با راستی‌آزمایی.
     """
+    if not _panel_enabled():
+        return await _nodless_renew(user_uuid, plan_days, plan_gb)
+
     before = await get_user_info(user_uuid)
 
-    # 1) Expanded API
+    # 1) Expanded API (اختیاری)
     exp_ok = False
     bases = _expanded_api_bases_for_server(_select_server())
     if bases:
@@ -323,6 +404,8 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
     return fb
 
 async def delete_user_from_panel(user_uuid: str) -> bool:
+    if not _panel_enabled():
+        return True
     server = _select_server()
     data = await _make_request("delete", f"{_get_base_url(server)}user/{user_uuid}/", server, timeout=15.0)
     if data == {}:
@@ -336,6 +419,8 @@ async def delete_user_from_panel(user_uuid: str) -> bool:
     return False
 
 async def check_api_connection() -> bool:
+    if not _panel_enabled():
+        return True
     try:
         server = _select_server()
         r = await _make_request("get", _get_base_url(server) + "user/?page=1&per_page=1", server, timeout=5.0)
@@ -343,10 +428,10 @@ async def check_api_connection() -> bool:
     except Exception:
         return False
 
-# --- استاب نودها ---
+# --- استاب سازگار برای سازگاری با کدهای قدیمی ---
 async def push_nodes_to_panel(bases: Optional[List[str]] = None) -> bool:
     try:
-        logger.info("push_nodes_to_panel: no bases to push; skipping.")
+        logger.info("push_nodes_to_panel: nodless mode or single-server setup; skipping.")
         return True
     except Exception as e:
         logger.warning("push_nodes_to_panel stub failed: %s", e)
