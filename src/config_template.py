@@ -1,4 +1,4 @@
-# filename: config.py
+# filename: config_template.py
 # -*- coding: utf-8 -*-
 
 # ===============================================================
