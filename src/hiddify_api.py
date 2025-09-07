@@ -1,18 +1,6 @@
 # filename: hiddify_api.py
 # -*- coding: utf-8 -*-
 """
-Hiddify API client for the bot (async, HTTPX)
-
-این ماژول دو بخش دارد:
-1) ارتباط با API ادمین هیدیفای (/api/v2/admin/): ساخت/گرفتن/تمدید/حذف کاربر
-2) پوش‌کردن تنظیمات ادغام به پنل Expanded API: به‌روزرسانی nodes.json و hidybotconfigs.json
-   از طریق مسیرهای:
-     https://<PANEL_DOMAIN>/<SUB_PATH>/<PANEL_SECRET_UUID>/api/v1/sub/      (POST, body=list[str])
-     https://<PANEL_DOMAIN>/<SUB_PATH>/<PANEL_SECRET_UUID>/api/v1/configs/  (POST, body=dict)
-
-نکته: برای بخش 2، PANEL_SECRET_UUID باید در config.py تنظیم شده باشد. اگر ندارید، مسیر بدون UUID
-هم امتحان می‌شود ولی معمولاً به auth نیاز دارد.
-"""
 
 import asyncio
 import httpx
@@ -20,6 +8,7 @@ import uuid
 import random
 import logging
 from typing import Optional, Dict, Any, List, Tuple
+from datetime import datetime, timezone
 
 import database as db
 from config import PANEL_DOMAIN, ADMIN_PATH, API_KEY, SUB_DOMAINS, SUB_PATH
@@ -276,11 +265,6 @@ def _bytes_to_gb(n: Any) -> float:
 def _extract_usage_gb(payload: Dict[str, Any]) -> Optional[float]:
     """
     تلاش برای استخراج مصرف کاربر (GB) از پاسخ API هیدیفای با در نظر گرفتن تغییرات نسخه‌ها.
-    اولویت:
-      1) فیلدهای *_GB
-      2) upload/download (bytes یا GB)
-      3) فیلدهای کلی usage/used_* (تشخیص خودکار bytes/GB)
-    اگر نتوانست تشخیص دهد: None
     """
     if not isinstance(payload, dict):
         return None
@@ -395,7 +379,7 @@ async def create_hiddify_user(
         return None
 
     user_uuid = data.get("uuid")
-    sub_path = server.get("sub_path") or server.get("admin_path")
+    sub_path = server.get("sub_path") or SUB_PATH or "sub"
     sub_domains = server.get("sub_domains") or []
     sub_domain = random.choice(sub_domains) if sub_domains else server["panel_domain"]
     return {
@@ -414,9 +398,6 @@ async def get_user_info(user_uuid: str, server_name: Optional[str] = None) -> Op
 async def get_user_usage_gb(user_uuid: str, server_name: Optional[str] = None) -> Optional[float]:
     """
     دریافت مصرف کاربر (GB) به‌صورت دقیق و مقاوم در برابر تغییرات API:
-      - ابتدا current_usage_GB/… را می‌خواند
-      - سپس upload/download (bytes یا GB)
-      - سپس فیلدهای کلی usage/bytes با تشخیص خودکار
     """
     info = await get_user_info(user_uuid, server_name=server_name)
     if not isinstance(info, dict) or info.get("_not_found"):
@@ -424,14 +405,43 @@ async def get_user_usage_gb(user_uuid: str, server_name: Optional[str] = None) -
     return _extract_usage_gb(info)
 
 
+async def _try_reset_usage(user_uuid: str, server: Dict[str, Any]) -> bool:
+    """
+    تلاش برای ریست‌کردن مصرف از طریق اندپوینت‌های احتمالی reset_* (فالبک).
+    """
+    base = _get_base_url(server)
+    for ep in ("reset_traffic", "reset_usage", "reset"):
+        url = f"{base}user/{user_uuid}/{ep}/"
+        try:
+            _ = await _make_request("post", url, server, timeout=15.0)
+            info = await get_user_info(user_uuid, server_name=server["name"])
+            if isinstance(info, dict):
+                used = _extract_usage_gb(info) or 0.0
+                if used <= 0.01:
+                    return True
+        except Exception:
+            continue
+    return False
+
+
 async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float, server_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
-    تمدید سرویس. اگر plan_gb <= 0 باشد، usage_limit_GB ارسال نمی‌شود تا نامحدود بماند.
+    تمدید سرویس + ریست حجم:
+    - package_days را به‌روزرسانی می‌کند
+    - start_date را الان می‌گذارد (ریست دوره)
+    - reset_traffic=True (اگر API پشتیبانی کند)
+    - فالبک: تلاش برای اندپوینت‌های reset_traffic/reset_usage
     """
     server = _select_server(server_name)
     endpoint = f"{_get_base_url(server)}user/{user_uuid}/"
 
-    payload = {"package_days": int(plan_days)}
+    payload: Dict[str, Any] = {
+        "package_days": int(plan_days),
+        "start_date": datetime.now(timezone.utc).isoformat(),
+        # پارامترهای معمول (اگر API پشتیبانی کند بی‌اثر نیست)
+        "reset_traffic": True,
+        "reset_usage": True,
+    }
     try:
         usage_limit_gb = float(plan_gb)
     except Exception:
@@ -439,15 +449,26 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
     if usage_limit_gb > 0:
         payload["usage_limit_GB"] = usage_limit_gb
 
-    return await _make_request("patch", endpoint, server, json=payload, timeout=30.0)
+    _ = await _make_request("patch", endpoint, server, json=payload, timeout=30.0)
+
+    # دریافت اطلاعات جدید
+    info = await get_user_info(user_uuid, server_name=server["name"])
+    if not isinstance(info, dict) or info.get("_not_found"):
+        return None
+
+    # اگر مصرف هنوز ریست نشده، تلاش برای reset_* فالبک
+    used = _extract_usage_gb(info)
+    if used is not None and used > 0.01:
+        ok = await _try_reset_usage(user_uuid, server)
+        if ok:
+            info = await get_user_info(user_uuid, server_name=server["name"])
+
+    return info
 
 
 async def delete_user_from_panel(user_uuid: str, server_name: Optional[str] = None) -> bool:
     """
-    حذف کاربر از پنل هیدیفای (idempotent):
-      - 204/بدون بدنه => True
-      - 404 => True
-      - خطای شبکه => با یک GET نهایی بررسی می‌کنیم
+    حذف کاربر از پنل هیدیفای (idempotent)
     """
     server = _select_server(server_name)
     endpoint = f"{_get_base_url(server)}user/{user_uuid}/"
@@ -488,11 +509,6 @@ async def check_api_connection(server_name: Optional[str] = None) -> bool:
 def _panel_api_base_for_push() -> List[str]:
     """
     کاندیدهای مسیر API پنل برای پوش‌کردن nodes.json و hidybotconfigs.json
-    اولویت:
-      1) https://<PANEL_DOMAIN>/<SUB_PATH>/<PANEL_SECRET_UUID>/api/v1
-      2) https://<PANEL_DOMAIN>/<SUB_PATH>/api/v1
-      3) https://<PANEL_DOMAIN>/<ADMIN_PATH>/<PANEL_SECRET_UUID>/api/v1  (fallback)
-      4) https://<PANEL_DOMAIN>/<ADMIN_PATH>/api/v1                       (fallback)
     """
     domain = PANEL_DOMAIN
     cpath = (SUB_PATH or "sub").strip().strip("/")
@@ -537,9 +553,7 @@ async def _post_json_noauth(url: str, body: Any, timeout: float = 20.0) -> Tuple
 
 async def push_nodes_to_panel(base_urls: List[str]) -> bool:
     """
-    به‌روزرسانی nodes.json روی پنل اصلی:
-      POST /api/v1/sub/   با بدنه JSON = ["https://NODE/<client_proxy_path>", ...]
-    نکته: هر آیتم باید base مسیر کلاینت نود باشد (بدون UUID).
+    به‌روزرسانی nodes.json روی پنل اصلی
     """
     # پاک‌سازی و یکتا
     cleaned: List[str] = []
@@ -551,7 +565,6 @@ async def push_nodes_to_panel(base_urls: List[str]) -> bool:
             seen.add(u)
 
     if not cleaned:
-        # خالی بودن هم به‌عنوان موفق گزارش می‌کنیم (یعنی هیچ نودی برای ادغام ست نیست)
         logger.info("push_nodes_to_panel: empty list, skipping push.")
         return True
 
@@ -559,20 +572,18 @@ async def push_nodes_to_panel(base_urls: List[str]) -> bool:
         status, data = await _post_json_noauth(f"{base}/sub/", cleaned)
         if status == 200 and isinstance(data, dict) and int(data.get("status", 0)) == 200:
             return True
-        # تلاش با پایه بعدی
-    logger.warning("push_nodes_to_panel failed on all bases. last_status=%s last_resp=%s", status, data)
+    logger.warning("push_nodes_to_panel failed on all bases.")
     return False
 
 
 async def push_hidybot_configs(cfg: Dict[str, Any]) -> bool:
     """
-    به‌روزرسانی hidybotconfigs.json روی پنل اصلی:
-      POST /api/v1/configs/   با بدنه JSON = {"username": True, "randomize": False, "randomize_mode": "servers"}
+    به‌روزرسانی hidybotconfigs.json روی پنل اصلی
     """
     body = cfg or {}
     for base in _panel_api_base_for_push():
         status, data = await _post_json_noauth(f"{base}/configs/", body)
         if status == 200 and isinstance(data, dict) and int(data.get("status", 0)) == 200:
             return True
-    logger.warning("push_hidybot_configs failed on all bases. last_status=%s last_resp=%s", status, data)
+    logger.warning("push_hidybot_configs failed on all bases.")
     return False
