@@ -14,7 +14,17 @@ from telegram.constants import ParseMode
 
 import database as db
 import hiddify_api
-from config import ADMIN_ID, NODELESS_MODE, PANEL_INTEGRATION_ENABLED
+
+# Safe config import
+try:
+    import config as _cfg
+except Exception:
+    class _Cfg: pass
+    _cfg = _Cfg()
+
+ADMIN_ID = getattr(_cfg, "ADMIN_ID", None)
+PANEL_ENABLED = getattr(_cfg, "PANEL_ENABLED", False)
+
 from bot import utils
 from bot.utils import create_service_info_caption, get_service_status
 from bot.ui import nav_row, markup, chunk, btn, confirm_row
@@ -28,11 +38,8 @@ except Exception:
 logger = logging.getLogger(__name__)
 
 
-def _panel_enabled() -> bool:
-    try:
-        return (not NODELESS_MODE) and bool(PANEL_INTEGRATION_ENABLED)
-    except Exception:
-        return False
+def _panel_on() -> bool:
+    return bool(PANEL_ENABLED)
 
 
 def _link_label(link_type: str) -> str:
@@ -170,8 +177,8 @@ async def show_link_options_menu(message: Message, user_uuid: str, service_id: i
         btn("Xray", f"getlink_xray_{user_uuid}"), btn("Clash", f"getlink_clash_{user_uuid}"),
         btn("Clash Meta", f"getlink_clashmeta_{user_uuid}"),
     ]
-    # دکمه کانفیگ‌های تکی فقط وقتی پنل فعال است
-    if _panel_enabled():
+    # دکمه کانفیگ‌های تکی فقط وقتی پنل روشن است
+    if _panel_on():
         buttons.append(btn("📄 کانفیگ‌های تکی", f"getlink_full_{user_uuid}"))
 
     rows = chunk(buttons, cols=2)
@@ -208,7 +215,7 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     base = (base_link or "").rstrip("/")
 
     if link_type == "full":
-        if not _panel_enabled():
+        if not _panel_on():
             await q.edit_message_text("❌ این گزینه در حالت فعلی در دسترس نیست.")
             return
         try:
@@ -412,7 +419,6 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
             plan_gb=float(plan['gb'])
         )
 
-        # تایید فقط زمانی که واقعاً وضعیت جدید دریافت شده باشد
         if not isinstance(new_info, dict) or new_info.get("_not_found"):
             logger.error(f"Renewal failed for UUID {service['sub_uuid']}: verification failed.")
             raise ValueError("Verification failed")
