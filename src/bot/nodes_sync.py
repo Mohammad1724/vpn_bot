@@ -1,9 +1,8 @@
+# filename: bot/nodes_sync.py
 # -*- coding: utf-8 -*-
 import logging
 
 logger = logging.getLogger(__name__)
-
-# هر چیزی مربوط به نودها را نادیده می‌گیریم تا تداخلی ایجاد نشود.
 
 async def sync_nodes_once(*args, **kwargs):
     logger.info("nodes_sync disabled: sync_nodes_once skipped.")
