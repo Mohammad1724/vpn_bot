@@ -33,7 +33,6 @@ escape_sed() { echo "$1" | sed -e 's/[\/&]/\\&/g'; }
 
 ensure_deps() {
   print_color yellow "Installing system dependencies (python3, venv, git, sqlite3)..."
-  # خروجی نمایش داده می‌شود تا کاربر پیشرفت را ببیند
   apt-get update -y || print_color red "apt-get update failed."
   apt-get install -y python3 python3-pip python3-venv curl git sqlite3 || print_color red "apt-get install failed."
 }
@@ -120,6 +119,16 @@ validate_numeric_id() {
   [[ "$id" =~ ^[0-9]+$ ]]
 }
 
+# Safely ensure a Python key exists in config.py with a default value if missing
+ensure_key_if_missing() {
+  local CONFIG_FILE="$1"
+  local KEY="$2"
+  local VALUE="$3"
+  if ! grep -qE "^\s*${KEY}\s*=" "$CONFIG_FILE"; then
+    echo "${KEY} = ${VALUE}" >> "$CONFIG_FILE"
+  fi
+}
+
 configure_config_py() {
   local CONFIG_FILE="${INSTALL_DIR}/src/config.py"
   local TEMPLATE_FILE="${INSTALL_DIR}/src/config_template.py"
@@ -128,6 +137,20 @@ configure_config_py() {
     exit 1
   fi
   cp "$TEMPLATE_FILE" "$CONFIG_FILE"
+
+  # Mode: Nodeless vs Panel-integrated
+  echo
+  print_color blue "--- Mode ---"
+  read -rp "Run without panel (local-only, nodeless)? [Y/n]: " NODELESS_ANS
+  NODELESS_ANS=${NODELESS_ANS:-Y}
+  local NODELESS_MODE_VAL PANEL_INTEGRATION_ENABLED_VAL
+  if [[ "$NODELESS_ANS" =~ ^[Yy]$ ]]; then
+    NODELESS_MODE_VAL="True"
+    PANEL_INTEGRATION_ENABLED_VAL="False"
+  else
+    NODELESS_MODE_VAL="False"
+    PANEL_INTEGRATION_ENABLED_VAL="True"
+  fi
 
   while true; do
     read -rp "Telegram Bot Token: " BOT_TOKEN
@@ -147,18 +170,24 @@ configure_config_py() {
     fi
   done
 
-  read -rp "Hiddify panel domain (e.g., mypanel.com): " PANEL_DOMAIN
-  read -rp "Hiddify ADMIN secret path: " ADMIN_PATH
-  read -rp "Hiddify SUBSCRIPTION secret path (can be the same): " SUB_PATH
-  read -rp "Hiddify API Key: " API_KEY
+  # Panel details (ask only if panel integration is enabled)
+  local PANEL_DOMAIN="" ADMIN_PATH="" SUB_PATH="sub" API_KEY="" SUPPORT_USERNAME=""
+  if [[ "$PANEL_INTEGRATION_ENABLED_VAL" == "True" ]]; then
+    read -rp "Hiddify panel domain (e.g., mypanel.com): " PANEL_DOMAIN
+    read -rp "Hiddify ADMIN secret path: " ADMIN_PATH
+    read -rp "Hiddify SUBSCRIPTION secret path (can be the same): " SUB_PATH
+    read -rp "Hiddify API Key: " API_KEY
+  fi
   read -rp "Support username (without @): " SUPPORT_USERNAME
 
   echo
-  print_color yellow "Enter subscription domains comma-separated (or leave empty):"
-  read -rp "Subscription Domains: " SUB_DOMAINS_INPUT
   local PYTHON_LIST_FORMAT="[]"
-  if [ -n "$SUB_DOMAINS_INPUT" ]; then
-    PYTHON_LIST_FORMAT="[\"$(echo "$SUB_DOMAINS_INPUT" | sed 's/,/\", \"/g')\"]"
+  if [[ "$PANEL_INTEGRATION_ENABLED_VAL" == "True" ]]; then
+    print_color yellow "Enter subscription domains comma-separated (or leave empty):"
+    read -rp "Subscription Domains: " SUB_DOMAINS_INPUT
+    if [ -n "$SUB_DOMAINS_INPUT" ]; then
+      PYTHON_LIST_FORMAT="[\"$(echo "$SUB_DOMAINS_INPUT" | sed 's/,/\", \"/g')\"]"
+    fi
   fi
 
   echo
@@ -195,14 +224,35 @@ configure_config_py() {
   local API_KEY_E; API_KEY_E=$(escape_sed "$API_KEY")
   local SUPPORT_USERNAME_E; SUPPORT_USERNAME_E=$(escape_sed "$SUPPORT_USERNAME")
 
+  # Ensure new mode keys are present
+  ensure_key_if_missing "$CONFIG_FILE" "NODELESS_MODE" "$NODELESS_MODE_VAL"
+  ensure_key_if_missing "$CONFIG_FILE" "PANEL_INTEGRATION_ENABLED" "$PANEL_INTEGRATION_ENABLED_VAL"
+
+  # Core keys
   sed -i "s|^BOT_TOKEN = .*|BOT_TOKEN = \"${BOT_TOKEN_E}\"|" "$CONFIG_FILE"
   sed -i "s|^ADMIN_ID = .*|ADMIN_ID = ${ADMIN_ID}|" "$CONFIG_FILE"
-  sed -i "s|^PANEL_DOMAIN = .*|PANEL_DOMAIN = \"${PANEL_DOMAIN_E}\"|" "$CONFIG_FILE"
-  sed -i "s|^ADMIN_PATH = .*|ADMIN_PATH = \"${ADMIN_PATH_E}\"|" "$CONFIG_FILE"
-  sed -i "s|^SUB_PATH = .*|SUB_PATH = \"${SUB_PATH_E}\"|" "$CONFIG_FILE"
-  sed -i "s|^API_KEY = .*|API_KEY = \"${API_KEY_E}\"|" "$CONFIG_FILE"
   sed -i "s|^SUPPORT_USERNAME = .*|SUPPORT_USERNAME = \"${SUPPORT_USERNAME_E}\"|" "$CONFIG_FILE"
-  sed -i "s|^SUB_DOMAINS = .*|SUB_DOMAINS = ${PYTHON_LIST_FORMAT}|" "$CONFIG_FILE"
+
+  # Panel keys (write blanks if disabled)
+  sed -i "s|^PANEL_DOMAIN = .*|PANEL_DOMAIN = \"${PANEL_DOMAIN_E}\"|" "$CONFIG_FILE" || true
+  sed -i "s|^ADMIN_PATH = .*|ADMIN_PATH = \"${ADMIN_PATH_E}\"|" "$CONFIG_FILE" || true
+  sed -i "s|^SUB_PATH = .*|SUB_PATH = \"${SUB_PATH_E}\"|" "$CONFIG_FILE" || true
+  sed -i "s|^API_KEY = .*|API_KEY = \"${API_KEY_E}\"|" "$CONFIG_FILE" || true
+  if grep -qE "^\s*SUB_DOMAINS\s*=" "$CONFIG_FILE"; then
+    sed -i "s|^SUB_DOMAINS = .*|SUB_DOMAINS = ${PYTHON_LIST_FORMAT}|" "$CONFIG_FILE"
+  else
+    echo "SUB_DOMAINS = ${PYTHON_LIST_FORMAT}" >> "$CONFIG_FILE"
+  fi
+
+  # Mode toggles (set explicit values)
+  if grep -qE "^\s*NODELESS_MODE\s*=" "$CONFIG_FILE"; then
+    sed -i "s|^NODELESS_MODE = .*|NODELESS_MODE = ${NODELESS_MODE_VAL}|" "$CONFIG_FILE"
+  fi
+  if grep -qE "^\s*PANEL_INTEGRATION_ENABLED\s*=" "$CONFIG_FILE"; then
+    sed -i "s|^PANEL_INTEGRATION_ENABLED = .*|PANEL_INTEGRATION_ENABLED = ${PANEL_INTEGRATION_ENABLED_VAL}|" "$CONFIG_FILE"
+  fi
+
+  # Trial & misc
   sed -i "s|^TRIAL_ENABLED = .*|TRIAL_ENABLED = ${TRIAL_ENABLED_VAL}|" "$CONFIG_FILE"
   sed -i "s|^TRIAL_DAYS = .*|TRIAL_DAYS = ${TRIAL_DAYS_VAL}|" "$CONFIG_FILE"
   sed -i "s|^TRIAL_GB = .*|TRIAL_GB = ${TRIAL_GB_VAL}|" "$CONFIG_FILE"
@@ -235,7 +285,16 @@ configure_config_py() {
   local SUBC_URL_E; SUBC_URL_E=$(escape_sed "$SUBCONVERTER_URL_VAL")
   local SUBC_TGT_E; SUBC_TGT_E=$(escape_sed "$SUBCONVERTER_DEFAULT_TARGET_VAL")
 
-  sed -i "s|^SUBCONVERTER_ENABLED = .*|SUBCONVERTER_ENABLED = ${SUBCONVERTER_ENABLED_VAL}|" "$CONFIG_FILE"
+  if grep -qE "^\s*SUBCONVERTER_ENABLED\s*=" "$CONFIG_FILE"; then
+    sed -i "s|^SUBCONVERTER_ENABLED = .*|SUBCONVERTER_ENABLED = ${SUBCONVERTER_ENABLED_VAL}|" "$CONFIG_FILE"
+  else
+    cat >> "$CONFIG_FILE" <<'EOF'
+SUBCONVERTER_ENABLED = False
+SUBCONVERTER_URL = "http://127.0.0.1:25500"
+SUBCONVERTER_DEFAULT_TARGET = "v2ray"
+SUBCONVERTER_EXTRA_SERVERS = []
+EOF
+  fi
   sed -i "s|^SUBCONVERTER_URL = .*|SUBCONVERTER_URL = \"${SUBC_URL_E}\"|" "$CONFIG_FILE"
   sed -i "s|^SUBCONVERTER_DEFAULT_TARGET = .*|SUBCONVERTER_DEFAULT_TARGET = \"${SUBC_TGT_E}\"|" "$CONFIG_FILE"
   sed -i "s|^SUBCONVERTER_EXTRA_SERVERS = .*|SUBCONVERTER_EXTRA_SERVERS = ${SUBCONVERTER_EXTRA_SERVERS_VAL}|" "$CONFIG_FILE"
@@ -248,15 +307,9 @@ append_missing_keys_if_any() {
   local CONFIG_FILE="${INSTALL_DIR}/src/config.py"
   [ -f "$CONFIG_FILE" ] || return 0
   local changed=0
-  if ! grep -q '^REFERRAL_BONUS_AMOUNT' "$CONFIG_FILE"; then
-    echo 'REFERRAL_BONUS_AMOUNT = 5000' >> "$CONFIG_FILE"; changed=1
-  fi
-  if ! grep -q '^EXPIRY_REMINDER_DAYS' "$CONFIG_FILE"; then
-    echo 'EXPIRY_REMINDER_DAYS = 3' >> "$CONFIG_FILE"; changed=1
-  fi
-  if ! grep -q '^USAGE_ALERT_THRESHOLD' "$CONFIG_FILE"; then
-    echo 'USAGE_ALERT_THRESHOLD = 0.8' >> "$CONFIG_FILE"; changed=1
-  fi
+  if ! grep -q '^REFERRAL_BONUS_AMOUNT' "$CONFIG_FILE"; then echo 'REFERRAL_BONUS_AMOUNT = 5000' >> "$CONFIG_FILE"; changed=1; fi
+  if ! grep -q '^EXPIRY_REMINDER_DAYS' "$CONFIG_FILE"; then echo 'EXPIRY_REMINDER_DAYS = 3' >> "$CONFIG_FILE"; changed=1; fi
+  if ! grep -q '^USAGE_ALERT_THRESHOLD' "$CONFIG_FILE"; then echo 'USAGE_ALERT_THRESHOLD = 0.8' >> "$CONFIG_FILE"; changed=1; fi
   if ! grep -q '^SUBCONVERTER_ENABLED' "$CONFIG_FILE"; then
     cat >> "$CONFIG_FILE" <<'EOF'
 SUBCONVERTER_ENABLED = False
@@ -266,6 +319,10 @@ SUBCONVERTER_EXTRA_SERVERS = []
 EOF
     changed=1
   fi
+  # New keys for nodeless/panel modes
+  if ! grep -q '^NODELESS_MODE' "$CONFIG_FILE"; then echo 'NODELESS_MODE = True' >> "$CONFIG_FILE"; changed=1; fi
+  if ! grep -q '^PANEL_INTEGRATION_ENABLED' "$CONFIG_FILE"; then echo 'PANEL_INTEGRATION_ENABLED = False' >> "$CONFIG_FILE"; changed=1; fi
+
   if [ "$changed" -eq 1 ]; then
     print_color yellow "Added missing config keys to config.py."
   fi
@@ -281,10 +338,11 @@ needs_config_setup() {
 
 install_subconverter_docker() {
   local URL="$1"
-  local PORT; PORT="$(echo "$URL" | sed -n 's/.*:KATEX_INLINE_OPEN[0-9]\{2,5\}KATEX_INLINE_CLOSE.*/\1/p')"
+  local PORT
+  PORT="$(echo "$URL" | sed -n 's/.*:KATEX_INLINE_OPEN[0-9]\{2,5\}KATEX_INLINE_CLOSE.*/\1/p')"
   [ -n "$PORT" ] || PORT="25500"
 
-  print_color yellow "Preparing Docker for Subconverter (port ${PORT})..."
+  print_color yellow "Preparing Docker for Subconverter (host port ${PORT})..."
   if ! command -v docker >/dev/null 2>&1; then
     apt-get update -y >/dev/null 2>&1 || true
     apt-get install -y docker.io >/dev/null 2>&1 || true
@@ -293,7 +351,8 @@ install_subconverter_docker() {
   fi
 
   docker rm -f subconverter >/dev/null 2>&1 || true
-  docker run -d --name subconverter --restart=always -p "${PORT}:${PORT}" tindy2013/subconverter:latest >/dev/null 2>&1 || {
+  # Map host:${PORT} -> container:25500
+  docker run -d --name subconverter --restart=always -p "${PORT}:25500" tindy2013/subconverter:latest >/dev/null 2>&1 || {
     print_color red "Failed to start Subconverter Docker container."
     return 1
   }
@@ -338,6 +397,7 @@ install_or_reinstall() {
   pip install -r requirements.txt || { print_color red "Failed to install Python packages."; deactivate_venv; exit 1; }
   deactivate_venv
 
+  # Fix possible typo in older repos
   if [ -f "${INSTALL_DIR}/src/bot/keboards.py" ]; then
     mv "${INSTALL_DIR}/src/bot/keboards.py" "${INSTALL_DIR}/src/bot/keyboards.py"
   fi
@@ -446,7 +506,7 @@ follow_bot_log() {
     print_color yellow "Tailing bot.log (last 200 lines, live). Ctrl+C to exit."
     ( tail -n 200 -f "$LOG_FILE" )
     print_color yellow "Stopped following logs."
-  else
+  else:
     print_color red "bot.log not found at: $LOG_FILE"
   fi
 }
