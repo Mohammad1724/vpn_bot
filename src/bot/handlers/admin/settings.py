@@ -107,7 +107,6 @@ async def payment_and_guides_submenu(update: Update, context: ContextTypes.DEFAU
         [_admin_edit_btn("✍️ راهنمای اتصال", "guide_connection")],
         [_admin_edit_btn("✍️ راهنمای خرید", "guide_buying")],
         [_admin_edit_btn("✍️ راهنمای شارژ", "guide_charging")],
-        # دکمه «تخفیف همگانی» به منوی کد هدیه منتقل شد
         [_back_to_settings_btn()]
     ])
     await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN); return ADMIN_SETTINGS_MENU
@@ -140,7 +139,7 @@ async def payment_info_submenu(update: Update, context: ContextTypes.DEFAULT_TYP
     rows = [[_admin_edit_btn("✍️ ویرایش راهنمای پرداخت", "payment_instruction_text")]]
     for i in range(1, 4):
         rows.append([_admin_edit_btn(f"کارت {i}", f"payment_card_{i}_number"), _admin_edit_btn(f"صاحب کارت {i}", f"payment_card_{i}_name"), _admin_edit_btn(f"بانک {i}", f"payment_card_{i}_bank")])
-    rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="settings_payment_guides")])
+    rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="payment_info_submenu")])
     await _send_or_edit(update, context, text, _kb(rows), parse_mode=ParseMode.MARKDOWN); return ADMIN_SETTINGS_MENU
 
 async def service_configs_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -182,7 +181,7 @@ async def reports_and_reminders_submenu(update: Update, context: ContextTypes.DE
 async def usage_aggregation_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     usage_agg_on = "فعال ✅" if _get_bool("usage_aggregation_enabled", USAGE_AGGREGATION_ENABLED_CONFIG) else "غیرفعال ❌"
     interval_min = _get("usage_update_interval_min", str(USAGE_UPDATE_INTERVAL_MIN))
-    text = f"💡 **تنظیمات مصرف کاربران**\n\n▫️ تجمیع مصرف بین نودها: {usage_agg_on}\n▫️ بازه به‌روزرسانی مصرف: {interval_min} دقیقه"
+    text = f"💡 **تنظیمات مصرف کاربران**\n\n▫️ تجمیع مصرف: {usage_agg_on}\n▫️ بازه به‌روزرسانی مصرف: {interval_min} دقیقه"
     kb = _kb([
         [InlineKeyboardButton("تغییر وضعیت تجمیع مصرف", callback_data="toggle_usage_aggregation")],
         [_admin_edit_btn("✍️ بازه به‌روزرسانی (دقیقه)", "usage_update_interval_min")],
@@ -252,9 +251,7 @@ async def toggle_global_discount(update: Update, context: ContextTypes.DEFAULT_T
     else:
         # خاموش کردن
         db.set_setting("global_discount_enabled", "0")
-        # تاریخ‌ها را نگه می‌داریم (برای اطلاع). اگر خواستی پاک شوند، این دو خط را باز کن:
-        # db.set_setting("global_discount_starts_at", "")
-        # db.set_setting("global_discount_expires_at", "")
+        # تاریخ‌ها را نگه می‌داریم (برای اطلاع)
 
     return await global_discount_submenu(update, context)
 
