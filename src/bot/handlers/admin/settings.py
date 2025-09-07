@@ -41,12 +41,16 @@ def _back_to_settings_btn(): return InlineKeyboardButton("🔙 بازگشت به
 async def _send_or_edit(
     update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup=None, parse_mode=ParseMode.MARKDOWN
 ):
+    """
+    ارسال/ادیت امن با فالبک خودکار از Markdown به متن ساده در صورت خطای Parse.
+    """
     q = getattr(update, "callback_query", None)
     if q:
         await q.answer()
         try:
             await q.edit_message_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
         except BadRequest as e:
+            # فالبک به بدون پارس
             emsg = str(e).lower()
             if "can't parse entities" in emsg or "can't find end of the entity" in emsg:
                 try: await q.edit_message_text(text, reply_markup=reply_markup, parse_mode=None)
@@ -188,7 +192,7 @@ async def usage_aggregation_submenu(update: Update, context: ContextTypes.DEFAUL
     ])
     await _send_or_edit(update, context, text, kb, parse_mode=None); return ADMIN_SETTINGS_MENU
 
-# --- Global Discount submenu (دکمه‌اش در منوی کد هدیه قرار می‌گیرد) ---
+# --- Global Discount submenu (زیر منوی «مدیریت کد هدیه») ---
 async def global_discount_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     enabled = "فعال ✅" if _get_bool("global_discount_enabled") else "غیرفعال ❌"
     percent = _get("global_discount_percent", "0")
@@ -225,7 +229,6 @@ async def global_discount_submenu(update: Update, context: ContextTypes.DEFAULT_
         [_admin_edit_btn("✍️ درصد تخفیف", "global_discount_percent")],
         [_admin_edit_btn("✍️ تاریخ شروع", "global_discount_starts_at")],
         [_admin_edit_btn("✍️ تاریخ پایان", "global_discount_expires_at")],
-        # بازگشت به منوی مدیریت کد هدیه
         [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_gift")]
     ])
     await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN)
@@ -239,9 +242,9 @@ async def toggle_global_discount(update: Update, context: ContextTypes.DEFAULT_T
     if str(cur).lower() not in ("1","true","on","yes"):
         new_val = "1"
     db.set_setting("global_discount_enabled", new_val)
-    # نمایش مجدد همان زیرمنو
     return await global_discount_submenu(update, context)
 
+# --- Edit/Save Setting value ---
 def _infer_return_target(key: str) -> str:
     if key.startswith("payment_card_") or key == "payment_instruction_text": return "payment_info"
     if key.startswith("first_charge_"): return "first_charge_promo"
@@ -254,6 +257,9 @@ def _infer_return_target(key: str) -> str:
     return "settings_root"
 
 async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    نمایش فرم ویرایش مقدار تنظیم (با فالبک امن روی Markdown)
+    """
     q = getattr(update, "callback_query", None)
     key = (q.data if q else "").replace("admin_edit_setting_", "").strip()
     context.user_data['editing_setting_key'] = key
@@ -266,8 +272,7 @@ async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     elif key == "usage_update_interval_min": tip = "\n(عدد صحیح مثبت)"
     elif key == "global_discount_percent": tip = "\n(عدد درصد؛ مثال: 10)"
     text = f"✍️ مقدار جدید برای **{key}** را ارسال کنید.{tip}\n/cancel برای انصراف\n\n**مقدار فعلی:**\n`{cur}`"
-    if q: await q.answer(); await q.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
-    else: await update.effective_message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+    await _send_or_edit(update, context, text, reply_markup=None, parse_mode=ParseMode.MARKDOWN)
     return AWAIT_SETTING_VALUE
 
 async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -299,6 +304,7 @@ async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_T
     if dest == "global_discount": return await global_discount_submenu(update, context)
     return await settings_menu(update, context)
 
+# --- Toggles/Back ---
 async def toggle_maintenance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _toggle("maintenance_enabled"); return await maintenance_and_join_submenu(update, context)
 
