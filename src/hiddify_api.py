@@ -45,6 +45,22 @@ def _select_server() -> Dict[str, Any]:
         "sub_domains": SUB_DOMAINS or [],
     }
 
+def _client_base_path() -> str:
+    """
+    مسیر درست کلاینت:
+      - اگر SUB_PATH 'sub' باشد و PANEL_SECRET_UUID ست باشد => sub/<SECRET>
+      - اگر SUB_PATH خودش شامل SECRET باشد => همان SUB_PATH
+      - در غیر اینصورت همان SUB_PATH
+    """
+    p = str(SUB_PATH or "sub").strip().strip("/")
+    s = str(PANEL_SECRET_UUID or "").strip().strip("/")
+    if not s:
+        return p or "sub"
+    parts = [seg.strip() for seg in p.split("/") if seg.strip()]
+    if any(seg.lower() == s.lower() for seg in parts):
+        return p
+    return f"{p}/{s}" if p else f"sub/{s}"
+
 def _get_base_url(server: Dict[str, Any]) -> str:
     return f"https://{server['panel_domain']}/{server['admin_path']}/api/v2/admin/"
 
@@ -188,23 +204,11 @@ async def _local_create_user(plan_days: int, plan_gb: float, user_telegram_id: s
 
 async def _local_get_info(user_uuid: str) -> Dict[str, Any]:
     now_local_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    return {
-        "uuid": user_uuid,
-        "start_date": now_local_str,
-        "package_days": 0,
-        "usage_limit_GB": 0.0,
-        "current_usage_GB": 0.0,
-    }
+    return {"uuid": user_uuid, "start_date": now_local_str, "package_days": 0, "usage_limit_GB": 0.0, "current_usage_GB": 0.0}
 
 async def _local_renew(user_uuid: str, plan_days: int, plan_gb: float) -> Dict[str, Any]:
     now_local_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    return {
-        "uuid": user_uuid,
-        "start_date": now_local_str,
-        "package_days": int(plan_days),
-        "usage_limit_GB": float(plan_gb or 0.0),
-        "current_usage_GB": 0.0,
-    }
+    return {"uuid": user_uuid, "start_date": now_local_str, "package_days": int(plan_days), "usage_limit_GB": float(plan_gb or 0.0), "current_usage_GB": 0.0}
 
 # ----------------------------- Public API -----------------------------
 async def create_hiddify_user(plan_days: int, plan_gb: float, user_telegram_id: str, custom_name: str = "") -> Optional[Dict[str, Any]]:
@@ -213,22 +217,31 @@ async def create_hiddify_user(plan_days: int, plan_gb: float, user_telegram_id: 
 
     server = _select_server()
     endpoint = _get_base_url(server) + "user/"
-    payload = {"name": f"{custom_name or 'tg-user'}-{uuid.uuid4().hex[:4]}", "package_days": int(plan_days), "comment": user_telegram_id}
+    payload = {
+        "name": f"{custom_name or 'tg-user'}-{uuid.uuid4().hex[:4]}",
+        "package_days": int(plan_days),
+        "comment": user_telegram_id,
+        # کمک به سازگاری بعضی پنل‌ها:
+        "start_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "current_usage_GB": 0,
+    }
     try:
         usage_limit_gb = float(plan_gb)
     except Exception:
         usage_limit_gb = 0.0
     if usage_limit_gb > 0:
         payload["usage_limit_GB"] = usage_limit_gb
+
     data = await _make_request("post", endpoint, server, json=payload, timeout=20.0)
     if not data or not data.get("uuid"):
-        logger.error("create_hiddify_user: failed or UUID missing")
+        logger.error("create_hiddify_user: failed or UUID missing (check PANEL_DOMAIN/ADMIN_PATH/API_KEY)")
         return None
+
     user_uuid = data.get("uuid")
-    sub_path = server.get("sub_path") or SUB_PATH or "sub"
-    sub_domains = server.get("sub_domains") or []
-    sub_domain = random.choice(sub_domains) if sub_domains else server["panel_domain"]
-    return {"full_link": f"https://{sub_domain}/{sub_path}/{user_uuid}/", "uuid": user_uuid, "server_name": server.get("name") or "Main"}
+    client_path = _client_base_path()
+    sub_domain = random.choice(server.get("sub_domains") or []) if (server.get("sub_domains")) else server["panel_domain"]
+    full_link = f"https://{sub_domain}/{client_path}/{user_uuid}/"
+    return {"full_link": full_link, "uuid": user_uuid, "server_name": server.get("name") or "Main"}
 
 async def get_user_info(user_uuid: str) -> Optional[Dict[str, Any]]:
     if not _panel_on():
