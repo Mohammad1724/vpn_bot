@@ -1,3 +1,4 @@
+# filename: bot/handlers/gift.py
 # -*- coding: utf-8 -*-
 
 from datetime import datetime
@@ -9,6 +10,7 @@ from bot.constants import CMD_CANCEL, REDEEM_GIFT
 from bot import utils
 import database as db
 
+
 async def gift_code_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🎁 لطفاً کد هدیه خود را وارد کنید:",
@@ -16,10 +18,10 @@ async def gift_code_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return REDEEM_GIFT
 
+
 async def redeem_gift_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     code = (update.message.text or "").strip().upper()
     user_id = update.effective_user.id
-    user_info = db.get_user(user_id)
 
     # 1) چک کردن کد شارژ اول
     first_charge_code = (db.get_setting('first_charge_code') or '').upper()
@@ -37,7 +39,7 @@ async def redeem_gift_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if exp_dt and now > exp_dt:
             await update.message.reply_text("❌ این کد منقضی شده است.", reply_markup=get_main_menu_keyboard(user_id))
             return ConversationHandler.END
-        
+
         # چک کن آیا کاربر قبلاً شارژ داشته؟
         if hasattr(db, "get_user_charge_count") and db.get_user_charge_count(user_id) > 0:
             await update.message.reply_text("❌ این کد فقط برای اولین شارژ حساب معتبر است.", reply_markup=get_main_menu_keyboard(user_id))
