@@ -333,7 +333,7 @@ def build_application():
                 CallbackQueryHandler(admin_settings.back_to_admin_menu_cb, pattern=r"^admin_back_to_menu$"),
             ],
             constants.AWAIT_SETTING_VALUE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_settings.setting_value_received)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_settings.setting_value_received)
             ],
         },
         fallbacks=[
@@ -365,7 +365,7 @@ def build_application():
                 CallbackQueryHandler(admin_nodes.nodes_menu, pattern=r'^admin_nodes$'),
             ],
             constants.EDIT_NODE_SETTING_VALUE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_nodes.edit_node_setting_value_received)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.edit_node_setting_value_received)
             ],
             constants.ADD_NAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_nodes.add_get_name)
@@ -503,21 +503,21 @@ def build_application():
                 MessageHandler(filters.Regex(r'^📋 لیست کدهای تخفیف$') & admin_filter, admin_gift.list_promo_codes),
                 CallbackQueryHandler(admin_gift.delete_promo_code_callback, pattern=r'^delete_promo_code_'),
 
-                # دکمه اصلی با عنوان موردنظر شما: «مدیرت تخفیف و کد هدیه»
-                MessageHandler(
-    filters.Regex(r'^(?:مدیریت|مدیرت)\s+تخفیف\s+و\s+کد\s+هدیه$') & admin_filter,
-    admin_settings.global_discount_submenu
-),
-                # پشتیبانی از اینلاین در زیرمنو
+                # دکمه اصلی با عنوان صحیح
+                MessageHandler(filters.Regex(r'^مدیریت\s+تخفیف\s+و\s+کد\s+هدیه$') & admin_filter, admin_settings.global_discount_submenu),
+                # پشتیبانی از اینلاین در زیرمنو + ادیت مقدار
                 CallbackQueryHandler(admin_settings.global_discount_submenu, pattern=r'^global_discount_submenu$'),
                 CallbackQueryHandler(admin_settings.toggle_global_discount, pattern=r'^toggle_global_discount$'),
+                CallbackQueryHandler(admin_settings.edit_setting_start, pattern=r'^admin_edit_setting_'),
 
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
                 gift_code_create_conv,
                 promo_create_conv,
                 referral_bonus_conv,
             ],
+            # پشتیبانی از دریافت مقدار برای تنظیمات (از جمله تخفیف همگانی)
             constants.AWAIT_SETTING_VALUE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_settings.setting_value_received),
                 MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_backup.backup_target_received),
                 CommandHandler('cancel', admin_backup.cancel_backup_settings),
             ],
