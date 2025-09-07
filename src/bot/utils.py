@@ -8,18 +8,23 @@ from typing import Union, Optional, Tuple, Dict, Any, List
 from datetime import datetime, timedelta, timezone
 import math
 import re
-from urllib.parse import quote_plus
 
 import qrcode
 import database as db
-from config import PANEL_DOMAIN, ADMIN_PATH, SUB_PATH, SUB_DOMAINS
-from config import NODELESS_MODE, PANEL_INTEGRATION_ENABLED
 
-# فقط تارگت پیش‌فرض Subconverter برای سازگاری با کدهای موجود
+# Safe config import with defaults
 try:
-    from config import SUBCONVERTER_DEFAULT_TARGET
+    import config as _cfg
 except Exception:
-    SUBCONVERTER_DEFAULT_TARGET = "v2ray"
+    class _Cfg: pass
+    _cfg = _Cfg()
+
+PANEL_ENABLED = getattr(_cfg, "PANEL_ENABLED", False)
+PANEL_DOMAIN = getattr(_cfg, "PANEL_DOMAIN", "")
+ADMIN_PATH = getattr(_cfg, "ADMIN_PATH", "")
+SUB_PATH = getattr(_cfg, "SUB_PATH", "sub")
+SUB_DOMAINS = getattr(_cfg, "SUB_DOMAINS", [])
+SUBCONVERTER_DEFAULT_TARGET = getattr(_cfg, "SUBCONVERTER_DEFAULT_TARGET", "v2ray")
 
 try:
     import jdatetime
@@ -29,8 +34,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 _PERSIAN_DIGIT_MAP = str.maketrans("0123456789,-", "۰۱۲۳۴۵۶۷۸۹،-")
-
-LOCAL_SUB_BASE = "https://local.service/sub"  # لینک پایه در حالت بدون‌پنل/بدون‌نود
+LOCAL_SUB_BASE = "https://local.service/sub"
 
 
 def to_persian_digits(s: str) -> str:
@@ -105,11 +109,11 @@ def _clean_path(seg: Optional[str]) -> str:
 
 def build_subscription_url(user_uuid: str) -> str:
     """
-    ساخت لینک اشتراک بر اساس حالت اجرا:
-      - NODELESS_MODE یا PANEL_INTEGRATION_DISABLED: لینک محلی
-      - حالت پنل: بر پایه دامنه و sub_path کانفیگ
+    ساخت لینک اشتراک:
+      - اگر پنل خاموش باشد: لینک محلی
+      - اگر پنل روشن باشد: بر پایه دامنه و sub_path
     """
-    if NODELESS_MODE or not PANEL_INTEGRATION_ENABLED:
+    if not PANEL_ENABLED:
         return f"{LOCAL_SUB_BASE}/{user_uuid}/"
     sub_path = _clean_path(SUB_PATH) or "sub"
     domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
@@ -176,10 +180,6 @@ def create_service_info_caption(
     title: str = "🎉 سرویس شما!",
     override_sub_url: Optional[str] = None
 ) -> str:
-    """
-    تولید کپشن اطلاعات سرویس:
-    - لینک اشتراک: اولویت با override_sub_url، سپس service_db_record.sub_link، در نهایت build_subscription_url(uuid)
-    """
     used_gb = round(float(user_data.get('current_usage_GB', 0.0)), 2)
     total_gb = round(float(user_data.get('usage_limit_GB', 0.0)), 2)
     unlimited = (total_gb <= 0.0)
