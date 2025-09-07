@@ -138,20 +138,6 @@ configure_config_py() {
   fi
   cp "$TEMPLATE_FILE" "$CONFIG_FILE"
 
-  # Mode: Nodeless vs Panel-integrated
-  echo
-  print_color blue "--- Mode ---"
-  read -rp "Run without panel (local-only, nodeless)? [Y/n]: " NODELESS_ANS
-  NODELESS_ANS=${NODELESS_ANS:-Y}
-  local NODELESS_MODE_VAL PANEL_INTEGRATION_ENABLED_VAL
-  if [[ "$NODELESS_ANS" =~ ^[Yy]$ ]]; then
-    NODELESS_MODE_VAL="True"
-    PANEL_INTEGRATION_ENABLED_VAL="False"
-  else
-    NODELESS_MODE_VAL="False"
-    PANEL_INTEGRATION_ENABLED_VAL="True"
-  fi
-
   while true; do
     read -rp "Telegram Bot Token: " BOT_TOKEN
     if validate_telegram_token "$BOT_TOKEN"; then
@@ -170,9 +156,18 @@ configure_config_py() {
     fi
   done
 
-  # Panel details (ask only if panel integration is enabled)
+  # پنل (اختیاری)
+  echo
+  print_color blue "--- Panel Integration ---"
+  read -rp "Enable Hiddify panel integration? [y/N]: " PANEL_EN
+  PANEL_EN=${PANEL_EN:-N}
+  local PANEL_ENABLED_VAL="False"
+  if [[ "$PANEL_EN" =~ ^[Yy]$ ]]; then
+    PANEL_ENABLED_VAL="True"
+  fi
+
   local PANEL_DOMAIN="" ADMIN_PATH="" SUB_PATH="sub" API_KEY="" SUPPORT_USERNAME=""
-  if [[ "$PANEL_INTEGRATION_ENABLED_VAL" == "True" ]]; then
+  if [[ "$PANEL_ENABLED_VAL" == "True" ]]; then
     read -rp "Hiddify panel domain (e.g., mypanel.com): " PANEL_DOMAIN
     read -rp "Hiddify ADMIN secret path: " ADMIN_PATH
     read -rp "Hiddify SUBSCRIPTION secret path (can be the same): " SUB_PATH
@@ -182,7 +177,7 @@ configure_config_py() {
 
   echo
   local PYTHON_LIST_FORMAT="[]"
-  if [[ "$PANEL_INTEGRATION_ENABLED_VAL" == "True" ]]; then
+  if [[ "$PANEL_ENABLED_VAL" == "True" ]]; then
     print_color yellow "Enter subscription domains comma-separated (or leave empty):"
     read -rp "Subscription Domains: " SUB_DOMAINS_INPUT
     if [ -n "$SUB_DOMAINS_INPUT" ]; then
@@ -224,33 +219,47 @@ configure_config_py() {
   local API_KEY_E; API_KEY_E=$(escape_sed "$API_KEY")
   local SUPPORT_USERNAME_E; SUPPORT_USERNAME_E=$(escape_sed "$SUPPORT_USERNAME")
 
-  # Ensure new mode keys are present
-  ensure_key_if_missing "$CONFIG_FILE" "NODELESS_MODE" "$NODELESS_MODE_VAL"
-  ensure_key_if_missing "$CONFIG_FILE" "PANEL_INTEGRATION_ENABLED" "$PANEL_INTEGRATION_ENABLED_VAL"
+  # اطمینان از وجود کلید PANEL_ENABLED
+  ensure_key_if_missing "$CONFIG_FILE" "PANEL_ENABLED" "$PANEL_ENABLED_VAL"
 
-  # Core keys
+  # کلیدهای اصلی
   sed -i "s|^BOT_TOKEN = .*|BOT_TOKEN = \"${BOT_TOKEN_E}\"|" "$CONFIG_FILE"
   sed -i "s|^ADMIN_ID = .*|ADMIN_ID = ${ADMIN_ID}|" "$CONFIG_FILE"
-  sed -i "s|^SUPPORT_USERNAME = .*|SUPPORT_USERNAME = \"${SUPPORT_USERNAME_E}\"|" "$CONFIG_FILE"
+  if grep -qE "^\s*SUPPORT_USERNAME\s*=" "$CONFIG_FILE"; then
+    sed -i "s|^SUPPORT_USERNAME = .*|SUPPORT_USERNAME = \"${SUPPORT_USERNAME_E}\"|" "$CONFIG_FILE"
+  else
+    echo "SUPPORT_USERNAME = \"${SUPPORT_USERNAME_E}\"" >> "$CONFIG_FILE"
+  fi
 
-  # Panel keys (write blanks if disabled)
-  sed -i "s|^PANEL_DOMAIN = .*|PANEL_DOMAIN = \"${PANEL_DOMAIN_E}\"|" "$CONFIG_FILE" || true
-  sed -i "s|^ADMIN_PATH = .*|ADMIN_PATH = \"${ADMIN_PATH_E}\"|" "$CONFIG_FILE" || true
-  sed -i "s|^SUB_PATH = .*|SUB_PATH = \"${SUB_PATH_E}\"|" "$CONFIG_FILE" || true
-  sed -i "s|^API_KEY = .*|API_KEY = \"${API_KEY_E}\"|" "$CONFIG_FILE" || true
+  # کلیدهای پنل (اگر غیرفعال باشد، مقدار خالی نوشته می‌شود)
+  if grep -qE "^\s*PANEL_DOMAIN\s*=" "$CONFIG_FILE"; then
+    sed -i "s|^PANEL_DOMAIN = .*|PANEL_DOMAIN = \"${PANEL_DOMAIN_E}\"|" "$CONFIG_FILE"
+  else
+    echo "PANEL_DOMAIN = \"${PANEL_DOMAIN_E}\"" >> "$CONFIG_FILE"
+  fi
+  if grep -qE "^\s*ADMIN_PATH\s*=" "$CONFIG_FILE"; then
+    sed -i "s|^ADMIN_PATH = .*|ADMIN_PATH = \"${ADMIN_PATH_E}\"|" "$CONFIG_FILE"
+  else
+    echo "ADMIN_PATH = \"${ADMIN_PATH_E}\"" >> "$CONFIG_FILE"
+  fi
+  if grep -qE "^\s*SUB_PATH\s*=" "$CONFIG_FILE"; then
+    sed -i "s|^SUB_PATH = .*|SUB_PATH = \"${SUB_PATH_E}\"|" "$CONFIG_FILE"
+  else
+    echo "SUB_PATH = \"${SUB_PATH_E}\"" >> "$CONFIG_FILE"
+  fi
+  if grep -qE "^\s*API_KEY\s*=" "$CONFIG_FILE"; then
+    sed -i "s|^API_KEY = .*|API_KEY = \"${API_KEY_E}\"|" "$CONFIG_FILE"
+  else
+    echo "API_KEY = \"${API_KEY_E}\"" >> "$CONFIG_FILE"
+  fi
   if grep -qE "^\s*SUB_DOMAINS\s*=" "$CONFIG_FILE"; then
     sed -i "s|^SUB_DOMAINS = .*|SUB_DOMAINS = ${PYTHON_LIST_FORMAT}|" "$CONFIG_FILE"
   else
     echo "SUB_DOMAINS = ${PYTHON_LIST_FORMAT}" >> "$CONFIG_FILE"
   fi
 
-  # Mode toggles (set explicit values)
-  if grep -qE "^\s*NODELESS_MODE\s*=" "$CONFIG_FILE"; then
-    sed -i "s|^NODELESS_MODE = .*|NODELESS_MODE = ${NODELESS_MODE_VAL}|" "$CONFIG_FILE"
-  fi
-  if grep -qE "^\s*PANEL_INTEGRATION_ENABLED\s*=" "$CONFIG_FILE"; then
-    sed -i "s|^PANEL_INTEGRATION_ENABLED = .*|PANEL_INTEGRATION_ENABLED = ${PANEL_INTEGRATION_ENABLED_VAL}|" "$CONFIG_FILE"
-  fi
+  # مقداردهی صریح سوییچ پنل
+  sed -i "s|^PANEL_ENABLED = .*|PANEL_ENABLED = ${PANEL_ENABLED_VAL}|" "$CONFIG_FILE" || true
 
   # Trial & misc
   sed -i "s|^TRIAL_ENABLED = .*|TRIAL_ENABLED = ${TRIAL_ENABLED_VAL}|" "$CONFIG_FILE"
@@ -275,8 +284,8 @@ configure_config_py() {
     SUBCONVERTER_URL_VAL="${SUBC_URL_IN:-http://127.0.0.1:25500}"
     read -rp "Default target (v2ray|clash|clashmeta|singbox) [v2ray]: " SUBC_TGT_IN
     SUBCONVERTER_DEFAULT_TARGET_VAL="${SUBC_TGT_IN:-v2ray}"
-    echo "Enter extra server names to include in unified link (comma-separated):"
-    read -rp "Extra servers: " SUBC_EXTRA_IN
+    echo "Enter extra sources to include in unified link (comma-separated, optional):"
+    read -rp "Extra sources: " SUBC_EXTRA_IN
     if [ -n "$SUBC_EXTRA_IN" ]; then
       SUBCONVERTER_EXTRA_SERVERS_VAL="[\"$(echo "$SUBC_EXTRA_IN" | sed 's/,/\", \"/g')\"]"
     fi
@@ -319,9 +328,8 @@ SUBCONVERTER_EXTRA_SERVERS = []
 EOF
     changed=1
   fi
-  # New keys for nodeless/panel modes
-  if ! grep -q '^NODELESS_MODE' "$CONFIG_FILE"; then echo 'NODELESS_MODE = True' >> "$CONFIG_FILE"; changed=1; fi
-  if ! grep -q '^PANEL_INTEGRATION_ENABLED' "$CONFIG_FILE"; then echo 'PANEL_INTEGRATION_ENABLED = False' >> "$CONFIG_FILE"; changed=1; fi
+  # سوییچ جدید برای پنل
+  if ! grep -q '^PANEL_ENABLED' "$CONFIG_FILE"; then echo 'PANEL_ENABLED = False' >> "$CONFIG_FILE"; changed=1; fi
 
   if [ "$changed" -eq 1 ]; then
     print_color yellow "Added missing config keys to config.py."
@@ -506,7 +514,7 @@ follow_bot_log() {
     print_color yellow "Tailing bot.log (last 200 lines, live). Ctrl+C to exit."
     ( tail -n 200 -f "$LOG_FILE" )
     print_color yellow "Stopped following logs."
-  else:
+  else
     print_color red "bot.log not found at: $LOG_FILE"
   fi
 }
