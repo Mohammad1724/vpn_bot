@@ -1,4 +1,3 @@
-# filename: hiddify_api.py
 # -*- coding: utf-8 -*-
 import asyncio
 import httpx
@@ -54,8 +53,7 @@ async def _make_request(method: str, url: str, server: Dict[str, Any], **kwargs)
                 try:
                     return resp.json()
                 except ValueError:
-                    # 204 No Content یا پاسخ بدون JSON
-                    return {}
+                    return {}  # support 204 No Content
         except httpx.HTTPStatusError as e:
             status = e.response.status_code if e.response is not None else None
             text = e.response.text if e.response is not None else str(e)
@@ -273,7 +271,6 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
             await asyncio.sleep(1.0)
         return last_info
 
-    # Fallback با Admin API
     logger.info("Falling back to Admin API for renewal...")
     fb = await _admin_renew_fallback(user_uuid, plan_days, plan_gb)
     return fb
@@ -302,12 +299,7 @@ async def check_api_connection() -> bool:
 # --- استاب نودها ---
 async def push_nodes_to_panel(bases: Optional[List[str]] = None) -> bool:
     try:
-        if bases is None:
-            bases = _expanded_api_bases_for_server(_select_server())
-        if not bases:
-            logger.info("push_nodes_to_panel: no bases to push; skipping.")
-            return True
-        logger.info("push_nodes_to_panel: stub called; bases=%s", bases)
+        logger.info("push_nodes_to_panel: no bases to push; skipping.")
         return True
     except Exception as e:
         logger.warning("push_nodes_to_panel stub failed: %s", e)
