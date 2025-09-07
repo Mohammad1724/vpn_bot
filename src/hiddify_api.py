@@ -21,8 +21,12 @@ BASE_RETRY_DELAY = 1.0
 def _select_server() -> Dict[str, Any]:
     """همیشه تنظیمات پنل اصلی را برمی‌گرداند."""
     return {
-        "name": "Main", "panel_domain": PANEL_DOMAIN, "admin_path": ADMIN_PATH,
-        "sub_path": SUB_PATH, "api_key": API_KEY, "sub_domains": SUB_DOMAINS or [],
+        "name": "Main",
+        "panel_domain": PANEL_DOMAIN,
+        "admin_path": ADMIN_PATH,
+        "sub_path": SUB_PATH,
+        "api_key": API_KEY,
+        "sub_domains": SUB_DOMAINS or [],
     }
 
 def _get_base_url(server: Dict[str, Any]) -> str:
@@ -76,6 +80,7 @@ def _looks_like_secret(s: str) -> bool:
     s = (s or "").strip().strip("/")
     if not s or s.lower() in ("sub", "api", "v1", "v2", "admin"):
         return False
+    # توکن‌های Secret معمولاً طولانی و حروف/عدد/خط تیره/زیرخط دارند
     return re.fullmatch(r"[A-Za-z0-9\-_]{8,64}", s) is not None
 
 def _expanded_api_bases_for_server(server: Dict[str, Any]) -> List[str]:
@@ -194,6 +199,37 @@ async def _expanded_update_usage() -> bool:
             return True
     return False
 
+async def _admin_renew_fallback(user_uuid: str, plan_days: int, plan_gb: float) -> Optional[Dict[str, Any]]:
+    """
+    وقتی Expanded API در دسترس نیست: با Admin API پلن را به‌روزرسانی می‌کنیم.
+    چند payload مختلف تست می‌شود تا با نسخه‌های مختلف پنل سازگار باشد.
+    """
+    server = _select_server()
+    url = f"{_get_base_url(server)}user/{user_uuid}/"
+    payloads = [
+        {  # کامل
+            "package_days": int(plan_days),
+            "usage_limit_GB": float(plan_gb or 0.0),
+            "start_date": datetime.now(timezone.utc).isoformat(),
+            "current_usage_GB": 0
+        },
+        {  # بدون current_usage_GB
+            "package_days": int(plan_days),
+            "usage_limit_GB": float(plan_gb or 0.0),
+            "start_date": datetime.now(timezone.utc).isoformat()
+        },
+        {  # حداقلی
+            "package_days": int(plan_days),
+            "usage_limit_GB": float(plan_gb or 0.0)
+        },
+    ]
+    for p in payloads:
+        resp = await _make_request("patch", url, server, json=p, timeout=20.0)
+        if resp is not None:
+            info = await get_user_info(user_uuid)
+            return info if isinstance(info, dict) else resp
+    return None
+
 async def create_hiddify_user(plan_days: int, plan_gb: float, user_telegram_id: str, custom_name: str = "") -> Optional[Dict[str, Any]]:
     server = _select_server()
     endpoint = _get_base_url(server) + "user/"
@@ -224,29 +260,34 @@ async def get_user_info(user_uuid: str) -> Optional[Dict[str, Any]]:
 
 async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float) -> Optional[Dict[str, Any]]:
     """
-    تمدید کاربر و اعتبارسنجی نتیجه: فقط وقتی موفق گزارش می‌دهد که مصرف به ~0 ریست شده باشد
-    یا API به طور واضح موفق باشد.
+    تمدید کاربر:
+    - اگر Expanded API در دسترس باشد، با آن ریست کامل انجام می‌دهیم و انتظار داریم مصرف ~0 شود.
+    - اگر در دسترس نباشد یا شکست بخورد، با Admin API پلن را به‌روزرسانی می‌کنیم (fallback).
+    - در نهایت اطلاعات کاربر را برمی‌گردانیم (None یعنی شکست قطعی).
     """
+    # تلاش با Expanded API
     exp_ok = await _expanded_user_update(user_uuid, plan_days, plan_gb)
     if not exp_ok:
         logger.error("Expanded user update failed for %s. Check PANEL_SECRET_UUID and sub_path.", user_uuid)
 
-    await _expanded_update_usage()
-    await asyncio.sleep(1.0)
-
-    last_info: Optional[Dict[str, Any]] = None
-    for _ in range(5):
-        info = await get_user_info(user_uuid)
-        if isinstance(info, dict) and not info.get("_not_found"):
-            last_info = info
-            used = _extract_usage_gb(info) or 0.0
-            if used <= 0.05:
-                return info
-        await asyncio.sleep(1.0)
-
     if exp_ok:
+        await _expanded_update_usage()
+        await asyncio.sleep(1.0)
+        last_info: Optional[Dict[str, Any]] = None
+        for _ in range(5):
+            info = await get_user_info(user_uuid)
+            if isinstance(info, dict) and not info.get("_not_found"):
+                last_info = info
+                used = _extract_usage_gb(info) or 0.0
+                if used <= 0.05:
+                    return info
+            await asyncio.sleep(1.0)
+        # اگر ریست را نتوانستیم تایید کنیم، همان اطلاعات آخر را برگردان
         return last_info
-    return None
+
+    # Fallback با Admin API
+    fb = await _admin_renew_fallback(user_uuid, plan_days, plan_gb)
+    return fb
 
 async def delete_user_from_panel(user_uuid: str) -> bool:
     server = _select_server()
@@ -269,7 +310,7 @@ async def check_api_connection() -> bool:
     except Exception:
         return False
 
-# --- Optional stub to satisfy bot.nodes_sync usage ---
+# --- استاب برای بی‌خیال شدن از نودها در همگام‌سازی ---
 async def push_nodes_to_panel(bases: Optional[List[str]] = None) -> bool:
     """
     استاب ساده برای جلوگیری از خطای AttributeError در nodes_sync.
