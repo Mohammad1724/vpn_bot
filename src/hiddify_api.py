@@ -1,5 +1,14 @@
 # filename: hiddify_api.py
 # -*- coding: utf-8 -*-
+"""
+Hiddify API client for the bot (async, HTTPX)
+
+- Admin API v2 (/api/v2/admin/): create/get/delete user
+- Expanded API v1 (/<sub_path>/<SECRET>/api/v1): renew user, push nodes/configs
+- Renew Fix: Renewal is done exclusively via the Expanded API on the target node
+  to ensure both date and usage are properly reset, bypassing Admin API v2 bugs.
+"""
+
 import asyncio
 import httpx
 import uuid
@@ -32,13 +41,12 @@ except Exception:
     HIDDIFY_API_VERIFY_SSL = True
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
 MAX_RETRIES = 3
 BASE_RETRY_DELAY = 1.0
 
 
-# ---------------- Server selection ---------------- #
+# ========================= Server selection =========================
 def _fallback_server_dict() -> Dict[str, Any]:
     return {
         "name": DEFAULT_SERVER_NAME or "Main",
@@ -87,23 +95,14 @@ def _get_server_by_name_config(name: str) -> Optional[Dict[str, Any]]:
 def _db_list_active_hiddify_servers() -> List[Dict[str, Any]]:
     try:
         nodes = db.list_nodes(only_active=True)
-        out = []
-        for n in nodes:
-            if str(n.get("panel_type", "hiddify")).lower() != "hiddify":
-                continue
-            out.append(_db_server_from_node(n))
-        return out
+        return [_db_server_from_node(n) for n in nodes if str(n.get("panel_type", "hiddify")).lower() == "hiddify"]
     except Exception:
         return []
 
 def _db_get_server_by_name(name: str) -> Optional[Dict[str, Any]]:
     try:
         n = db.get_node_by_name(name)
-        if not n:
-            return None
-        if str(n.get("panel_type", "hiddify")).lower() != "hiddify":
-            return None
-        return _db_server_from_node(n)
+        return _db_server_from_node(n) if n and str(n.get("panel_type", "hiddify")).lower() == "hiddify" else None
     except Exception:
         return None
 
@@ -115,8 +114,7 @@ def _pick_least_loaded(servers: List[Dict[str, Any]]) -> Dict[str, Any]:
         try:
             live = db.count_services_on_node(s["name"])
             curr = max(curr, live)
-        except Exception:
-            pass
+        except Exception: pass
         free = cap - curr if cap > 0 else 0
         if free > best_free:
             best, best_free = s, free
@@ -125,8 +123,7 @@ def _pick_least_loaded(servers: List[Dict[str, Any]]) -> Dict[str, Any]:
 def _select_server(server_name: Optional[str] = None) -> Dict[str, Any]:
     if server_name:
         srv = _db_get_server_by_name(server_name) or _get_server_by_name_config(server_name)
-        if srv:
-            return srv
+        if srv: return srv
     db_servers = _db_list_active_hiddify_servers()
     if db_servers:
         policy = str(SERVER_SELECTION_POLICY or "first").lower()
@@ -136,19 +133,17 @@ def _select_server(server_name: Optional[str] = None) -> Dict[str, Any]:
             named = _db_get_server_by_name(DEFAULT_SERVER_NAME)
             if named and int(named.get("is_active", 1)) == 1:
                 return named
-            return db_servers[0]
         return db_servers[0]
     if MULTI_SERVER_ENABLED and SERVERS:
         policy = str(SERVER_SELECTION_POLICY or "first").lower()
         if policy == "by_name" and DEFAULT_SERVER_NAME:
             srv = _get_server_by_name_config(DEFAULT_SERVER_NAME)
-            if srv:
-                return srv
+            if srv: return srv
         return _get_server_by_name_config(SERVERS[0].get("name")) or _fallback_server_dict()
     return _fallback_server_dict()
 
 
-# ---------------- HTTP helpers ---------------- #
+# ========================= HTTP helpers =========================
 def _get_base_url(server: Dict[str, Any]) -> str:
     return f"https://{server['panel_domain']}/{server['admin_path']}/api/v2/admin/"
 
@@ -156,12 +151,7 @@ def _get_api_headers(server: Dict[str, Any]) -> dict:
     return {"Hiddify-API-Key": server["api_key"], "Content-Type": "application/json", "Accept": "application/json"}
 
 async def _make_client(timeout: float = 20.0) -> httpx.AsyncClient:
-    try:
-        import h2  # noqa
-        http2_support = True
-    except ImportError:
-        http2_support = False
-    return httpx.AsyncClient(timeout=timeout, http2=http2_support, verify=HIDDIFY_API_VERIFY_SSL)
+    return httpx.AsyncClient(timeout=timeout, verify=HIDDIFY_API_VERIFY_SSL)
 
 async def _make_request(method: str, url: str, server: Dict[str, Any], **kwargs) -> Optional[Dict[str, Any]]:
     retries = 0
@@ -169,20 +159,16 @@ async def _make_request(method: str, url: str, server: Dict[str, Any], **kwargs)
     while retries <= MAX_RETRIES:
         try:
             async with await _make_client(timeout=kwargs.get("timeout", 20.0)) as client:
-                resp = await getattr(client, method.lower())(url, headers=headers, **kwargs)
+                resp: httpx.Response = await getattr(client, method.lower())(url, headers=headers, **kwargs)
                 resp.raise_for_status()
-                try:
-                    return resp.json()
-                except ValueError:
-                    return {}
+                try: return resp.json()
+                except ValueError: return {}
         except httpx.HTTPStatusError as e:
             status = e.response.status_code if e.response is not None else None
             text = e.response.text if e.response is not None else str(e)
             logger.warning("%s %s -> %s: %s (retry %d/%d)", method.upper(), url, status, text, retries+1, MAX_RETRIES)
-            if status in (401, 403, 422):
-                break
-        except (httpx.ConnectError, httpx.ReadError, httpx.WriteError, httpx.TimeoutException) as e:
-            logger.warning("%s %s network: %s (retry %d/%d)", method.upper(), url, str(e), retries+1, MAX_RETRIES)
+            if status == 404: return {"_not_found": True}
+            if status in (401, 403, 422): break
         except Exception as e:
             logger.error("%s %s unexpected: %s", method.upper(), url, str(e), exc_info=True)
             break
@@ -193,73 +179,28 @@ async def _make_request(method: str, url: str, server: Dict[str, Any], **kwargs)
     return None
 
 
-# ---------------- Usage extract ---------------- #
-def _to_float(val: Any, default: float = 0.0) -> float:
-    try: return float(val)
-    except Exception: return default
-
-def _bytes_to_gb(n: Any) -> float:
-    try: return float(n) / (1024.0 ** 3)
-    except Exception: return 0.0
-
+# ========================= Usage extraction =========================
 def _extract_usage_gb(payload: Dict[str, Any]) -> Optional[float]:
     if not isinstance(payload, dict):
         return None
-    direct = ["current_usage_GB", "usage_GB", "total_usage_GB", "used_GB", "used_gb", "usageGb", "currentUsageGB"]
-    for k in direct:
+    for k in ("current_usage_GB", "usage_GB", "used_GB"):
         if k in payload:
-            return _to_float(payload.get(k), None)
-    for ck in ("stats", "usage", "data"):
-        sub = payload.get(ck)
-        if isinstance(sub, dict):
-            for k in direct:
-                if k in sub:
-                    return _to_float(sub.get(k), None)
-    def pick(d: Dict[str, Any]) -> Optional[float]:
-        up, down = d.get("upload"), d.get("download")
-        up_gb, down_gb = d.get("upload_GB"), d.get("download_GB")
-        if up_gb is not None or down_gb is not None:
-            return (_to_float(up_gb or 0.0) + _to_float(down_gb or 0.0))
-        if up is not None and down is not None:
-            up_f, down_f = _to_float(up, 0.0), _to_float(down, 0.0)
-            return _bytes_to_gb(up_f + down_f) if (abs(up_f) > 1024*1024 or abs(down_f) > 1024*1024) else up_f + down_f
-        return None
-    v = pick(payload)
-    if v is None:
-        for ck in ("stats", "usage", "data"):
-            sub = payload.get(ck)
-            if isinstance(sub, dict):
-                v = pick(sub)
-                if v is not None: break
-    if v is not None: return v
-    generic = ["current_usage", "usage", "used_traffic", "total_used_bytes", "total_bytes", "bytes", "traffic", "used_bytes"]
-    for k in generic:
-        if k in payload:
-            val = _to_float(payload.get(k), 0.0)
-            return _bytes_to_gb(val) if abs(val) > 1024*1024 else val
-    for ck in ("stats","usage","data"):
-        sub = payload.get(ck)
-        if isinstance(sub, dict):
-            for k in generic:
-                if k in sub:
-                    val = _to_float(sub.get(k), 0.0)
-                    return _bytes_to_gb(val) if abs(val) > 1024*1024 else val
+            return float(payload[k])
     return None
 
 
-# ---------------- Expanded API (node-scoped) ---------------- #
+# ========================= Expanded API helpers =========================
 def _expanded_api_bases_for_server(server: Dict[str, Any]) -> List[str]:
     domain = server.get("panel_domain") or PANEL_DOMAIN
     cpath = (server.get("sub_path") or SUB_PATH or "sub").strip().strip("/")
-    bases = []
+    bases: List[str] = []
     if PANEL_SECRET_UUID:
         bases.append(f"https://{domain}/{cpath}/{PANEL_SECRET_UUID}/api/v1")
-    bases.append(f"https://{domain}/{cpath}/api/v1")  # ممکن است auth بخواهد
     return bases
 
 async def _post_json_noauth(url: str, body: Any, timeout: float = 20.0) -> Tuple[int, Any]:
     try:
-        async with httpx.AsyncClient(timeout=timeout, verify=HIDDIFY_API_VERIFY_SSL) as client:
+        async with await _make_client(timeout) as client:
             resp = await client.post(url, json=body)
             data = None
             try: data = resp.json()
@@ -273,7 +214,7 @@ async def _post_json_noauth(url: str, body: Any, timeout: float = 20.0) -> Tuple
 
 async def _get_noauth(url: str, timeout: float = 20.0) -> Tuple[int, Any]:
     try:
-        async with httpx.AsyncClient(timeout=timeout, verify=HIDDIFY_API_VERIFY_SSL) as client:
+        async with await _make_client(timeout) as client:
             resp = await client.get(url)
             data = None
             try: data = resp.json()
@@ -311,7 +252,7 @@ async def _expanded_update_usage_on_server(server: Dict[str, Any]) -> bool:
     return False
 
 
-# ---------------- Admin API v2 wrappers ---------------- #
+# ========================= Admin API v2 wrappers =========================
 async def create_hiddify_user(plan_days: int, plan_gb: float, user_telegram_id: str, custom_name: str = "", server_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
     server = _select_server(server_name)
     endpoint = _get_base_url(server) + "user/"
@@ -340,48 +281,27 @@ async def get_user_info(user_uuid: str, server_name: Optional[str] = None) -> Op
     endpoint = f"{_get_base_url(server)}user/{user_uuid}/"
     return await _make_request("get", endpoint, server, timeout=10.0)
 
-async def get_user_usage_gb(user_uuid: str, server_name: Optional[str] = None) -> Optional[float]:
-    info = await get_user_info(user_uuid, server_name=server_name)
-    if not isinstance(info, dict) or info.get("_not_found"):
-        return None
-    return _extract_usage_gb(info)
-
 async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float, server_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
     server = _select_server(server_name)
-    # 1) Admin API: update days/limit + start_date now
-    payload = {
-        "package_days": int(plan_days),
-        "start_date": datetime.now(timezone.utc).isoformat(),
-        "reset_traffic": True,
-        "reset_usage": True,
-    }
-    try:
-        usage_limit_gb = float(plan_gb)
-    except Exception:
-        usage_limit_gb = 0.0
-    if usage_limit_gb > 0:
-        payload["usage_limit_GB"] = usage_limit_gb
-    _ = await _make_request("patch", f"{_get_base_url(server)}user/{user_uuid}/", server, json=payload, timeout=30.0)
+    # 1. Expanded API POST /user/ on target node to update and reset
+    exp_ok = await _expanded_user_update_on_server(user_uuid, plan_days, plan_gb, server)
+    if not exp_ok:
+        logger.warning("Expanded user update failed for %s on %s", user_uuid, server.get("panel_domain"))
 
-    # 2) Expanded API on same node: force zero + start_date
-    upd_ok = await _expanded_user_update_on_server(user_uuid, plan_days, plan_gb, server)
-    if not upd_ok:
-        logger.warning("Expanded user update failed on %s/%s", server.get("panel_domain"), server.get("sub_path"))
-
-    # 3) Force usage recompute so Admin API reflects changes
+    # 2. Force usage recompute on target node so Admin API reflects changes
     await _expanded_update_usage_on_server(server)
     await asyncio.sleep(1.0)
 
-    # 4) Poll info (up to 3 tries)
-    for _i in range(3):
+    # 3. Poll info (up to 3 tries) to verify
+    for _ in range(3):
         info = await get_user_info(user_uuid, server_name=server["name"])
         if isinstance(info, dict) and not info.get("_not_found"):
             used = _extract_usage_gb(info) or 0.0
-            # اگر ریست انجام شده باشد، معمولاً <= 0.01 می‌شود
             if used <= 0.01:
                 return info
         await asyncio.sleep(0.8)
-    # بازگشت آخرین وضعیت (حتی اگر >0 باشد)
+
+    # Return latest state, even if >0
     return await get_user_info(user_uuid, server_name=server["name"])
 
 async def delete_user_from_panel(user_uuid: str, server_name: Optional[str] = None) -> bool:
