@@ -117,7 +117,7 @@ def build_subconverter_link(urls: List[str], target: Optional[str] = None) -> Op
                 seen.add(u)
         if not sources: return None
         tgt = (target or SUBCONVERTER_DEFAULT_TARGET or "v2ray").strip().lower()
-        src, src_enc = "|".join(sources), quote_plus("|".join(sources), safe=":/?&=%|")
+        src_enc = quote_plus("|".join(sources), safe=":/?&=%|")
         return f"{base}/sub?target={tgt}&url={src_enc}"
     except Exception as e:
         logger.error("build_subconverter_link failed: %s", e, exc_info=True)
