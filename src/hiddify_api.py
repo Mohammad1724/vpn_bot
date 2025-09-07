@@ -6,8 +6,8 @@ Hiddify API client for the bot (async, HTTPX)
 Key points:
 - Admin API v2 (/api/v2/admin/): create/get/renew/delete user
 - Expanded API (panel-side helpers): push nodes.json & hidybotconfigs.json
-- FIX: renew_user_subscription resets quota by sending start_date=now and
-       tries fallback POSTs to reset_* endpoints if quota didn't reset.
+- Renew fix: after renewing, if usage didn't reset, fallback to Expanded API
+  bulk update to force current_usage_GB=0 (works with your API).
 """
 
 import asyncio
@@ -224,13 +224,9 @@ async def _make_request(method: str, url: str, server: Dict[str, Any], **kwargs)
         except httpx.HTTPStatusError as e:
             status = e.response.status_code if e.response is not None else None
             text = e.response.text if e.response is not None else str(e)
-            if status == 404:
-                logger.info("%s %s -> 404 (returning _not_found)", method.upper(), url)
-                return {"_not_found": True}
-            if status in (401, 403, 422):
-                logger.error("%s %s -> %s: %s", method.upper(), url, status, text)
-                break
             logger.warning("%s %s -> %s: %s (retry %d/%d)", method.upper(), url, status, text, retries + 1, MAX_RETRIES)
+            if status in (401, 403, 422):
+                break
         except (httpx.ConnectError, httpx.ReadError, httpx.WriteError, httpx.TimeoutException) as e:
             logger.warning("%s %s network: %s (retry %d/%d)", method.upper(), url, str(e), retries + 1, MAX_RETRIES)
         except Exception as e:
@@ -337,9 +333,7 @@ async def create_hiddify_user(
     custom_name: str = "",
     server_name: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """
-    Create user on target panel.
-    """
+    """Create user on target panel."""
     server = _select_server(server_name)
     endpoint = _get_base_url(server) + "user/"
 
@@ -390,20 +384,26 @@ async def get_user_usage_gb(user_uuid: str, server_name: Optional[str] = None) -
     return _extract_usage_gb(info)
 
 
-async def _try_reset_usage(user_uuid: str, server: Dict[str, Any]) -> bool:
+async def _expanded_bulk_zero_usage(user_uuid: str, server: Dict[str, Any]) -> bool:
     """
-    Best-effort: try reset endpoints if panel supports them.
+    Fallback via Expanded API:
+    POST /<sub or proxy>/<SECRET>/api/v1/bulkusers/?update=1
+    Body: [{"uuid": ..., "current_usage_GB": 0, "start_date": now}]
     """
-    base = _get_base_url(server)
-    for ep in ("reset_traffic", "reset_usage", "reset"):
-        url = f"{base}user/{user_uuid}/{ep}/"
+    bases = _panel_api_base_for_push()
+    if not bases:
+        return False
+    body = [{
+        "uuid": user_uuid,
+        "current_usage_GB": 0,
+        "start_date": datetime.now(timezone.utc).isoformat()
+    }]
+    for base in bases:
+        url = f"{base}/bulkusers/?update=1"
         try:
-            _ = await _make_request("post", url, server, timeout=15.0)
-            info = await get_user_info(user_uuid, server_name=server["name"])
-            if isinstance(info, dict):
-                used = _extract_usage_gb(info) or 0.0
-                if used <= 0.01:
-                    return True
+            status, data = await _post_json_noauth(url, body, timeout=15.0)
+            if status == 200:
+                return True
         except Exception:
             continue
     return False
@@ -412,9 +412,9 @@ async def _try_reset_usage(user_uuid: str, server: Dict[str, Any]) -> bool:
 async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float, server_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
     Renew subscription and reset quota:
-    - PATCH user with package_days and start_date=now
-    - send reset_traffic/reset_usage flags (if supported)
-    - fallback POST to reset_* endpoints if usage didn't reset
+    - PATCH user with package_days and start_date=now (reset period)
+    - Send reset flags (if supported by API)
+    - If usage didn't reset, use Expanded API bulk update to force current_usage_GB=0
     """
     server = _select_server(server_name)
     endpoint = f"{_get_base_url(server)}user/{user_uuid}/"
@@ -440,7 +440,8 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
 
     used = _extract_usage_gb(info)
     if used is not None and used > 0.01:
-        ok = await _try_reset_usage(user_uuid, server)
+        # Admin API didn't reset; use Expanded API to force 0 GB
+        ok = await _expanded_bulk_zero_usage(user_uuid, server)
         if ok:
             info = await get_user_info(user_uuid, server_name=server["name"])
 
@@ -518,6 +519,8 @@ async def _post_json_noauth(url: str, body: Any, timeout: float = 20.0) -> Tuple
                 data = resp.json()
             except Exception:
                 data = None
+            if resp.status_code >= 400:
+                logger.warning("POST %s -> %s: %s", url, resp.status_code, data)
             return resp.status_code, data
     except Exception as e:
         logger.debug("POST %s failed: %s", url, e)
