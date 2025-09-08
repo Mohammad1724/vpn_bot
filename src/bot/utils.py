@@ -1,3 +1,4 @@
+# filename: bot/utils.py
 # -*- coding: utf-8 -*-
 
 import io
@@ -24,7 +25,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# تبدیل ارقام به فارسی
+# تبدیل ارقام به فارسی (در پیام سرویس دیگر استفاده نمی‌شود)
 _PERSIAN_DIGIT_MAP = str.maketrans("0123456789,-", "۰۱۲۳۴۵۶۷۸۹،-")
 
 
@@ -222,7 +223,7 @@ def _format_expiry_and_days(user_data: dict, service_db_record: Optional[dict] =
         expire_dt = now_utc + timedelta(days=package_days)
         days_left_via_expire = package_days
 
-    # تبدیل تاریخ برای نمایش
+    # تبدیل تاریخ برای نمایش (با ارقام لاتین)
     expire_jalali = "نامشخص"
     if expire_dt:
         expire_local = expire_dt.astimezone()
@@ -237,7 +238,7 @@ def _format_expiry_and_days(user_data: dict, service_db_record: Optional[dict] =
     return expire_jalali, int(days_left_via_expire or 0)
 
 
-# ========= کپشن با استایل انتخابی (پایدار در RTL) =========
+# ========= کپشن با استایل انتخابی (اعداد انگلیسی) =========
 
 def create_service_info_caption(
     user_data: dict,
@@ -245,13 +246,13 @@ def create_service_info_caption(
     title: str = "🎉 سرویس شما!",
     override_sub_url: Optional[str] = None
 ) -> str:
-    # فرمت اعداد به فارسی
+    # اعداد را به‌صورت انگلیسی برگردانیم (بدون تبدیل به فارسی)
     def _fmt_num(x: float) -> str:
         try:
             s = "{:g}".format(float(x))
         except Exception:
             s = str(x)
-        return to_persian_digits(s)
+        return s  # اعداد لاتین
 
     # کنترل جهت چپ‌به‌راست برای جلوگیری از تکه‌تکه شدن لینک در متن RTL
     def _ltr(s: str) -> str:
@@ -294,11 +295,11 @@ def create_service_info_caption(
             f"(باقی: {_fmt_num(remaining_gb)} گیگ)"
         )
 
-    # روزها و تاریخ
+    # روزها و تاریخ (اعداد لاتین)
     package_days = int(user_data.get('package_days', 0) or 0)
-    expire_fa = to_persian_digits(expire_jalali or "نامشخص")
-    days_left_fa = _fmt_num(days_left)
-    package_days_fa = _fmt_num(package_days)
+    expire_str = expire_jalali or "نامشخص"
+    days_left_str = _fmt_num(days_left)
+    package_days_str = _fmt_num(package_days)
 
     # قالب پایدار در RTL (بدون خطوط عمودی)
     caption = (
@@ -306,7 +307,7 @@ def create_service_info_caption(
         "🎉 سرویس شما فعال شد\n"
         "━━━━━━━━━━━━━━━━\n"
         f"🆔 {service_name} • {status_badge}\n"
-        f"⏳ {days_left_fa}/{package_days_fa} روز • 📅 {expire_fa}\n"
+        f"⏳ {days_left_str}/{package_days_str} روز • 📅 {expire_str}\n"
         f"{traffic_line}\n"
         "━━━━━━━━━━━━━━━━\n"
         "📋 لینک اشتراک (برای کپی):\n"
