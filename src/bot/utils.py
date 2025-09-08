@@ -18,6 +18,12 @@ try:
 except ImportError:
     PANEL_DOMAIN, SUB_DOMAINS, PANEL_SECRET_UUID, SUB_PATH = "", [], "", "sub"
 
+# نمایش نامحدود هنگام استفاده از سقف حجمی بزرگ (مثلاً 1000GB)
+try:
+    from config import UNLIMITED_DISPLAY_THRESHOLD_GB
+except Exception:
+    UNLIMITED_DISPLAY_THRESHOLD_GB = 900.0  # اگر total_gb >= این مقدار بود، "نامحدود" نمایش بده
+
 try:
     import jdatetime
 except ImportError:
@@ -25,7 +31,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# تبدیل ارقام به فارسی (در پیام سرویس دیگر استفاده نمی‌شود)
+# نگه می‌داریم برای جاهای دیگر (پیام سرویس از اعداد لاتین استفاده می‌کند)
 _PERSIAN_DIGIT_MAP = str.maketrans("0123456789,-", "۰۱۲۳۴۵۶۷۸۹،-")
 
 
@@ -51,15 +57,14 @@ def format_toman(amount: Union[int, float, str], persian_digits: bool = False) -
 
 def parse_date_flexible(date_str: Union[str, int, float]) -> Union[datetime, None]:
     """
-    ورودی‌های متنوع تاریخ را به datetime (local tz) تبدیل می‌کند:
+    تبدیل ورودی تاریخ به datetime (local tz):
     - timestamp ثانیه/میلی‌ثانیه
     - ISO8601
-    - فرمت‌های yyyy-mm-dd و ...
+    - فرمت‌های رایج yyyy-mm-dd و ...
     """
     if date_str is None or date_str == "":
         return None
 
-    # اگر عددی بود (ثانیه/میلی‌ثانیه)
     if isinstance(date_str, (int, float)) or (isinstance(date_str, str) and re.match(r"^\d+(\.\d+)?$", date_str.strip())):
         try:
             val = float(date_str)
@@ -119,7 +124,7 @@ def make_qr_bytes(data: str) -> io.BytesIO:
     return bio
 
 
-# ========= محاسبه‌ی مقاوم تاریخ انقضا و روزهای باقیمانده =========
+# ========= منطق مقاوم تاریخ انقضا و روزهای باقیمانده =========
 
 def _get_panel_expire_dt(user_data: dict) -> Optional[datetime]:
     """
@@ -140,7 +145,7 @@ def _get_panel_expire_dt(user_data: dict) -> Optional[datetime]:
 def _pick_start_dt(user_data: dict, service_db_record: Optional[dict], now: datetime) -> Optional[datetime]:
     """
     بهترین تاریخ شروع:
-    - اگر created_at در DB هست و سرویس تازه باشد (<= 36h)، همان را مبنا بگیر.
+    - اگر created_at در DB هست و سرویس تازه باشد (<= 36h)، همان مبنا.
     - وگرنه جدیدترین بین last_reset_time/start_date/created_at/create_time از پنل.
     """
     created_at_db = None
@@ -162,7 +167,6 @@ def _pick_start_dt(user_data: dict, service_db_record: Optional[dict], now: date
             if dt:
                 candidates.append(dt)
 
-    # تاریخ‌های آینده را کنار بگذار
     candidates = [dt for dt in candidates if dt <= now + timedelta(hours=2)]
     if not candidates:
         return created_at_db
@@ -184,7 +188,6 @@ def _format_expiry_and_days(user_data: dict, service_db_record: Optional[dict] =
     except Exception:
         package_days = 0
 
-    # 1) expire مستقیم از پنل
     expire_dt = _get_panel_expire_dt(user_data)
     days_left_via_expire = None
     if expire_dt:
@@ -193,7 +196,6 @@ def _format_expiry_and_days(user_data: dict, service_db_record: Optional[dict] =
         else:
             days_left_via_expire = 0
 
-    # 2) گزینه جایگزین برای سرویس تازه
     start_dt_candidate = _pick_start_dt(user_data, service_db_record, now_utc)
     if package_days > 0 and start_dt_candidate:
         alt_expire_dt = start_dt_candidate.astimezone(timezone.utc) + timedelta(days=package_days)
@@ -218,12 +220,10 @@ def _format_expiry_and_days(user_data: dict, service_db_record: Optional[dict] =
             expire_dt = alt_expire_dt
             days_left_via_expire = alt_days_left
 
-    # 3) اگر هنوز تاریخ نداریم ولی package_days>0 داریم، از now به‌عنوان شروع استفاده کن
     if not expire_dt and package_days > 0:
         expire_dt = now_utc + timedelta(days=package_days)
         days_left_via_expire = package_days
 
-    # تبدیل تاریخ برای نمایش (با ارقام لاتین)
     expire_jalali = "نامشخص"
     if expire_dt:
         expire_local = expire_dt.astimezone()
@@ -238,7 +238,7 @@ def _format_expiry_and_days(user_data: dict, service_db_record: Optional[dict] =
     return expire_jalali, int(days_left_via_expire or 0)
 
 
-# ========= کپشن با استایل انتخابی (اعداد انگلیسی) =========
+# ========= کپشن با استایل انتخابی (اعداد لاتین، نمایش نامحدود برای سقف بزرگ) =========
 
 def create_service_info_caption(
     user_data: dict,
@@ -246,19 +246,19 @@ def create_service_info_caption(
     title: str = "🎉 سرویس شما!",
     override_sub_url: Optional[str] = None
 ) -> str:
-    # اعداد را به‌صورت انگلیسی برگردانیم (بدون تبدیل به فارسی)
+    # اعداد را لاتین نگه می‌داریم
     def _fmt_num(x: float) -> str:
         try:
             s = "{:g}".format(float(x))
         except Exception:
             s = str(x)
-        return s  # اعداد لاتین
+        return s
 
-    # کنترل جهت چپ‌به‌راست برای جلوگیری از تکه‌تکه شدن لینک در متن RTL
+    # جلوگیری از شکستن لینک در متن RTL
     def _ltr(s: str) -> str:
         return "\u2066" + s + "\u2069"  # LRI ... PDI
 
-    # محاسبات تاریخ/روز
+    # محاسبه تاریخ/روز
     try:
         expire_jalali, days_left = _format_expiry_and_days(user_data, service_db_record)
     except TypeError:
@@ -266,7 +266,9 @@ def create_service_info_caption(
 
     used_gb = float(user_data.get('current_usage_GB', 0.0) or 0)
     total_gb = float(user_data.get('usage_limit_GB', 0.0) or 0)
-    unlimited = (total_gb <= 0.0)
+
+    # نمایش نامحدود اگر total_gb <= 0 یا بسیار بزرگ باشد
+    unlimited = (total_gb <= 0.0) or (total_gb >= float(UNLIMITED_DISPLAY_THRESHOLD_GB))
 
     is_active = not (
         user_data.get('status') in ('disabled', 'limited')
@@ -301,7 +303,6 @@ def create_service_info_caption(
     days_left_str = _fmt_num(days_left)
     package_days_str = _fmt_num(package_days)
 
-    # قالب پایدار در RTL (بدون خطوط عمودی)
     caption = (
         "━━━━━━━━━━━━━━━━\n"
         "🎉 سرویس شما فعال شد\n"
