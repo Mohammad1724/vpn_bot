@@ -14,15 +14,15 @@ import qrcode
 import database as db
 
 try:
-    from config import PANEL_DOMAIN, SUB_DOMAINS, PANEL_SECRET_UUID, SUB_PATH
+    from config import PANEL_DOMAIN, SUB_DOMAINS, PANEL_SECRET_UUID, SUB_PATH, DEFAULT_ASN
 except ImportError:
-    PANEL_DOMAIN, SUB_DOMAINS, PANEL_SECRET_UUID, SUB_PATH = "", [], "", "sub"
+    PANEL_DOMAIN, SUB_DOMAINS, PANEL_SECRET_UUID, SUB_PATH, DEFAULT_ASN = "", [], "", "sub", "MCI"
 
-# نمایش نامحدود هنگام استفاده از سقف حجمی بزرگ (مثلاً 1000GB)
+# نمایش «نامحدود» هنگام استفاده از سقف حجمی بزرگ (مثل 1000GB در پنل)
 try:
     from config import UNLIMITED_DISPLAY_THRESHOLD_GB
 except Exception:
-    UNLIMITED_DISPLAY_THRESHOLD_GB = 900.0  # اگر total_gb >= این مقدار بود، "نامحدود" نمایش بده
+    UNLIMITED_DISPLAY_THRESHOLD_GB = 900.0
 
 try:
     import jdatetime
@@ -31,7 +31,6 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# نگه می‌داریم برای جاهای دیگر (پیام سرویس از اعداد لاتین استفاده می‌کند)
 _PERSIAN_DIGIT_MAP = str.maketrans("0123456789,-", "۰۱۲۳۴۵۶۷۸۹،-")
 
 
@@ -56,19 +55,13 @@ def format_toman(amount: Union[int, float, str], persian_digits: bool = False) -
 
 
 def parse_date_flexible(date_str: Union[str, int, float]) -> Union[datetime, None]:
-    """
-    تبدیل ورودی تاریخ به datetime (local tz):
-    - timestamp ثانیه/میلی‌ثانیه
-    - ISO8601
-    - فرمت‌های رایج yyyy-mm-dd و ...
-    """
     if date_str is None or date_str == "":
         return None
 
     if isinstance(date_str, (int, float)) or (isinstance(date_str, str) and re.match(r"^\d+(\.\d+)?$", date_str.strip())):
         try:
             val = float(date_str)
-            if val > 1e12:  # میلی‌ثانیه
+            if val > 1e12:
                 val = val / 1000.0
             return datetime.fromtimestamp(val, tz=timezone.utc).astimezone()
         except Exception:
@@ -104,15 +97,21 @@ def _clean_path(seg: Optional[str]) -> str:
 
 
 def build_subscription_url(user_uuid: str) -> str:
+    """
+    لینک ساب با الگوی:
+      - با secret: https://domain/{secret}/{uuid}/sub/?asn=...
+      - بدون secret: https://domain/{sub_path}/{uuid}/?asn=...
+    """
     domain = (random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN)
     client_secret = _clean_path(PANEL_SECRET_UUID)
+    asn = (DEFAULT_ASN or "").strip()
+    qs = f"?asn={asn}" if asn else ""
 
-    if not client_secret:
-        logger.warning("PANEL_SECRET_UUID is not set in config.py! Subscription links will be incorrect.")
+    if client_secret:
+        return f"https://{domain}/{client_secret}/{user_uuid}/sub/{qs}"
+    else:
         sub_path = _clean_path(SUB_PATH) or "sub"
-        return f"https://{domain}/{sub_path}/{user_uuid}/"
-
-    return f"https://{domain}/{client_secret}/{user_uuid}/sub/"
+        return f"https://{domain}/{sub_path}/{user_uuid}/{qs}"
 
 
 def make_qr_bytes(data: str) -> io.BytesIO:
@@ -120,21 +119,17 @@ def make_qr_bytes(data: str) -> io.BytesIO:
     bio = io.BytesIO()
     bio.name = "qr.png"
     img.save(bio, "PNG")
-    bio.seek(0)
+    bio.seek(0
+             )
     return bio
 
 
-# ========= منطق مقاوم تاریخ انقضا و روزهای باقیمانده =========
-
 def _get_panel_expire_dt(user_data: dict) -> Optional[datetime]:
-    """
-    اگر فیلد expire معتبر باشد، همان مبنا قرار می‌گیرد (ثانیه/میلی‌ثانیه).
-    """
     expire_ts = user_data.get("expire")
     if isinstance(expire_ts, (int, float, str)):
         try:
             val = float(expire_ts)
-            if val > 1e12:  # میلی‌ثانیه
+            if val > 1e12:
                 val = val / 1000.0
             return datetime.fromtimestamp(val, tz=timezone.utc)
         except Exception:
@@ -143,11 +138,6 @@ def _get_panel_expire_dt(user_data: dict) -> Optional[datetime]:
 
 
 def _pick_start_dt(user_data: dict, service_db_record: Optional[dict], now: datetime) -> Optional[datetime]:
-    """
-    بهترین تاریخ شروع:
-    - اگر created_at در DB هست و سرویس تازه باشد (<= 36h)، همان مبنا.
-    - وگرنه جدیدترین بین last_reset_time/start_date/created_at/create_time از پنل.
-    """
     created_at_db = None
     if service_db_record:
         ca = service_db_record.get("created_at") or service_db_record.get("create_time")
@@ -175,12 +165,6 @@ def _pick_start_dt(user_data: dict, service_db_record: Optional[dict], now: date
 
 
 def _format_expiry_and_days(user_data: dict, service_db_record: Optional[dict] = None) -> Tuple[str, int]:
-    """
-    خروجی: (expire_jalali_str, days_left)
-    - اگر expire معتبر داریم: همان مبنا.
-    - اگر سرویس تازه است و days_left پنل غیرمنطقی بود: از created_at DB استفاده کن.
-    - در غیر این صورت: از start/reset پنل استفاده کن.
-    """
     now_utc = datetime.now(timezone.utc)
 
     try:
@@ -238,15 +222,13 @@ def _format_expiry_and_days(user_data: dict, service_db_record: Optional[dict] =
     return expire_jalali, int(days_left_via_expire or 0)
 
 
-# ========= کپشن با استایل انتخابی (اعداد لاتین، نمایش نامحدود برای سقف بزرگ) =========
-
 def create_service_info_caption(
     user_data: dict,
     service_db_record: Optional[dict] = None,
     title: str = "🎉 سرویس شما!",
     override_sub_url: Optional[str] = None
 ) -> str:
-    # اعداد را لاتین نگه می‌داریم
+    # اعداد لاتین
     def _fmt_num(x: float) -> str:
         try:
             s = "{:g}".format(float(x))
@@ -256,9 +238,8 @@ def create_service_info_caption(
 
     # جلوگیری از شکستن لینک در متن RTL
     def _ltr(s: str) -> str:
-        return "\u2066" + s + "\u2069"  # LRI ... PDI
+        return "\u2066" + s + "\u2069"
 
-    # محاسبه تاریخ/روز
     try:
         expire_jalali, days_left = _format_expiry_and_days(user_data, service_db_record)
     except TypeError:
@@ -267,7 +248,7 @@ def create_service_info_caption(
     used_gb = float(user_data.get('current_usage_GB', 0.0) or 0)
     total_gb = float(user_data.get('usage_limit_GB', 0.0) or 0)
 
-    # نمایش نامحدود اگر total_gb <= 0 یا بسیار بزرگ باشد
+    # نمایش نامحدود اگر total_gb <= 0 یا خیلی بزرگ باشد
     unlimited = (total_gb <= 0.0) or (total_gb >= float(UNLIMITED_DISPLAY_THRESHOLD_GB))
 
     is_active = not (
@@ -297,7 +278,6 @@ def create_service_info_caption(
             f"(باقی: {_fmt_num(remaining_gb)} گیگ)"
         )
 
-    # روزها و تاریخ (اعداد لاتین)
     package_days = int(user_data.get('package_days', 0) or 0)
     expire_str = expire_jalali or "نامشخص"
     days_left_str = _fmt_num(days_left)
