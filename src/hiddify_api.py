@@ -79,40 +79,53 @@ async def _make_request(method: str, url: str, **kwargs) -> Optional[Dict[str, A
     return None
 
 
+def _compensate_days(days: int) -> int:
+    """
+    جبران خطای محاسبه روز در پنل.
+    اگر پلن 30 روزه باشد، 32 روز ارسال می‌کنیم تا خروجی 30 روز شود.
+    """
+    if days == 30:
+        return 32
+    return days
+
+
 async def create_hiddify_user(
     plan_days: int,
     plan_gb: float,
     user_telegram_id: str,
     custom_name: str = "",
 ) -> Optional[Dict[str, Any]]:
+    
     endpoint = _get_base_url() + "user/"
     random_suffix = uuid.uuid4().hex[:4]
     base_name = custom_name if custom_name else f"tg-{user_telegram_id.split(':')[-1]}"
     unique_user_name = f"{base_name}-{random_suffix}"
 
-    try:
-        usage_limit_gb = float(plan_gb)
-    except Exception:
-        usage_limit_gb = 0.0
-
-    # ارسال مقادیر دقیق پلن بدون جبران خطا
-    payload = {
+    # مرحله ۱: ساخت کاربر با حداقل اطلاعات
+    payload_create = {
         "name": unique_user_name,
-        "package_days": int(plan_days),
-        "usage_limit_GB": usage_limit_gb,
         "comment": user_telegram_id,
-        "current_usage_GB": 0,
     }
 
-    data = await _make_request("post", endpoint, json=payload)
+    data = await _make_request("post", endpoint, json=payload_create)
     if not data or not data.get("uuid"):
-        logger.error("create_hiddify_user: failed or UUID missing (check PANEL_DOMAIN/ADMIN_PATH/API_KEY)")
+        logger.error("create_hiddify_user (step 1 - POST): failed or UUID missing")
         return None
 
     user_uuid = data.get("uuid")
-    sub_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
     
+    # مرحله ۲: بلافاصله کاربر ساخته شده را با پلن صحیح آپدیت (تمدید) می‌کنیم
+    logger.info("User %s created. Now applying plan details via PATCH...", user_uuid)
+    update_success = await renew_user_subscription(user_uuid, plan_days, plan_gb)
+    
+    if not update_success:
+        logger.error("create_hiddify_user (step 2 - PATCH): Failed to apply plan details to user %s. Deleting user.", user_uuid)
+        await delete_user_from_panel(user_uuid) # اگر آپدیت شکست خورد، کاربر را پاک کن
+        return None
+
+    sub_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
     client_secret = str(PANEL_SECRET_UUID or "").strip().strip("/")
+    
     if not client_secret:
         logger.error("PANEL_SECRET_UUID is not set in config.py! Subscription links will be incorrect.")
         sub_path = str(SUB_PATH or "sub").strip().strip("/")
@@ -141,9 +154,9 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
         logger.error("Renew failed: user with UUID %s not found in panel.", user_uuid)
         return None
 
-    # ارسال مقادیر دقیق پلن بدون جبران خطا
+    compensated_days = _compensate_days(int(plan_days))
     payload = {
-        "package_days": int(plan_days),
+        "package_days": compensated_days,
         "usage_limit_GB": usage_limit_gb,
         "current_usage_GB": 0,
     }
