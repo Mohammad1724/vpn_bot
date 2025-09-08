@@ -4,28 +4,15 @@ import io
 import sqlite3
 import random
 import logging
-from typing import Union, Optional, Tuple, Dict, Any, List
+from typing import Union, Optional, Tuple, Dict, Any
 from datetime import datetime, timedelta, timezone
 import math
 import re
+from urllib.parse import quote_plus
 
 import qrcode
 import database as db
-
-# Safe config import with defaults
-try:
-    import config as _cfg
-except Exception:
-    class _Cfg: pass
-    _cfg = _Cfg()
-
-PANEL_ENABLED = getattr(_cfg, "PANEL_ENABLED", False)
-PANEL_DOMAIN = getattr(_cfg, "PANEL_DOMAIN", "")
-ADMIN_PATH = getattr(_cfg, "ADMIN_PATH", "")
-SUB_PATH = getattr(_cfg, "SUB_PATH", "sub")
-PANEL_SECRET_UUID = getattr(_cfg, "PANEL_SECRET_UUID", "")
-SUB_DOMAINS = getattr(_cfg, "SUB_DOMAINS", [])
-SUBCONVERTER_DEFAULT_TARGET = getattr(_cfg, "SUBCONVERTER_DEFAULT_TARGET", "v2ray")
+from config import PANEL_DOMAIN, SUB_DOMAINS, PANEL_SECRET_UUID, SUB_PATH
 
 try:
     import jdatetime
@@ -35,7 +22,6 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 _PERSIAN_DIGIT_MAP = str.maketrans("0123456789,-", "۰۱۲۳۴۵۶۷۸۹،-")
-LOCAL_SUB_BASE = "https://local.service/sub"
 
 
 def to_persian_digits(s: str) -> str:
@@ -87,61 +73,27 @@ def parse_date_flexible(date_str: str) -> Union[datetime, None]:
     return None
 
 
-def normalize_link_type(t: str) -> str:
-    return (t or "sub").strip().lower().replace("clash-meta", "clashmeta")
-
-
-def link_type_to_subconverter_target(link_type: str) -> str:
-    lt = normalize_link_type(link_type)
-    if lt in ("sub", "sub64"):
-        return "v2ray"
-    if lt == "auto":
-        return (SUBCONVERTER_DEFAULT_TARGET or "v2ray").strip().lower()
-    if lt in ("xray", "singbox", "clash", "clashmeta"):
-        return lt
-    if lt == "unified":
-        return (SUBCONVERTER_DEFAULT_TARGET or "v2ray").strip().lower()
-    return "v2ray"
-
-
 def _clean_path(seg: Optional[str]) -> str:
     return (seg or "").strip().strip("/")
 
 
-def _client_base_path() -> str:
-    p = _clean_path(SUB_PATH) or "sub"
-    s = _clean_path(PANEL_SECRET_UUID)
-    if not s:
-        return p
-    parts = [seg.strip().lower() for seg in p.split("/") if seg.strip()]
-    if s.lower() in parts:
-        return p
-    return f"{p}/{s}" if p else f"sub/{s}"
-
-
 def build_subscription_url(user_uuid: str) -> str:
     """
-    ساخت لینک اشتراک:
-      - اگر پنل خاموش باشد: لینک محلی
-      - اگر پنل روشن باشد: https://<subdomain-or-panel>/<client_base_path>/<uuid>/
+    ساخت لینک اشتراک پایه با ساختار صحیح Hiddify.
+    خروجی: https://<domain>/<client_secret>/<uuid>/sub/
     """
-    if not PANEL_ENABLED:
-        return f"{LOCAL_SUB_BASE}/{user_uuid}/"
-    base_path = _client_base_path()
-    domain = (random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN) or PANEL_DOMAIN
-    return f"https://{domain}/{base_path}/{user_uuid}/"
+    domain = (random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN)
+    client_secret = _clean_path(PANEL_SECRET_UUID)
+    
+    if not client_secret:
+        logger.warning("PANEL_SECRET_UUID is not set in config.py! Subscription links will be incorrect.")
+        sub_path = _clean_path(SUB_PATH) or "sub"
+        return f"https://{domain}/{sub_path}/{user_uuid}/"
 
-
-def _sanitize_sublink(url: str) -> str:
-    if not isinstance(url, str) or not url.strip():
-        return url
-    u = url.strip()
-    admin, sub = _clean_path(ADMIN_PATH), (_clean_path(SUB_PATH) or "sub")
-    return u.replace(f"/{admin}/", f"/{sub}/")
+    return f"https://{domain}/{client_secret}/{user_uuid}/sub/"
 
 
 def make_qr_bytes(data: str) -> io.BytesIO:
-    import qrcode
     img = qrcode.make(data)
     bio = io.BytesIO()
     bio.name = "qr.png"
@@ -214,11 +166,10 @@ def create_service_info_caption(
     else:
         sub_url = build_subscription_url(user_data['uuid'])
 
-    sub_url = _sanitize_sublink(sub_url or "")
     traffic_line = (
-        "حجم: نامحدود | مصرف: {}GB".format(used_gb)
+        f"حجم: نامحدود | مصرف: {used_gb}GB"
         if unlimited
-        else "حجم: {}/{}GB (باقی: {}GB)".format(used_gb, total_gb, round(max(total_gb - used_gb, 0.0), 2))
+        else f"حجم: {used_gb}/{total_gb}GB (باقی: {round(max(total_gb - used_gb, 0.0), 2)}GB)"
     )
 
     return (
@@ -243,8 +194,8 @@ def get_service_status(hiddify_info: dict) -> Tuple[str, str, bool]:
         is_expired = True
 
     expire_ts = hiddify_info.get('expire')
-    if isinstance(expire_ts, (int, float)) and expire_ts > 0:
-        expiry_dt_utc = datetime.fromtimestamp(expire_ts, tz=timezone.utc)
+    if isinstance(expire_ts, (int, float)) and exp_ts > 0:
+        expiry_dt_utc = datetime.fromtimestamp(exp_ts, tz=timezone.utc)
     else:
         start_date_str = next((hiddify_info.get(k) for k in ['start_date', 'last_reset_time', 'created_at'] if hiddify_info.get(k)), None)
         package_days = hiddify_info.get('package_days', 0)
