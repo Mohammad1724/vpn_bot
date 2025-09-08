@@ -18,11 +18,12 @@ try:
 except ImportError:
     PANEL_DOMAIN, SUB_DOMAINS, PANEL_SECRET_UUID, SUB_PATH = "", [], "", "sub"
 
-# نمایش نامحدود هنگام استفاده از سقف حجمی بزرگ در پنل (مثلاً 1000GB)
+# اگر در پنل برای نامحدود از سقف بزرگ (مثل 1000GB) استفاده می‌کنید،
+# با این آستانه نمایش را «نامحدود» نشان می‌دهیم.
 try:
     from config import UNLIMITED_DISPLAY_THRESHOLD_GB
 except Exception:
-    UNLIMITED_DISPLAY_THRESHOLD_GB = 900.0  # اگر total_gb >= این مقدار باشد، «نامحدود» نمایش می‌دهیم
+    UNLIMITED_DISPLAY_THRESHOLD_GB = 900.0
 
 try:
     import jdatetime
@@ -31,7 +32,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# نگاشت ارقام لاتین به فارسی (ممکن است در بخش‌های دیگر ربات استفاده شود)
+# نگاشت ارقام لاتین به فارسی (برای بخش‌هایی از ربات که نیاز دارند)
 _PERSIAN_DIGIT_MAP = str.maketrans("0123456789,-", "۰۱۲۳۴۵۶۷۸۹،-")
 
 
@@ -256,7 +257,7 @@ def _format_expiry_and_days(user_data: dict, service_db_record: Optional[dict] =
 def create_service_info_caption(
     user_data: dict,
     service_db_record: Optional[dict] = None,
-    title: str = "🎉 سرویس شما!",
+    title: Optional[str] = None,   # اگر None باشد، به‌صورت «سرویس فعال/غیرفعال» نمایش می‌دهیم
     override_sub_url: Optional[str] = None
 ) -> str:
     # فرمت عدد گیگابایت: بدون نمای علمی، نزدیک صفر=0، اگر تقریباً صحیح بود بدون اعشار، در غیر این صورت تا دو اعشار
@@ -285,10 +286,8 @@ def create_service_info_caption(
             t = max(0.0, float(total))
         except Exception:
             u, t = 0.0, 0.0
-
         if t <= 0.0:
             return ("", 0)  # برای نامحدود نوار نشان نمی‌دهیم
-
         ratio = min(1.0, u / t)
         percent = int(round(ratio * 100))
         filled = int(round(ratio * blocks))
@@ -296,6 +295,7 @@ def create_service_info_caption(
         bar = "▰" * filled + "▱" * (blocks - filled)
         return (bar, percent)
 
+    # محاسبات زمان/روز
     try:
         expire_jalali, days_left = _format_expiry_and_days(user_data, service_db_record)
     except TypeError:
@@ -325,13 +325,18 @@ def create_service_info_caption(
     else:
         sub_url = build_subscription_url(user_data['uuid'])
 
+    # عنوان: اگر title داده نشده، با وضعیت فعلی پر می‌شود
+    if title and str(title).strip():
+        title_text = str(title).strip()
+    else:
+        # طبق خواسته شما: فقط «سرویس فعال/غیرفعال»
+        title_text = f"سرویس {'فعال' if is_active else 'غیرفعال'}"
+
     # ترافیک و نوار
     if unlimited:
         traffic_top = f"📦 ترافیک: نامحدود • مصرف: {_fmt_gb(used_gb)} GB"
-        bar, percent = ("", 0)
         bar_line = ""
     else:
-        remaining_gb = max(total_gb - used_gb, 0.0)
         bar, percent = _progress_bar(used_gb, total_gb)
         traffic_top = f"📦 ترافیک: {_fmt_gb(used_gb)}/{_fmt_gb(total_gb)} GB"
         bar_line = f"{bar} {percent}%\n" if bar else ""
@@ -339,11 +344,10 @@ def create_service_info_caption(
     package_days = int(user_data.get('package_days', 0) or 0)
     expire_str = expire_jalali or "نامشخص"
     days_left_str = _fmt_num(days_left)
-    package_days_str = _fmt_num(package_days)
 
     # متن مینیمال و خوش‌خوان
     caption = (
-        "🎉 سرویس شما فعال شد\n\n"
+        f"{title_text}\n\n"
         f"🆔 {service_name}\n"
         f"⏳ {days_left_str} روز | 📅 تا {expire_str}\n\n"
         f"{traffic_top}\n"
