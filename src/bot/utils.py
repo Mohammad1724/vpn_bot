@@ -1,6 +1,3 @@
-# filename: bot/utils.py
-# (کل فایل - اصلاح شده)
-
 import io
 import sqlite3
 import random
@@ -69,8 +66,12 @@ def parse_date_flexible(date_str: str) -> Union[datetime, None]:
     if re.match(r"^\d+$", s):
         try:
             ts = int(s)
+            # بازهٔ معقول یونیکس‌تایم به ثانیه
             if 946684800 <= ts <= 2145916800:
                 return datetime.fromtimestamp(ts, tz=timezone.utc).astimezone()
+            # اگر میلی‌ثانیه بود
+            if ts > 1_000_000_000_000:
+                return datetime.fromtimestamp(ts / 1000.0, tz=timezone.utc).astimezone()
         except (ValueError, OverflowError):
             pass
     logger.error(f"Date parse failed for '{date_str}'.")
@@ -106,11 +107,11 @@ def make_qr_bytes(data: str) -> io.BytesIO:
     return bio
 
 
-def _panel_expiry_from_info(user_data: dict) -> Optional[datetime]:
-    if not isinstance(user_data, dict):
-        return None
-
-    # 1) اگر expire وجود داشت (ثانیه یا میلی‌ثانیه) از آن استفاده کن
+def _get_panel_expire_dt(user_data: dict) -> Optional[datetime]:
+    """
+    فقط اگر فیلد expire وجود داشته باشد و معتبر باشد، تاریخ انقضا را از آن می‌سازد.
+    (به ثانیه یا میلی‌ثانیه)
+    """
     expire_ts = user_data.get("expire")
     if isinstance(expire_ts, (int, float, str)):
         try:
@@ -120,16 +121,28 @@ def _panel_expiry_from_info(user_data: dict) -> Optional[datetime]:
                 val = val / 1000.0
             return datetime.fromtimestamp(val, tz=timezone.utc)
         except Exception:
-            pass
+            return None
+    return None
 
-    # 2) در غیر این صورت از جدیدترین زمان بین last_reset_time و start_date (و حتی created_at) استفاده کن
-    days_raw = user_data.get("package_days")
-    try:
-        days = int(days_raw) if days_raw is not None else 0
-    except Exception:
-        days = 0
-    if days <= 0:
-        return None
+
+def _pick_start_dt(user_data: dict, service_db_record: Optional[dict], now: datetime) -> Optional[datetime]:
+    """
+    انتخاب بهترین تاریخ شروع برای محاسبه انقضا/روزهای باقیمانده:
+    - اگر created_at در DB وجود داشته باشد و سرویس «تازه» باشد (<= 36 ساعت)، همان را مبنا می‌گیریم.
+    - در غیر این صورت، از جدیدترین مقدار بین last_reset_time، start_date، created_at/create_time (از پنل) استفاده می‌کنیم.
+    - اگر هیچکدام نبود، None.
+    """
+    created_at_db = None
+    if service_db_record:
+        ca = service_db_record.get("created_at") or service_db_record.get("create_time")
+        if ca:
+            created_at_db = parse_date_flexible(ca)
+
+    fresh_hours = 36
+    is_fresh = created_at_db is not None and 0 <= (now - created_at_db).total_seconds() <= fresh_hours * 3600
+
+    if is_fresh:
+        return created_at_db
 
     candidates = []
     for key in ("last_reset_time", "start_date", "created_at", "create_time"):
@@ -139,32 +152,86 @@ def _panel_expiry_from_info(user_data: dict) -> Optional[datetime]:
             if dt:
                 candidates.append(dt)
 
-    # اگر هیچ تاریخی نبود، برنمی‌گردیم (تابع بالادستی صفر نمایش می‌دهد)
+    # اگر تاریخ‌های پنل در آینده بودند، کنار بگذار
+    candidates = [dt for dt in candidates if dt <= now + timedelta(hours=2)]
+
     if not candidates:
-        return None
+        return created_at_db  # شاید created_at_db داریم ولی تازه نیست
 
-    start_dt = max(candidates)  # جدیدترین تاریخ را مبنا بگیر
-    return start_dt + timedelta(days=days)
+    return max(candidates)
 
 
-def _format_expiry_and_days(user_data: dict) -> Tuple[str, int]:
-    expire_dt = _panel_expiry_from_info(user_data)
-    now = datetime.now(timezone.utc)
+def _format_expiry_and_days(user_data: dict, service_db_record: Optional[dict] = None) -> Tuple[str, int]:
+    """
+    محاسبه تاریخ نمایش و روزهای باقیمانده با رویکرد مقاوم:
+    - اگر expire معتبر از پنل داریم و عدد معقولی می‌دهد، همان مبناست.
+    - اگر سرویس تازه ساخته شده و عدد روزهای باقیمانده از پنل کمتر از مدت پلن بود،
+      از created_at دیتابیس برای شروع استفاده می‌کنیم تا بلافاصله پس از خرید، باقیمانده=مدت پلن شود.
+    - در غیر این صورت از جدیدترین start/last_reset در پنل استفاده می‌کنیم.
+    """
+    now_utc = datetime.now(timezone.utc)
+    package_days_raw = user_data.get("package_days", 0)
+    try:
+        package_days = int(package_days_raw or 0)
+    except Exception:
+        package_days = 0
 
-    expire_jalali, days_left = "نامشخص", 0
+    # گزینه 1: expire مستقیم از پنل
+    expire_dt = _get_panel_expire_dt(user_data)
+    days_left_via_expire = None
+    if expire_dt:
+        if expire_dt > now_utc:
+            days_left_via_expire = math.ceil((expire_dt - now_utc).total_seconds() / (24 * 3600))
+        else:
+            days_left_via_expire = 0
 
+    # اگر سرویس تازه است و باقیمانده پنل به‌وضوح کمتر از مدت پلن است، از created_at استفاده کن
+    start_dt_candidate = _pick_start_dt(user_data, service_db_record, now_utc)
+    if package_days > 0 and start_dt_candidate:
+        alt_expire_dt = start_dt_candidate.astimezone(timezone.utc) + timedelta(days=package_days)
+        alt_days_left = max(0, math.ceil((alt_expire_dt - now_utc).total_seconds() / (24 * 3600)))
+
+        use_alt = False
+        # معیار انتخاب جایگزین:
+        # - اگر days_left_via_expire وجود ندارد
+        # - یا اگر سرویس تازه (بر اساس created_at DB) بوده و اختلاف قابل‌توجه است (کمتر از مدت-2)
+        # - یا اگر عدد پنل غیرمنطقی باشد (منفی/بیش از مدت پلن + 2)
+        created_at_db = None
+        if service_db_record:
+            ca = service_db_record.get("created_at") or service_db_record.get("create_time")
+            if ca:
+                created_at_db = parse_date_flexible(ca)
+        is_fresh = created_at_db is not None and 0 <= (now_utc - created_at_db.astimezone(timezone.utc)).total_seconds() <= 36 * 3600
+
+        if days_left_via_expire is None:
+            use_alt = True
+        elif is_fresh and (days_left_via_expire < max(0, package_days - 2)):
+            use_alt = True
+        elif days_left_via_expire > package_days + 2:
+            use_alt = True
+
+        if use_alt:
+            expire_dt = alt_expire_dt
+            days_left_via_expire = alt_days_left
+
+    # اگر هنوز تاریخ نداریم ولی package_days>0 داریم، از now به‌عنوان شروع استفاده کن
+    if not expire_dt and package_days > 0:
+        expire_dt = now_utc + timedelta(days=package_days)
+        days_left_via_expire = package_days
+
+    # تبدیل تاریخ برای نمایش
+    expire_jalali = "نامشخص"
     if expire_dt:
         expire_local = expire_dt.astimezone()
         try:
-            expire_jalali = jdatetime.date.fromgregorian(date=expire_local.date()).strftime('%Y/%m/%d') if jdatetime else expire_local.strftime("%Y-%m-%d")
+            expire_jalali = (
+                jdatetime.date.fromgregorian(date=expire_local.date()).strftime('%Y/%m/%d')
+                if jdatetime else expire_local.strftime("%Y-%m-%d")
+            )
         except Exception:
             expire_jalali = expire_local.strftime("%Y-%m-%d")
 
-        if expire_dt > now:
-            time_left = expire_dt - now
-            days_left = math.ceil(time_left.total_seconds() / (24 * 3600))
-
-    return expire_jalali, days_left
+    return expire_jalali, int(days_left_via_expire or 0)
 
 
 def create_service_info_caption(
@@ -177,7 +244,7 @@ def create_service_info_caption(
     total_gb = round(float(user_data.get('usage_limit_GB', 0.0)), 2)
     unlimited = (total_gb <= 0.0)
 
-    expire_jalali, days_left = _format_expiry_and_days(user_data)
+    expire_jalali, days_left = _format_expiry_and_days(user_data, service_db_record)
     is_active = not (
         user_data.get('status') in ('disabled', 'limited')
         or days_left <= 0
@@ -215,7 +282,7 @@ def create_service_info_caption(
 
 
 def get_service_status(hiddify_info: dict) -> Tuple[str, str, bool]:
-    expire_jalali, days_left = _format_expiry_and_days(hiddify_info)
+    expire_jalali, days_left = _format_expiry_and_days(hiddify_info, None)
     is_expired = days_left <= 0
     if hiddify_info.get('status') in ('disabled', 'limited'):
         is_expired = True
