@@ -44,9 +44,42 @@ VERIFICATION_RETRIES = 5
 VERIFICATION_DELAY = 1.0
 
 
+def _normalize_host(host: str) -> str:
+    """
+    نرمال‌سازی دامنه برای ساخت URL پایه API:
+      - اگر scheme نداشت، https:// اضافه می‌شود
+      - اسلش پایانی حذف می‌شود
+    """
+    h = (host or "").strip()
+    if not h:
+        return ""
+    if h.startswith("http://") or h.startswith("https://"):
+        base = h
+    else:
+        base = "https://" + h
+    return base.rstrip("/")
+
+
 def _get_base_url() -> str:
+    """
+    URL پایه‌ی API را امن می‌سازد. اگر PANEL_DOMAIN خالی باشد،
+    از SUB_DOMAINS[0] استفاده می‌کند. در بدترین حالت به https://localhost می‌افتد.
+    خروجی نمونه: https://panel.example.com/admin/api/v2/admin/
+    """
+    base = _normalize_host(PANEL_DOMAIN)
+    if not base:
+        alt = _normalize_host((SUB_DOMAINS[0] if SUB_DOMAINS else ""))
+        if alt:
+            logger.warning("PANEL_DOMAIN is empty; falling back to %s for API base URL", alt)
+            base = alt
+        else:
+            base = "https://localhost"
+            logger.error("PANEL_DOMAIN and SUB_DOMAINS are empty. Using %s as API base URL placeholder.", base)
+
     clean_admin = str(ADMIN_PATH or "").strip().strip("/")
-    return f"https://{PANEL_DOMAIN}/{clean_admin}/api/v2/admin/"
+    if clean_admin:
+        return f"{base}/{clean_admin}/api/v2/admin/"
+    return f"{base}/api/v2/admin/"
 
 
 def _get_api_headers() -> dict:
