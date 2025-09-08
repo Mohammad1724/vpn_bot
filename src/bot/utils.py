@@ -12,7 +12,11 @@ from urllib.parse import quote_plus
 
 import qrcode
 import database as db
-from config import PANEL_DOMAIN, SUB_DOMAINS, PANEL_SECRET_UUID, SUB_PATH
+
+try:
+    from config import PANEL_DOMAIN, SUB_DOMAINS, PANEL_SECRET_UUID, SUB_PATH
+except ImportError:
+    PANEL_DOMAIN, SUB_DOMAINS, PANEL_SECRET_UUID, SUB_PATH = "", [], "", "sub"
 
 try:
     import jdatetime
@@ -71,6 +75,14 @@ def parse_date_flexible(date_str: str) -> Union[datetime, None]:
             pass
     logger.error(f"Date parse failed for '{date_str}'.")
     return None
+
+
+def normalize_link_type(t: str) -> str:
+    """
+    این تابع گم شده بود.
+    نوع لینک را به یک مقدار استاندارد تبدیل می‌کند.
+    """
+    return (t or "sub").strip().lower().replace("clash-meta", "clashmeta")
 
 
 def _clean_path(seg: Optional[str]) -> str:
