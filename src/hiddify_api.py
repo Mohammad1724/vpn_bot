@@ -7,6 +7,7 @@ import uuid
 import random
 import logging
 from typing import Optional, Dict, Any
+from datetime import datetime
 
 try:
     from config import PANEL_DOMAIN, ADMIN_PATH, API_KEY, SUB_DOMAINS, SUB_PATH, PANEL_SECRET_UUID, HIDDIFY_API_VERIFY_SSL
@@ -122,16 +123,68 @@ async def get_user_info(user_uuid: str) -> Optional[Dict[str, Any]]:
 
 async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float) -> Optional[Dict[str, Any]]:
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
+    
     try:
         usage_limit_gb = float(plan_gb)
     except Exception:
         usage_limit_gb = 0.0
 
+    # اطلاعات فعلی کاربر را برای مقایسه می‌گیریم
+    before_info = await get_user_info(user_uuid)
+    if not before_info:
+        logger.error("Renew failed: could not get user info before renewal for UUID %s", user_uuid)
+        return None
+
     payload = {
         "package_days": int(plan_days),
         "usage_limit_GB": usage_limit_gb,
+        # ریست کردن مصرف و تاریخ شروع برای اطمینان
+        "start_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "current_usage_GB": 0,
     }
-    return await _make_request("patch", endpoint, json=payload)
+
+    # ارسال درخواست تمدید
+    response = await _make_request("patch", endpoint, json=payload)
+    if response is None:
+        logger.error("Renew PATCH request failed for UUID %s", user_uuid)
+        return None
+    
+    # تاخیر کوتاه برای اینکه پنل فرصت پردازش داشته باشد
+    await asyncio.sleep(2)
+
+    # اطلاعات جدید را برای تایید می‌خوانیم
+    after_info = await get_user_info(user_uuid)
+    if not after_info:
+        logger.error("Renew verification failed: could not get user info after renewal for UUID %s", user_uuid)
+        return None
+
+    # بررسی اینکه آیا تمدید واقعا اعمال شده
+    # ۱. آیا مصرف صفر شده؟
+    # ۲. آیا package_days یا usage_limit_GB آپدیت شده؟
+    after_usage = float(after_info.get("current_usage_GB", -1))
+    after_days = int(after_info.get("package_days", -1))
+    after_gb = float(after_info.get("usage_limit_GB", -1))
+
+    # برای حجم نامحدود (0)، فقط روزها را چک می‌کنیم
+    if usage_limit_gb == 0:
+        if after_usage < 0.1 and after_days == int(plan_days):
+            logger.info("Renewal for UUID %s verified successfully (unlimited plan).", user_uuid)
+            return after_info
+    # برای حجم محدود، همه موارد را چک می‌کنیم
+    else:
+        if after_usage < 0.1 and after_days == int(plan_days) and after_gb == usage_limit_gb:
+            logger.info("Renewal for UUID %s verified successfully (volume plan).", user_uuid)
+            return after_info
+    
+    logger.error(
+        "Renew verification failed for UUID %s. Before: %s, After: %s, Plan: %s days/%s GB",
+        user_uuid,
+        {"days": before_info.get("package_days"), "gb": before_info.get("usage_limit_GB"), "usage": before_info.get("current_usage_GB")},
+        {"days": after_days, "gb": after_gb, "usage": after_usage},
+        plan_days,
+        plan_gb,
+    )
+    return None
 
 
 async def delete_user_from_panel(user_uuid: str) -> bool:
