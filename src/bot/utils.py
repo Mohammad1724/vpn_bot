@@ -14,11 +14,11 @@ import qrcode
 import database as db
 
 try:
-    from config import PANEL_DOMAIN, SUB_DOMAINS, PANEL_SECRET_UUID, SUB_PATH, DEFAULT_ASN
+    from config import PANEL_DOMAIN, SUB_DOMAINS, PANEL_SECRET_UUID, SUB_PATH
 except ImportError:
-    PANEL_DOMAIN, SUB_DOMAINS, PANEL_SECRET_UUID, SUB_PATH, DEFAULT_ASN = "", [], "", "sub", "MCI"
+    PANEL_DOMAIN, SUB_DOMAINS, PANEL_SECRET_UUID, SUB_PATH = "", [], "", "sub"
 
-# نمایش «نامحدود» هنگام استفاده از سقف حجمی بزرگ (مثل 1000GB در پنل)
+# نمایش نامحدود هنگام استفاده از سقف حجمی بزرگ در پنل (مثلاً 1000GB)
 try:
     from config import UNLIMITED_DISPLAY_THRESHOLD_GB
 except Exception:
@@ -96,22 +96,30 @@ def _clean_path(seg: Optional[str]) -> str:
     return (seg or "").strip().strip("/")
 
 
+def _ensure_https_host(host: str) -> str:
+    h = (host or "").strip()
+    if h.startswith("http://"):
+        h = h[len("http://"):]
+    elif h.startswith("https://"):
+        h = h[len("https://"):]
+    return h
+
+
 def build_subscription_url(user_uuid: str) -> str:
     """
-    لینک ساب با الگوی:
-      - با secret: https://domain/{secret}/{uuid}/sub/?asn=...
-      - بدون secret: https://domain/{sub_path}/{uuid}/?asn=...
+    خروجی:
+      - با secret: https://{domain}/{secret}/{uuid}/sub/
+      - بدون secret: https://{domain}/{sub_path}/{uuid}/
     """
     domain = (random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN)
+    host = _ensure_https_host(domain)
     client_secret = _clean_path(PANEL_SECRET_UUID)
-    asn = (DEFAULT_ASN or "").strip()
-    qs = f"?asn={asn}" if asn else ""
 
     if client_secret:
-        return f"https://{domain}/{client_secret}/{user_uuid}/sub/{qs}"
+        return f"https://{host}/{client_secret}/{user_uuid}/sub/"
     else:
         sub_path = _clean_path(SUB_PATH) or "sub"
-        return f"https://{domain}/{sub_path}/{user_uuid}/{qs}"
+        return f"https://{host}/{sub_path}/{user_uuid}/"
 
 
 def make_qr_bytes(data: str) -> io.BytesIO:
@@ -119,8 +127,7 @@ def make_qr_bytes(data: str) -> io.BytesIO:
     bio = io.BytesIO()
     bio.name = "qr.png"
     img.save(bio, "PNG")
-    bio.seek(0
-             )
+    bio.seek(0)
     return bio
 
 
@@ -248,7 +255,7 @@ def create_service_info_caption(
     used_gb = float(user_data.get('current_usage_GB', 0.0) or 0)
     total_gb = float(user_data.get('usage_limit_GB', 0.0) or 0)
 
-    # نمایش نامحدود اگر total_gb <= 0 یا خیلی بزرگ باشد
+    # نامحدود اگر total_gb <= 0 یا خیلی بزرگ باشد
     unlimited = (total_gb <= 0.0) or (total_gb >= float(UNLIMITED_DISPLAY_THRESHOLD_GB))
 
     is_active = not (
@@ -264,7 +271,8 @@ def create_service_info_caption(
     if override_sub_url:
         sub_url = override_sub_url
     elif service_db_record and service_db_record.get('sub_link'):
-        sub_url = service_db_record.get('sub_link')
+        # ترجیح می‌دهیم لینک استاندارد بسازیم تا همیشه الگوی /sub/ داشته باشد
+        sub_url = build_subscription_url(user_data['uuid'])
     else:
         sub_url = build_subscription_url(user_data['uuid'])
 
