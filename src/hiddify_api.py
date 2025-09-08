@@ -1,5 +1,4 @@
-# filename: hiddify_api.py
-# (کل فایل - اصلاح شده)
+# -*- coding: utf-8 -*-
 
 import asyncio
 import httpx
@@ -15,10 +14,11 @@ except ImportError:
     PANEL_SECRET_UUID = ""
     HIDDIFY_API_VERIFY_SSL = True
 
+# مقدار نامحدود از تنظیمات (می‌تواند -1 یا 0 یا "null" یا "omit" باشد)
 try:
-    from config import DEFAULT_ASN
+    from config import HIDDIFY_UNLIMITED_VALUE
 except Exception:
-    DEFAULT_ASN = "MCI"
+    HIDDIFY_UNLIMITED_VALUE = 0  # پیش‌فرض: 0 (در برخی پنل‌ها نامحدود است)
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +43,42 @@ def _get_api_headers() -> dict:
 
 async def _make_client(timeout: float = 20.0) -> httpx.AsyncClient:
     return httpx.AsyncClient(timeout=timeout, verify=HIDDIFY_API_VERIFY_SSL, follow_redirects=True)
+
+
+def _normalize_unlimited_value(val):
+    """
+    HIDDIFY_UNLIMITED_VALUE می‌تواند یکی از حالت‌های زیر باشد:
+      - عددی (مثلاً -1 یا 0)
+      - "null" -> ارسال null
+      - "omit" -> اصلاً فیلد usage_limit_GB ارسال نشود
+    """
+    if isinstance(val, str):
+        s = val.strip().lower()
+        if s in ("omit", "skip", "remove"):
+            return "OMIT"
+        if s in ("null", "none"):
+            return None
+        try:
+            return float(val)
+        except Exception:
+            return 0.0
+    try:
+        return float(val)
+    except Exception:
+        return 0.0
+
+
+def _is_unlimited_value(x) -> bool:
+    """
+    تشخیص نامحدود بودن مقدار برگشتی پنل.
+    هر مقدار None یا <= 0 را نامحدود در نظر می‌گیریم تا سازگار با انواع پنل‌ها باشد.
+    """
+    if x is None:
+        return True
+    try:
+        return float(x) <= 0.0
+    except Exception:
+        return False
 
 
 async def _make_request(method: str, url: str, **kwargs) -> Optional[Dict[str, Any]]:
@@ -78,14 +114,6 @@ async def _make_request(method: str, url: str, **kwargs) -> Optional[Dict[str, A
             await asyncio.sleep(delay)
             delay *= 2
     return None
-
-
-def _compensate_days(days: int) -> int:
-    """
-    قبلاً برای 30 روز مقدار 32 برمی‌گرداند.
-    اکنون برای جلوگیری از خطا، مقدار ورودی بدون تغییر برگردانده می‌شود.
-    """
-    return int(days)
 
 
 async def create_hiddify_user(
@@ -139,27 +167,40 @@ async def get_user_info(user_uuid: str) -> Optional[Dict[str, Any]]:
 
 
 async def _apply_and_verify_plan(user_uuid: str, plan_days: int, plan_gb: float) -> Optional[Dict[str, Any]]:
+    """
+    اعمال پلن روی کاربر + تایید با چند تلاش.
+    نامحدود: طبق HIDDIFY_UNLIMITED_VALUE در config تنظیم می‌شود.
+    """
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
 
-    try:
+    # مقدار حجمی
+    usage_limit_gb: Optional[float]
+    unlimited_mode = False
+    if plan_gb is None or float(plan_gb) <= 0.0:
+        unlimited_mode = True
+        unl_val = _normalize_unlimited_value(HIDDIFY_UNLIMITED_VALUE)
+        # payload را می‌سازیم و اگر unl_val == "OMIT" بود، usage_limit_GB را نمی‌فرستیم
+        payload = {
+            "package_days": int(plan_days),
+            "current_usage_GB": 0,
+        }
+        if unl_val != "OMIT":
+            payload["usage_limit_GB"] = unl_val  # None یا عدد
+    else:
         usage_limit_gb = float(plan_gb)
-    except Exception:
-        usage_limit_gb = 0.0
-
-    # ارسال دقیق روزها (بدون جبران)
-    exact_days = int(plan_days)
-
-    payload = {
-        "package_days": exact_days,
-        "usage_limit_GB": usage_limit_gb,
-        "current_usage_GB": 0,
-    }
+        payload = {
+            "package_days": int(plan_days),
+            "usage_limit_GB": usage_limit_gb,
+            "current_usage_GB": 0,
+        }
 
     response = await _make_request("patch", endpoint, json=payload)
     if response is None or response.get("_not_found"):
         logger.error("Renew/update PATCH request failed for UUID %s", user_uuid)
         return None
 
+    # تایید
+    exact_days = int(plan_days)
     for attempt in range(VERIFICATION_RETRIES):
         await asyncio.sleep(VERIFICATION_DELAY)
         after_info = await get_user_info(user_uuid)
@@ -169,15 +210,29 @@ async def _apply_and_verify_plan(user_uuid: str, plan_days: int, plan_gb: float)
             continue
 
         after_days = int(after_info.get("package_days", -1))
-        after_gb = float(after_info.get("usage_limit_GB", -1))
+        after_gb_raw = after_info.get("usage_limit_GB", None)
 
-        if after_days == exact_days and after_gb == usage_limit_gb:
-            logger.info("Update for UUID %s verified successfully on attempt %d.", user_uuid, attempt + 1)
-            return after_info
+        if unlimited_mode:
+            # نامحدود: روزها دقیق باشد و usage_limit_GB نامحدود تلقی شود (None یا <=0)
+            if after_days == exact_days and _is_unlimited_value(after_gb_raw):
+                logger.info("Update (unlimited) for UUID %s verified on attempt %d.", user_uuid, attempt + 1)
+                return after_info
+        else:
+            try:
+                after_gb = float(after_gb_raw)
+            except Exception:
+                after_gb = None
+
+            if after_days == exact_days and after_gb is not None and abs(after_gb - usage_limit_gb) < 1e-6:
+                logger.info("Update for UUID %s verified successfully on attempt %d.", user_uuid, attempt + 1)
+                return after_info
 
         logger.warning(
             "Verification attempt %d for UUID %s failed. Expected (days:%s, gb:%s), Got (days:%s, gb:%s)",
-            attempt + 1, user_uuid, exact_days, usage_limit_gb, after_days, after_gb
+            attempt + 1, user_uuid,
+            exact_days,
+            "UNLIMITED" if unlimited_mode else usage_limit_gb,
+            after_days, after_gb_raw
         )
 
     logger.error("Verification failed for UUID %s after %d attempts.", user_uuid, VERIFICATION_RETRIES)
