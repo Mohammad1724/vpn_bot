@@ -1,3 +1,4 @@
+# hiddify_api.py
 # -*- coding: utf-8 -*-
 
 import asyncio
@@ -14,12 +15,22 @@ except ImportError:
     PANEL_SECRET_UUID = ""
     HIDDIFY_API_VERIFY_SSL = True
 
-# مقدار نامحدود از تنظیمات (می‌تواند -1 یا 0 یا "null" یا "omit" باشد)؛
-# اگر ندهید، کد به‌صورت خودکار همه روش‌ها را امتحان می‌کند.
+# استراتژی نامحدود و اندازه‌ی سقف حجمی بزرگ (قابل تنظیم از config)
+try:
+    from config import HIDDIFY_UNLIMITED_STRATEGY
+except Exception:
+    HIDDIFY_UNLIMITED_STRATEGY = "large_quota"  # "large_quota" یا "auto"
+
+try:
+    from config import HIDDIFY_UNLIMITED_LARGE_GB
+except Exception:
+    HIDDIFY_UNLIMITED_LARGE_GB = 1000.0
+
+# مقدار نامحدود قدیمی (برای حالت auto)
 try:
     from config import HIDDIFY_UNLIMITED_VALUE
 except Exception:
-    HIDDIFY_UNLIMITED_VALUE = None  # auto-try
+    HIDDIFY_UNLIMITED_VALUE = None  # auto detect
 
 logger = logging.getLogger(__name__)
 
@@ -48,10 +59,10 @@ async def _make_client(timeout: float = 20.0) -> httpx.AsyncClient:
 
 def _normalize_unlimited_value(val):
     """
-    HIDDIFY_UNLIMITED_VALUE می‌تواند:
+    برای حالت auto:
       - عددی (مثل -1 یا 0)
       - "null" -> ارسال null
-      - "omit" -> اصلاً usage_limit_GB ارسال نشود
+      - "omit" -> عدم ارسال usage_limit_GB
     """
     if val is None:
         return None
@@ -73,7 +84,7 @@ def _normalize_unlimited_value(val):
 
 def _is_unlimited_value(x) -> bool:
     """
-    هر مقدار None یا <= 0 را «نامحدود» در نظر می‌گیریم (سازگار با انواع پنل‌ها).
+    هر مقدار None یا <= 0 را «نامحدود» تلقی می‌کنیم.
     """
     if x is None:
         return True
@@ -175,18 +186,11 @@ async def get_user_info(user_uuid: str) -> Optional[Dict[str, Any]]:
 
 async def _try_set_unlimited(user_uuid: str, exact_days: int) -> Optional[Dict[str, Any]]:
     """
-    چند استراتژی مختلف را برای نامحدود کردن حجم امتحان می‌کند تا یکی جواب دهد:
-    1) usage_limit_GB = null
-    2) usage_limit_GB = 0
-    3) usage_limit_GB = -1
-    4) عدم ارسال usage_limit_GB (OMIT)
-    ترتیب، با توجه به HIDDIFY_UNLIMITED_VALUE سفارشی می‌شود.
+    حالت auto: چند استراتژی مختلف برای نامحدود واقعی.
     """
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
-
     pref = _normalize_unlimited_value(HIDDIFY_UNLIMITED_VALUE)
 
-    # لیست کاندیدها را با ترجیح کاربر بسازیم
     candidates = []
     if pref == "OMIT":
         candidates.append("OMIT")
@@ -195,7 +199,6 @@ async def _try_set_unlimited(user_uuid: str, exact_days: int) -> Optional[Dict[s
     elif isinstance(pref, (int, float)):
         candidates.append(float(pref))
 
-    # بقیه گزینه‌ها را هم اضافه کنیم (بدون تکرار)
     for c in [None, 0.0, -1.0, "OMIT"]:
         if c not in candidates:
             candidates.append(c)
@@ -203,7 +206,7 @@ async def _try_set_unlimited(user_uuid: str, exact_days: int) -> Optional[Dict[s
     for idx, cand in enumerate(candidates, start=1):
         payload = {"package_days": exact_days, "current_usage_GB": 0}
         if cand != "OMIT":
-            payload["usage_limit_GB"] = cand  # None یا عدد
+            payload["usage_limit_GB"] = cand
             show = "null" if cand is None else str(cand)
         else:
             show = "OMIT"
@@ -215,7 +218,6 @@ async def _try_set_unlimited(user_uuid: str, exact_days: int) -> Optional[Dict[s
             logger.warning("Unlimited strategy %s: PATCH failed (skipping).", show)
             continue
 
-        # تایید بعد از هر تلاش
         for attempt in range(VERIFICATION_RETRIES):
             await asyncio.sleep(VERIFICATION_DELAY)
             after_info = await get_user_info(user_uuid)
@@ -224,6 +226,7 @@ async def _try_set_unlimited(user_uuid: str, exact_days: int) -> Optional[Dict[s
 
             after_days = int(after_info.get("package_days", -1))
             after_gb_raw = after_info.get("usage_limit_GB", None)
+
             if after_days == exact_days and _is_unlimited_value(after_gb_raw):
                 logger.info("Unlimited strategy '%s' verified on attempt %d.", show, attempt + 1)
                 return after_info
@@ -234,20 +237,66 @@ async def _try_set_unlimited(user_uuid: str, exact_days: int) -> Optional[Dict[s
     return None
 
 
+async def _set_large_quota(user_uuid: str, exact_days: int, large_gb: float) -> Optional[Dict[str, Any]]:
+    """
+    نامحدود به‌صورت «سقف حجمی بزرگ» (مثلاً 1000GB).
+    """
+    endpoint = f"{_get_base_url()}user/{user_uuid}/"
+    large_gb = float(large_gb)
+    payload = {
+        "package_days": exact_days,
+        "usage_limit_GB": large_gb,
+        "current_usage_GB": 0,
+    }
+    resp = await _make_request("patch", endpoint, json=payload)
+    if resp is None or resp.get("_not_found"):
+        logger.error("Large-quota PATCH failed for UUID %s", user_uuid)
+        return None
+
+    for attempt in range(VERIFICATION_RETRIES):
+        await asyncio.sleep(VERIFICATION_DELAY)
+        after_info = await get_user_info(user_uuid)
+        if not after_info:
+            continue
+
+        after_days = int(after_info.get("package_days", -1))
+        after_gb_raw = after_info.get("usage_limit_GB", None)
+        try:
+            after_gb = float(after_gb_raw)
+        except Exception:
+            after_gb = None
+
+        # اگر پنل خودش unlimited کرد، یا دقیقاً large_gb ست شد، قبول
+        if after_days == exact_days and (
+            _is_unlimited_value(after_gb_raw) or (after_gb is not None and abs(after_gb - large_gb) < 1e-6)
+        ):
+            logger.info("Large-quota unlimited (%.0f GB) verified for UUID %s on attempt %d.", large_gb, user_uuid, attempt + 1)
+            return after_info
+
+    logger.error("Large-quota unlimited verification failed for UUID %s", user_uuid)
+    return None
+
+
 async def _apply_and_verify_plan(user_uuid: str, plan_days: int, plan_gb: float) -> Optional[Dict[str, Any]]:
     """
     اعمال پلن روی کاربر + تایید با چند تلاش.
-    برای نامحدود، چند استراتژی مختلف را امتحان می‌کنیم تا UI پنل هم «نامحدود» نشان دهد.
+    برای نامحدود:
+      - اگر HIDDIFY_UNLIMITED_STRATEGY == "auto": اول نامحدود واقعی را امتحان می‌کنیم، اگر نشد به large_quota می‌افتیم.
+      - اگر "large_quota": مستقیم large_quota را ست می‌کنیم.
     """
-    endpoint = f"{_get_base_url()}user/{user_uuid}/"
     exact_days = int(plan_days)
 
     # حالت نامحدود
     if plan_gb is None or float(plan_gb) <= 0.0:
-        info = await _try_set_unlimited(user_uuid, exact_days)
-        return info
+        if str(HIDDIFY_UNLIMITED_STRATEGY).lower() == "auto":
+            info = await _try_set_unlimited(user_uuid, exact_days)
+            if info:
+                return info
+        # fallback یا استراتژی اصلی: سقف بزرگ
+        return await _set_large_quota(user_uuid, exact_days, HIDDIFY_UNLIMITED_LARGE_GB)
 
     # حالت حجمی (غیر نامحدود)
+    endpoint = f"{_get_base_url()}user/{user_uuid}/"
     usage_limit_gb = float(plan_gb)
     payload = {
         "package_days": exact_days,
