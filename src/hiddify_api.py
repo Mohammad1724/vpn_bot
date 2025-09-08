@@ -1,3 +1,4 @@
+# filename: hiddify_api.py
 # -*- coding: utf-8 -*-
 
 import asyncio
@@ -8,13 +9,17 @@ import logging
 from typing import Optional, Dict, Any
 
 try:
-    from config import PANEL_DOMAIN, ADMIN_PATH, API_KEY, SUB_DOMAINS, SUB_PATH, PANEL_SECRET_UUID, HIDDIFY_API_VERIFY_SSL
+    from config import (
+        PANEL_DOMAIN, ADMIN_PATH, API_KEY, SUB_DOMAINS, SUB_PATH,
+        PANEL_SECRET_UUID, HIDDIFY_API_VERIFY_SSL, DEFAULT_ASN
+    )
 except ImportError:
-    from config import PANEL_DOMAIN, ADMIN_PATH, API_KEY, SUB_DOMAINS, SUB_PATH
+    PANEL_DOMAIN, ADMIN_PATH, API_KEY, SUB_DOMAINS, SUB_PATH = "", "", "", [], "sub"
     PANEL_SECRET_UUID = ""
     HIDDIFY_API_VERIFY_SSL = True
+    DEFAULT_ASN = "MCI"
 
-# استراتژی نامحدود و اندازه سقف حجمی (قابل تنظیم در config.py)
+# استراتژی نامحدود و سقف حجمی بزرگ (قابل تنظیم در config.py)
 try:
     from config import HIDDIFY_UNLIMITED_STRATEGY
 except Exception:
@@ -25,7 +30,7 @@ try:
 except Exception:
     HIDDIFY_UNLIMITED_LARGE_GB = 1000.0
 
-# برای حالت auto (نامحدود واقعی): -1 یا 0 یا "null" یا "omit" یا None (خودکار)
+# برای حالت auto (نامحدود واقعی): -1 یا 0 یا "null" یا "omit" یا None
 try:
     from config import HIDDIFY_UNLIMITED_VALUE
 except Exception:
@@ -58,10 +63,10 @@ async def _make_client(timeout: float = 20.0) -> httpx.AsyncClient:
 
 def _normalize_unlimited_value(val):
     """
-    HIDDIFY_UNLIMITED_VALUE می‌تواند:
+    HIDDIFY_UNLIMITED_VALUE:
       - عددی (مثل -1 یا 0)
       - "null" -> ارسال null
-      - "omit" -> اصلاً usage_limit_GB ارسال نشود
+      - "omit" -> عدم ارسال usage_limit_GB
       - None -> عدم ترجیح (auto)
     """
     if val is None:
@@ -83,9 +88,7 @@ def _normalize_unlimited_value(val):
 
 
 def _is_unlimited_value(x) -> bool:
-    """
-    هر مقدار None یا <= 0 را «نامحدود» در نظر می‌گیریم.
-    """
+    # هر مقدار None یا <=0 را نامحدود فرض می‌کنیم
     if x is None:
         return True
     try:
@@ -94,9 +97,8 @@ def _is_unlimited_value(x) -> bool:
         return False
 
 
-# برای سازگاری با buy.py
+# سازگاری با buy.py
 def _compensate_days(days: int) -> int:
-    # قبلاً 30 -> 32 بود؛ الان بدون تغییر.
     return int(days)
 
 
@@ -141,12 +143,12 @@ async def create_hiddify_user(
     user_telegram_id: str,
     custom_name: str = "",
     server_name: Optional[str] = None,
-    **kwargs,  # پذیرش پارامترهای اضافه بدون خطا
+    **kwargs,
 ) -> Optional[Dict[str, Any]]:
 
     endpoint = _get_base_url() + "user/"
 
-    # ساخت نام کاربر: custom_name > server_name > tg-id
+    # ساخت نام: custom_name > server_name > tg-id
     random_suffix = uuid.uuid4().hex[:4]
     tg_part = (user_telegram_id or "").split(":")[-1] or "user"
     if custom_name:
@@ -157,7 +159,7 @@ async def create_hiddify_user(
         base_name = f"tg-{tg_part}"
     unique_user_name = f"{base_name}-{random_suffix}"
 
-    # کامنت: اطلاعات تلگرام + برچسب سرور (در صورت وجود)
+    # کامنت: اطلاعات تلگرام + سرور
     comment = user_telegram_id or ""
     if server_name:
         safe_srv = str(server_name)[:32]
@@ -169,7 +171,6 @@ async def create_hiddify_user(
         "name": unique_user_name,
         "comment": comment,
     }
-
     data = await _make_request("post", endpoint, json=payload_create)
     if not data or not data.get("uuid"):
         logger.error("create_hiddify_user (step 1 - POST): failed or UUID missing")
@@ -186,36 +187,33 @@ async def create_hiddify_user(
         await delete_user_from_panel(user_uuid)
         return None
 
-    # ساخت لینک سابسکریپشن
+    # ساخت لینک با asn
     sub_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
     client_secret = str(PANEL_SECRET_UUID or "").strip().strip("/")
+    asn_qs = f"?asn={(DEFAULT_ASN or '').strip()}" if (DEFAULT_ASN or "").strip() else ""
 
     if not client_secret:
-        logger.error("PANEL_SECRET_UUID is not set in config.py! Subscription links will be incorrect.")
         sub_path = str(SUB_PATH or "sub").strip().strip("/")
-        full_link = f"https://{sub_domain}/{sub_path}/{user_uuid}/"
+        full_link = f"https://{sub_domain}/{sub_path}/{user_uuid}/{asn_qs}"
     else:
-        full_link = f"https://{sub_domain}/{client_secret}/{user_uuid}/sub/"
+        full_link = f"https://{sub_domain}/{client_secret}/{user_uuid}/sub/{asn_qs}"
 
     return {"full_link": full_link, "uuid": user_uuid, "name": unique_user_name}
 
 
 async def get_user_info(user_uuid: str, server_name: Optional[str] = None, **kwargs) -> Optional[Dict[str, Any]]:
-    """
-    server_name و سایر پارامترهای اضافی را برای سازگاری می‌پذیرد (نادیده گرفته می‌شوند).
-    """
+    # server_name و سایر پارامترها صرفاً برای سازگاری پذیرفته می‌شوند
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
     return await _make_request("get", endpoint)
 
 
 async def _try_set_unlimited(user_uuid: str, exact_days: int) -> Optional[Dict[str, Any]]:
     """
-    حالت auto: چند استراتژی مختلف را برای نامحدود واقعی امتحان می‌کنیم.
+    حالت auto: چند استراتژی مختلف برای نامحدود واقعی.
     """
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
     pref = _normalize_unlimited_value(HIDDIFY_UNLIMITED_VALUE)
 
-    # لیست کاندیدها با توجه به ترجیح کاربر
     candidates = []
     if pref == "OMIT":
         candidates.append("OMIT")
@@ -224,7 +222,6 @@ async def _try_set_unlimited(user_uuid: str, exact_days: int) -> Optional[Dict[s
     elif isinstance(pref, (int, float)):
         candidates.append(float(pref))
 
-    # سایر گزینه‌ها (بدون تکرار)
     for c in [None, 0.0, -1.0, "OMIT"]:
         if c not in candidates:
             candidates.append(c)
@@ -243,7 +240,6 @@ async def _try_set_unlimited(user_uuid: str, exact_days: int) -> Optional[Dict[s
             logger.warning("Unlimited strategy %s: PATCH failed (skipping).", show)
             continue
 
-        # تایید بعد از هر تلاش
         for attempt in range(VERIFICATION_RETRIES):
             await asyncio.sleep(VERIFICATION_DELAY)
             after_info = await get_user_info(user_uuid)
@@ -265,7 +261,7 @@ async def _try_set_unlimited(user_uuid: str, exact_days: int) -> Optional[Dict[s
 
 async def _set_large_quota(user_uuid: str, exact_days: int, large_gb: float) -> Optional[Dict[str, Any]]:
     """
-    نامحدود به‌صورت «سقف حجمی بزرگ» (مثلاً 1000GB).
+    نامحدود به‌صورت سقف حجمی بزرگ (مثلاً 1000GB).
     """
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
     large_gb = float(large_gb)
@@ -292,7 +288,6 @@ async def _set_large_quota(user_uuid: str, exact_days: int, large_gb: float) -> 
         except Exception:
             after_gb = None
 
-        # اگر پنل خودش نامحدود کرد، یا دقیقاً large_gb ست شد، قبول
         if after_days == exact_days and (
             _is_unlimited_value(after_gb_raw) or (after_gb is not None and abs(after_gb - large_gb) < 1e-6)
         ):
@@ -307,8 +302,8 @@ async def _apply_and_verify_plan(user_uuid: str, plan_days: int, plan_gb: float)
     """
     اعمال پلن + تایید چندباره.
     نامحدود:
-      - اگر HIDDIFY_UNLIMITED_STRATEGY == "auto": تلاش برای نامحدود واقعی؛ در صورت عدم موفقیت، large_quota.
-      - اگر "large_quota": مستقیم large_quota.
+      - اگر STRATEGY=auto: تلاش برای نامحدود واقعی؛ در صورت عدم موفقیت، large_quota.
+      - اگر STRATEGY=large_quota: مستقیم large_quota.
     """
     exact_days = int(plan_days)
 
