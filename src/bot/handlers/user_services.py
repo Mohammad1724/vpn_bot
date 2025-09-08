@@ -19,11 +19,10 @@ from bot import utils
 from bot.ui import nav_row, markup, chunk, btn, confirm_row
 
 try:
-    from config import ADMIN_ID, HIDDIFY_API_VERIFY_SSL, DEFAULT_ASN
+    from config import ADMIN_ID, HIDDIFY_API_VERIFY_SSL
 except ImportError:
     ADMIN_ID = None
     HIDDIFY_API_VERIFY_SSL = True
-    DEFAULT_ASN = "MCI"
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +109,7 @@ async def send_service_details(
         config_name = (info.get('name', 'config') if isinstance(info, dict) else 'config') or 'config'
         safe_name = quote_plus(config_name)
 
-        # لینک پایه با asn (از utils که scheme و asn را رعایت می‌کند)
+        # لینک استاندارد از utils (بدون asn)
         base_link = utils.build_subscription_url(service['sub_uuid'])
         preferred_url = f"{base_link.rstrip('/')}#{safe_name}"
 
@@ -197,20 +196,9 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     config_name = (info.get('name', 'config') if isinstance(info, dict) else 'config') or 'config'
     safe_name = quote_plus(config_name)
 
-    # لینک پایه: اول DB، در غیر این صورت از utils
-    base_link = (service.get('sub_link') or utils.build_subscription_url(user_uuid) or "").strip()
-
-    # 1) تضمین scheme (برای لینک‌های قدیمی ذخیره‌شده بدون https)
-    if base_link and not base_link.startswith(("http://", "https://")):
-        base_link = "https://" + base_link.lstrip("/")
-
-    # 2) تضمین پارامتر asn
-    if "asn=" not in base_link:
-        sep = "&" if "?" in base_link else "?"
-        base_link = base_link.rstrip("/") + f"{sep}asn={DEFAULT_ASN}"
-
-    # 3) ساخت مسیر پایه کاربر بدون /sub و بدون query/fragment
-    base_user_path = _strip_qf_and_sub(base_link)
+    # لینک استاندارد (بدون asn)
+    base_link = utils.build_subscription_url(user_uuid)     # .../sub/
+    base_user_path = _strip_qf_and_sub(base_link)           # .../uuid
 
     if link_type == "full":
         try:
@@ -232,10 +220,11 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if link_type == "sub":
+        # الگوی نهایی: .../sub/#Name
         final_link = f"{base_link.rstrip('/')}#{safe_name}"
     else:
-        # سایر لینک‌ها (Clash/SingBox/ClashMeta) + asn
-        final_link = f"{base_user_path}/{link_type}/?name={safe_name}&asn={DEFAULT_ASN}"
+        # سایر لینک‌ها: .../{link_type}/?name=Name
+        final_link = f"{base_user_path}/{link_type}/?name={safe_name}"
 
     qr_bio = utils.make_qr_bytes(final_link)
     caption = f"نام کانفیگ: **{config_name}**\nنوع لینک: **{_link_label(link_type)}**\n\n`{final_link}`"
@@ -433,27 +422,4 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
         db.finalize_renewal_transaction(txn_id, plan_id)
 
         if original_message:
-            await original_message.edit_text("✅ سرویس با موفقیت تمدید شد!")
-        await send_service_details(context, user_id, service_id, original_message=original_message, is_from_menu=True)
-
-    except Exception as e:
-        logger.error(f"Service renewal failed for UUID {service['sub_uuid']}: {e}", exc_info=True)
-        db.cancel_renewal_transaction(txn_id)
-        await _send_renewal_error(original_message, "❌ تمدید در پنل اعمال نشد. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.")
-    finally:
-        context.user_data.pop('renewal_service_id', None)
-        context.user_data.pop('renewal_plan_id', None)
-
-
-async def _send_renewal_error(message, error_text: str):
-    if message:
-        try:
-            await message.edit_text(error_text)
-        except Exception:
-            pass
-
-
-async def cancel_renewal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    q = update.callback_query
-    await q.answer()
-    await q.edit_message_text("عملیات تمدید لغو شد.")
+            await original_message.edit_text("✅ سرویس با موفقیت تمدید 
