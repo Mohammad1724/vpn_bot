@@ -1,4 +1,3 @@
-# filename: bot/utils.py
 # -*- coding: utf-8 -*-
 
 import io
@@ -55,13 +54,19 @@ def format_toman(amount: Union[int, float, str], persian_digits: bool = False) -
 
 
 def parse_date_flexible(date_str: Union[str, int, float]) -> Union[datetime, None]:
+    """
+    تبدیل ورودی تاریخ به datetime (local tz):
+    - timestamp ثانیه/میلی‌ثانیه
+    - ISO8601
+    - فرمت‌های رایج yyyy-mm-dd و ...
+    """
     if date_str is None or date_str == "":
         return None
 
     if isinstance(date_str, (int, float)) or (isinstance(date_str, str) and re.match(r"^\d+(\.\d+)?$", date_str.strip())):
         try:
             val = float(date_str)
-            if val > 1e12:
+            if val > 1e12:  # میلی‌ثانیه
                 val = val / 1000.0
             return datetime.fromtimestamp(val, tz=timezone.utc).astimezone()
         except Exception:
@@ -97,19 +102,23 @@ def _clean_path(seg: Optional[str]) -> str:
 
 
 def _ensure_https_host(host: str) -> str:
+    """
+    ورودی می‌تواند با یا بدون scheme باشد؛ خروجی فقط hostname (بدون http/https)
+    """
     h = (host or "").strip()
     if h.startswith("http://"):
         h = h[len("http://"):]
     elif h.startswith("https://"):
         h = h[len("https://"):]
-    return h
+    return h.strip("/")
 
 
 def build_subscription_url(user_uuid: str) -> str:
     """
-    خروجی:
+    خروجی استاندارد:
       - با secret: https://{domain}/{secret}/{uuid}/sub/
       - بدون secret: https://{domain}/{sub_path}/{uuid}/
+    (بدون پارامتر asn)
     """
     domain = (random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN)
     host = _ensure_https_host(domain)
@@ -235,17 +244,13 @@ def create_service_info_caption(
     title: str = "🎉 سرویس شما!",
     override_sub_url: Optional[str] = None
 ) -> str:
-    # اعداد لاتین
+    # اعداد لاتین برای پیام
     def _fmt_num(x: float) -> str:
         try:
             s = "{:g}".format(float(x))
         except Exception:
             s = str(x)
         return s
-
-    # جلوگیری از شکستن لینک در متن RTL
-    def _ltr(s: str) -> str:
-        return "\u2066" + s + "\u2069"
 
     try:
         expire_jalali, days_left = _format_expiry_and_days(user_data, service_db_record)
@@ -267,11 +272,11 @@ def create_service_info_caption(
 
     service_name = user_data.get('name') or user_data.get('uuid', 'N/A')
 
-    # لینک اشتراک
+    # لینک اشتراک استاندارد (بدون کنترل‌گرهای LTR/RTL)
     if override_sub_url:
         sub_url = override_sub_url
     elif service_db_record and service_db_record.get('sub_link'):
-        # ترجیح می‌دهیم لینک استاندارد بسازیم تا همیشه الگوی /sub/ داشته باشد
+        # برای یکنواختی، لینک استاندارد بسازیم
         sub_url = build_subscription_url(user_data['uuid'])
     else:
         sub_url = build_subscription_url(user_data['uuid'])
@@ -291,6 +296,7 @@ def create_service_info_caption(
     days_left_str = _fmt_num(days_left)
     package_days_str = _fmt_num(package_days)
 
+    # مهم: لینک را خالص می‌گذاریم تا کلاینت‌ها خطا نگیرند (بدون U+2066/U+2069)
     caption = (
         "━━━━━━━━━━━━━━━━\n"
         "🎉 سرویس شما فعال شد\n"
@@ -300,7 +306,7 @@ def create_service_info_caption(
         f"{traffic_line}\n"
         "━━━━━━━━━━━━━━━━\n"
         "📋 لینک اشتراک (برای کپی):\n"
-        f"`{_ltr(sub_url)}`"
+        f"`{sub_url}`"
     )
     return caption
 
