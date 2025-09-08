@@ -111,7 +111,8 @@ async def send_service_details(
 
         # لینک استاندارد از utils (بدون asn) مثل: https://domain/secret/uuid/sub/
         base_link = utils.build_subscription_url(service['sub_uuid'])
-        preferred_url = f"{base_link.rstrip('/')}#{safe_name}"
+        # باید قبل از # یک / باشد => .../sub/#Name
+        preferred_url = f"{base_link}#{safe_name}" if base_link.endswith('/') else f"{base_link}/#{safe_name}"
 
         caption = utils.create_service_info_caption(info, service_db_record=service, override_sub_url=preferred_url)
         keyboard_rows = [
@@ -220,8 +221,8 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if link_type == "sub":
-        # الگوی نهایی: .../sub/#Name
-        final_link = f"{base_link.rstrip('/')}#{safe_name}"
+        # الگوی نهایی: .../sub/#Name (اگر / پایانی نبود، اضافه می‌کنیم)
+        final_link = f"{base_link}#{safe_name}" if base_link.endswith('/') else f"{base_link}/#{safe_name}"
     else:
         # سایر لینک‌ها: .../{link_type}/?name=Name
         final_link = f"{base_user_path}/{link_type}/?name={safe_name}"
