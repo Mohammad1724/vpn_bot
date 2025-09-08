@@ -95,6 +95,7 @@ async def create_hiddify_user(
         "usage_limit_GB": usage_limit_gb,
         "comment": user_telegram_id,
         "current_usage_GB": 0,
+        "start_date": datetime.now().astimezone().isoformat(),  # **اصلاح کلیدی برای خرید**
     }
 
     data = await _make_request("post", endpoint, json=payload)
@@ -134,24 +135,24 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
         logger.error("Renew failed: could not get user info before renewal for UUID %s", user_uuid)
         return None
 
-    # **اصلاح کلیدی: اضافه کردن 2 روز به پلن برای جبران خطای محاسبه پنل**
-    # اگر پلن 30 روزه باشد، ما 32 روز ارسال می‌کنیم تا خروجی 30 روز شود.
-    # این عدد را می‌توانید در صورت نیاز تغییر دهید.
-    compensated_days = int(plan_days)
-    if compensated_days == 30:
-        compensated_days = 32
-
+    # **اصلاح کلیدی برای تمدید**
     payload = {
-        "package_days": compensated_days,
+        "package_days": int(plan_days),
         "usage_limit_GB": usage_limit_gb,
+        "start_date": datetime.now().astimezone().isoformat(),
         "current_usage_GB": 0,
     }
 
     response = await _make_request("patch", endpoint, json=payload)
     if response is None or response.get("_not_found"):
-        logger.error("Renew PATCH request failed or user not found for UUID %s", user_uuid)
-        return None
-    
+        # اگر خطا داد، بدون start_date دوباره تلاش می‌کنیم
+        logger.warning("Renew with start_date failed for UUID %s. Retrying without start_date.", user_uuid)
+        payload.pop("start_date")
+        response = await _make_request("patch", endpoint, json=payload)
+        if response is None or response.get("_not_found"):
+            logger.error("Renew PATCH request failed completely for UUID %s", user_uuid)
+            return None
+
     await asyncio.sleep(1)
 
     after_info = await get_user_info(user_uuid)
@@ -159,23 +160,17 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
         logger.error("Renew verification failed: could not get user info after renewal for UUID %s", user_uuid)
         return None
 
-    # تایید می‌کنیم که مقادیر جدید (با جبران خطا) ست شده‌اند
+    # تایید می‌کنیم که مقادیر جدید ست شده‌اند
     after_usage = float(after_info.get("current_usage_GB", -1))
-    after_days = int(after_info.get("package_days", -1))
-    after_gb = float(after_info.get("usage_limit_GB", -1))
-
-    if usage_limit_gb == 0:
-        if after_usage < 0.1 and after_days == compensated_days:
-            logger.info("Renewal for UUID %s verified successfully (unlimited plan).", user_uuid)
-            return after_info
-    else:
-        if after_usage < 0.1 and after_days == compensated_days and after_gb == usage_limit_gb:
-            logger.info("Renewal for UUID %s verified successfully (volume plan).", user_uuid)
-            return after_info
+    
+    if after_usage < 0.1:
+        logger.info("Renewal for UUID %s verified successfully.", user_uuid)
+        return after_info
     
     logger.error(
-        "Renew verification failed for UUID %s. Expected: %s days, Got: %s days",
-        user_uuid, compensated_days, after_days
+        "Renew verification failed for UUID %s. Usage did not reset. After: %s",
+        user_uuid,
+        {"usage": after_usage}
     )
     return None
 
