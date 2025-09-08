@@ -278,6 +278,24 @@ def create_service_info_caption(
         except Exception:
             return str(x)
 
+    # نوار پیشرفت مصرف (بر اساس مصرف‌شده)
+    def _progress_bar(used: float, total: float, blocks: int = 10) -> tuple[str, int]:
+        try:
+            u = max(0.0, float(used))
+            t = max(0.0, float(total))
+        except Exception:
+            u, t = 0.0, 0.0
+
+        if t <= 0.0:
+            return ("", 0)  # برای نامحدود نوار نشان نمی‌دهیم
+
+        ratio = min(1.0, u / t)
+        percent = int(round(ratio * 100))
+        filled = int(round(ratio * blocks))
+        filled = max(0, min(blocks, filled))
+        bar = "▰" * filled + "▱" * (blocks - filled)
+        return (bar, percent)
+
     try:
         expire_jalali, days_left = _format_expiry_and_days(user_data, service_db_record)
     except TypeError:
@@ -307,31 +325,31 @@ def create_service_info_caption(
     else:
         sub_url = build_subscription_url(user_data['uuid'])
 
-    # ترافیک
+    # ترافیک و نوار
     if unlimited:
-        traffic_line = f"📦 ترافیک: نامحدود • مصرف: {_fmt_gb(used_gb)} گیگ"
+        traffic_top = f"📦 ترافیک: نامحدود • مصرف: {_fmt_gb(used_gb)} GB"
+        bar, percent = ("", 0)
+        bar_line = ""
     else:
         remaining_gb = max(total_gb - used_gb, 0.0)
-        traffic_line = (
-            f"📦 ترافیک: {_fmt_gb(used_gb)}/{_fmt_gb(total_gb)} گیگ "
-            f"(باقی: {_fmt_gb(remaining_gb)} گیگ)"
-        )
+        bar, percent = _progress_bar(used_gb, total_gb)
+        traffic_top = f"📦 ترافیک: {_fmt_gb(used_gb)}/{_fmt_gb(total_gb)} GB"
+        bar_line = f"{bar} {percent}%\n" if bar else ""
 
     package_days = int(user_data.get('package_days', 0) or 0)
     expire_str = expire_jalali or "نامشخص"
     days_left_str = _fmt_num(days_left)
     package_days_str = _fmt_num(package_days)
 
+    # متن مینیمال و خوش‌خوان
     caption = (
-        "━━━━━━━━━━━━━━━━\n"
-        "🎉 سرویس شما فعال شد\n"
-        "━━━━━━━━━━━━━━━━\n"
-        f"🆔 {service_name} • {status_badge}\n"
-        f"⏳ {days_left_str}/{package_days_str} روز • 📅 {expire_str}\n"
-        f"{traffic_line}\n"
-        "━━━━━━━━━━━━━━━━\n"
-        "📋 لینک اشتراک (برای کپی):\n"
-        f"`{sub_url}`"
+        "🎉 سرویس شما فعال شد\n\n"
+        f"🆔 {service_name}\n"
+        f"⏳ {days_left_str} روز | 📅 تا {expire_str}\n\n"
+        f"{traffic_top}\n"
+        f"{bar_line}"
+        "🔗 لینک اشتراک:\n"
+        f"{sub_url}"
     )
     return caption
 
