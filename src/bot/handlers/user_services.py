@@ -4,6 +4,7 @@
 import io
 import json
 import logging
+import httpx
 from typing import List, Optional
 from urllib.parse import quote_plus, urlsplit, urlunsplit
 
@@ -18,9 +19,10 @@ from bot import utils
 from bot.ui import nav_row, markup, chunk, btn, confirm_row
 
 try:
-    from config import ADMIN_ID
+    from config import ADMIN_ID, HIDDIFY_API_VERIFY_SSL
 except ImportError:
     ADMIN_ID = None
+    HIDDIFY_API_VERIFY_SSL = True
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +153,7 @@ async def show_link_options_menu(message: Message, user_uuid: str, service_id: i
         btn("SingBox", f"getlink_singbox_{user_uuid}"),
         btn("Clash", f"getlink_clash_{user_uuid}"),
         btn("Clash Meta", f"getlink_clashmeta_{user_uuid}"),
+        btn("📄 کانفیگ‌های تکی", f"getlink_full_{user_uuid}"),
     ]
     rows = chunk(buttons, cols=2)
     rows.append(nav_row(back_cb=f"refresh_{service_id}", home_cb="home_menu"))
@@ -182,13 +185,34 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     info = await hiddify_api.get_user_info(user_uuid)
     config_name = (info.get('name', 'config') if isinstance(info, dict) else 'config') or 'config'
     safe_name = quote_plus(config_name)
-    base_link = utils.build_subscription_url(user_uuid)
+
+    base_link = service.get('sub_link') or utils.build_subscription_url(user_uuid)
+    # مسیر پایه کاربر بدون /sub/ در انتها
+    base_user_path = base_link.rsplit('/sub/', 1)[0]
+
+    if link_type == "full":
+        try:
+            await q.edit_message_text("در حال دریافت کانفیگ‌های تکی... ⏳")
+            full_url = f"{base_user_path}/all.txt"
+            async with httpx.AsyncClient(timeout=20, verify=HIDDIFY_API_VERIFY_SSL) as c:
+                resp = await c.get(full_url)
+                resp.raise_for_status()
+            await q.message.delete()
+            await context.bot.send_document(
+                chat_id=q.from_user.id, document=InputFile(io.BytesIO(resp.content), filename=f"{safe_name}_configs.txt"),
+                caption="📄 کانفیگ‌های تکی شما به صورت فایل ارسال شد.",
+                reply_markup=markup([nav_row(back_cb=f"more_links_{user_uuid}", home_cb="home_menu")])
+            )
+        except Exception as e:
+            logger.error("Failed to fetch/send full configs: %s", e, exc_info=True)
+            await q.edit_message_text("❌ دریافت کانفیگ‌های تکی با خطا مواجه شد.")
+        return
 
     if link_type == "sub":
         final_link = f"{base_link.rstrip('/')}#{safe_name}"
     else:
-        base_clean = _strip_qf(base_link)
-        final_link = f"{base_clean}/{link_type}/?name={safe_name}"
+        # برای لینک‌های غیر از sub، از ?name= استفاده می‌شود
+        final_link = f"{base_user_path}/{link_type}/?name={safe_name}"
 
     qr_bio = utils.make_qr_bytes(final_link)
     caption = f"نام کانفیگ: **{config_name}**\nنوع لینک: **{_link_label(link_type)}**\n\n`{final_link}`"
