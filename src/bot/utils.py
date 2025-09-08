@@ -1,5 +1,6 @@
 # filename: bot/utils.py
-# -*- coding: utf-8 -*-
+# (کل فایل)
+
 import io
 import sqlite3
 import random
@@ -78,10 +79,6 @@ def parse_date_flexible(date_str: str) -> Union[datetime, None]:
 
 
 def normalize_link_type(t: str) -> str:
-    """
-    این تابع گم شده بود.
-    نوع لینک را به یک مقدار استاندارد تبدیل می‌کند.
-    """
     return (t or "sub").strip().lower().replace("clash-meta", "clashmeta")
 
 
@@ -90,10 +87,6 @@ def _clean_path(seg: Optional[str]) -> str:
 
 
 def build_subscription_url(user_uuid: str) -> str:
-    """
-    ساخت لینک اشتراک پایه با ساختار صحیح Hiddify.
-    خروجی: https://<domain>/<client_secret>/<uuid>/sub/
-    """
     domain = (random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN)
     client_secret = _clean_path(PANEL_SECRET_UUID)
     
@@ -117,35 +110,44 @@ def make_qr_bytes(data: str) -> io.BytesIO:
 def _panel_expiry_from_info(user_data: dict) -> Optional[datetime]:
     if not isinstance(user_data, dict):
         return None
-    exp_ts = user_data.get("expire")
-    if isinstance(exp_ts, (int, float)) and exp_ts > 0:
+    
+    # اولویت اول: فیلد expire (timestamp)
+    expire_ts = user_data.get("expire")
+    if isinstance(expire_ts, (int, float)) and expire_ts > 0:
         try:
-            return datetime.fromtimestamp(int(exp_ts), tz=timezone.utc).astimezone()
+            return datetime.fromtimestamp(int(expire_ts), tz=timezone.utc)
         except Exception:
             pass
-    start = user_data.get("last_reset_time") or user_data.get("start_date") or user_data.get("created_at")
-    pkg_days = user_data.get("package_days")
-    if start and pkg_days is not None:
-        try:
-            start_dt, days = parse_date_flexible(start), int(float(pkg_days))
-            if start_dt and days > 0:
-                return (start_dt + timedelta(days=days)).astimezone()
-        except Exception:
-            pass
+
+    # اولویت دوم: محاسبه بر اساس start_date و package_days
+    start_str = user_data.get("start_date") or user_data.get("last_reset_time")
+    days = user_data.get("package_days")
+    if start_str and isinstance(days, int) and days > 0:
+        start_dt = parse_date_flexible(start_str)
+        if start_dt:
+            return start_dt + timedelta(days=days)
+            
     return None
 
 
 def _format_expiry_and_days(user_data: dict) -> Tuple[str, int]:
-    expire_dt = _panel_expiry_from_info(user_data)
-    now_aware = datetime.now().astimezone()
+    expire_dt_utc = _panel_expiry_from_info(user_data)
+    now_utc = datetime.now(timezone.utc)
+    
     expire_jalali, days_left = "نامشخص", 0
-    if expire_dt:
+
+    if expire_dt_utc:
+        # تبدیل به منطقه زمانی محلی برای نمایش صحیح
+        expire_local = expire_dt_utc.astimezone()
         try:
-            expire_jalali = jdatetime.date.fromgregorian(date=expire_dt.date()).strftime('%Y/%m/%d') if jdatetime else expire_dt.strftime("%Y-%m-%d")
+            expire_jalali = jdatetime.date.fromgregorian(date=expire_local.date()).strftime('%Y/%m/%d') if jdatetime else expire_local.strftime("%Y-%m-%d")
         except Exception:
-            expire_jalali = expire_dt.strftime("%Y-%m-%d")
-        if expire_dt > now_aware:
-            days_left = math.ceil((expire_dt - now_aware).total_seconds() / (24 * 3600))
+            expire_jalali = expire_local.strftime("%Y-%m-%d")
+        
+        if expire_dt_utc > now_utc:
+            time_left = expire_dt_utc - now_utc
+            days_left = math.ceil(time_left.total_seconds() / (24 * 3600))
+
     return expire_jalali, days_left
 
 
@@ -195,40 +197,17 @@ def create_service_info_caption(
 
 
 def get_service_status(hiddify_info: dict) -> Tuple[str, str, bool]:
-    now = datetime.now(timezone.utc)
-    is_expired = False
-
-    if hiddify_info.get('status') in ('disabled', 'limited') or hiddify_info.get('days_left', 999) < 0:
+    expire_jalali, days_left = _format_expiry_and_days(hiddify_info)
+    is_expired = days_left <= 0
+    if hiddify_info.get('status') in ('disabled', 'limited'):
         is_expired = True
-
-    usage_limit, current_usage = hiddify_info.get('usage_limit_GB', 0), hiddify_info.get('current_usage_GB', 0)
+    
+    usage_limit = hiddify_info.get('usage_limit_GB', 0)
+    current_usage = hiddify_info.get('current_usage_GB', 0)
     if usage_limit > 0 and current_usage >= usage_limit:
         is_expired = True
 
-    expire_ts = hiddify_info.get('expire')
-    if isinstance(expire_ts, (int, float)) and exp_ts > 0:
-        expiry_dt_utc = datetime.fromtimestamp(exp_ts, tz=timezone.utc)
-    else:
-        start_date_str = next((hiddify_info.get(k) for k in ['start_date', 'last_reset_time', 'created_at'] if hiddify_info.get(k)), None)
-        package_days = hiddify_info.get('package_days', 0)
-        if not start_date_str:
-            return "نامشخص", "N/A", True
-        start_dt = parse_date_flexible(start_date_str)
-        if not start_dt:
-            return "نامشخص", "N/A", True
-        expiry_dt_utc = start_dt + timedelta(days=package_days)
-
-    if not is_expired and now > expiry_dt_utc:
-        is_expired = True
-
-    expire_j = "N/A"
-    if jdatetime:
-        try:
-            expire_j = jdatetime.date.fromgregorian(date=expiry_dt_utc.astimezone().date()).strftime('%Y/%m/%d')
-        except Exception:
-            pass
-
-    return ("🔴 منقضی شده" if is_expired else "🟢 فعال"), expire_j, is_expired
+    return "🔴 منقضی شده" if is_expired else "🟢 فعال", expire_jalali, is_expired
 
 
 def is_valid_sqlite(filepath: str) -> bool:
