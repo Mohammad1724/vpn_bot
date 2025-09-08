@@ -137,8 +137,8 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
         usage_limit_gb = 0.0
 
     before_info = await get_user_info(user_uuid)
-    if not before_info:
-        logger.error("Renew failed: could not get user info before renewal for UUID %s", user_uuid)
+    if not before_info or before_info.get("_not_found"):
+        logger.error("Renew failed: user with UUID %s not found in panel.", user_uuid)
         return None
 
     payload = {
