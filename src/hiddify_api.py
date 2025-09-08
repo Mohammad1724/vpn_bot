@@ -82,7 +82,6 @@ async def _make_request(method: str, url: str, **kwargs) -> Optional[Dict[str, A
 def _compensate_days(days: int) -> int:
     """
     جبران خطای محاسبه روز در پنل.
-    اگر پلن 30 روزه باشد، 32 روز ارسال می‌کنیم تا خروجی 30 روز شود.
     """
     if days == 30:
         return 32
@@ -101,7 +100,7 @@ async def create_hiddify_user(
     base_name = custom_name if custom_name else f"tg-{user_telegram_id.split(':')[-1]}"
     unique_user_name = f"{base_name}-{random_suffix}"
 
-    # مرحله ۱: ساخت کاربر با حداقل اطلاعات (چون پنل سایر پارامترها را نادیده می‌گیرد)
+    # مرحله ۱: ساخت کاربر با حداقل اطلاعات
     payload_create = {
         "name": unique_user_name,
         "comment": user_telegram_id,
@@ -114,13 +113,13 @@ async def create_hiddify_user(
 
     user_uuid = data.get("uuid")
     
-    # مرحله ۲: بلافاصله کاربر ساخته شده را با پلن صحیح آپدیت (تمدید) می‌کنیم
+    # مرحله ۲: بلافاصله کاربر ساخته شده را با پلن صحیح آپدیت می‌کنیم
     logger.info("User %s created. Now applying plan details via PATCH...", user_uuid)
-    update_success = await renew_user_subscription(user_uuid, plan_days, plan_gb)
+    update_success = await renew_user_subscription(user_uuid, plan_days, plan_gb, is_creation=True)
     
     if not update_success:
         logger.error("create_hiddify_user (step 2 - PATCH): Failed to apply plan details to user %s. Deleting user.", user_uuid)
-        await delete_user_from_panel(user_uuid) # اگر آپدیت شکست خورد، کاربر را پاک کن
+        await delete_user_from_panel(user_uuid)
         return None
 
     sub_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
@@ -141,7 +140,7 @@ async def get_user_info(user_uuid: str) -> Optional[Dict[str, Any]]:
     return await _make_request("get", endpoint)
 
 
-async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float) -> Optional[Dict[str, Any]]:
+async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float, is_creation: bool = False) -> Optional[Dict[str, Any]]:
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
     
     try:
@@ -149,42 +148,57 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
     except Exception:
         usage_limit_gb = 0.0
 
-    before_info = await get_user_info(user_uuid)
-    if not before_info or before_info.get("_not_found"):
-        logger.error("Renew failed: user with UUID %s not found in panel.", user_uuid)
-        return None
-
     compensated_days = _compensate_days(int(plan_days))
+    
     payload = {
         "package_days": compensated_days,
         "usage_limit_GB": usage_limit_gb,
         "current_usage_GB": 0,
     }
+    # فقط برای ساخت کاربر جدید، start_date را هم ارسال می‌کنیم تا تاریخ ریست شود
+    if is_creation:
+        payload["start_date"] = datetime.now().astimezone().isoformat()
 
     response = await _make_request("patch", endpoint, json=payload)
+    
+    # اگر با start_date خطا داد، بدون آن دوباره تلاش می‌کنیم (برای سازگاری با پنل شما در حالت تمدید)
+    if (response is None or response.get("_not_found")) and is_creation:
+        logger.warning("PATCH with start_date failed for new user %s. Retrying without it.", user_uuid)
+        payload.pop("start_date")
+        response = await _make_request("patch", endpoint, json=payload)
+
     if response is None or response.get("_not_found"):
-        logger.error("Renew PATCH request failed or user not found for UUID %s", user_uuid)
+        logger.error("Renew/update PATCH request failed completely for UUID %s", user_uuid)
         return None
     
-    await asyncio.sleep(1)
+    await asyncio.sleep(1.5) # کمی تاخیر بیشتر برای اطمینان از پردازش در پنل
 
     after_info = await get_user_info(user_uuid)
     if not after_info:
-        logger.error("Renew verification failed: could not get user info after renewal for UUID %s", user_uuid)
+        logger.error("Verification failed: could not get user info after update for UUID %s", user_uuid)
         return None
 
+    # **منطق تأیید نهایی و دقیق**
     after_usage = float(after_info.get("current_usage_GB", -1))
+    after_days = int(after_info.get("package_days", -1))
+    after_gb = float(after_info.get("usage_limit_GB", -1))
     
-    if after_usage < 0.1:
-        logger.info("Renewal for UUID %s verified successfully.", user_uuid)
-        return after_info
-    
-    logger.error(
-        "Renew verification failed for UUID %s. Usage did not reset. After: %s",
-        user_uuid,
-        {"usage": after_usage}
+    # تایید می‌کنیم که مقادیر جدید (با جبران خطا) به درستی در پنل ست شده‌اند
+    is_verified = (
+        after_usage < 0.1 and
+        after_days == compensated_days and
+        after_gb == usage_limit_gb
     )
-    return None
+
+    if is_verified:
+        logger.info("Update/Renew for UUID %s verified successfully.", user_uuid)
+        return after_info
+    else:
+        logger.error(
+            "Verification failed for UUID %s. Expected (days:%s, gb:%s), Got (days:%s, gb:%s, usage:%s)",
+            user_uuid, compensated_days, usage_limit_gb, after_days, after_gb, after_usage
+        )
+        return None
 
 
 async def delete_user_from_panel(user_uuid: str) -> bool:
