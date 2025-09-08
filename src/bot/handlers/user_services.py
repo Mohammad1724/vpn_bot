@@ -39,7 +39,7 @@ def _link_label(link_type: str) -> str:
 
 def _strip_qf_and_sub(url: str) -> str:
     """
-    حذف query, fragment و بخش /sub/ از انتهای URL.
+    حذف query, fragment و بخش /sub/ از انتهای URL برای ساخت لینک‌های دیگر.
     """
     pr = urlsplit(url)
     path = pr.path
@@ -127,13 +127,19 @@ async def send_service_details(
         if is_from_menu:
             keyboard_rows.append(nav_row(back_cb="back_to_services", home_cb="home_menu"))
 
+        qr_bio = utils.make_qr_bytes(preferred_url)
         if original_message:
             try:
                 await original_message.delete()
             except BadRequest:
                 pass
-        await context.bot.send_message(
-            chat_id=chat_id, text=caption, parse_mode=ParseMode.MARKDOWN, reply_markup=markup(keyboard_rows)
+        
+        await context.bot.send_photo(
+            chat_id=chat_id,
+            photo=InputFile(qr_bio),
+            caption=caption,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=markup(keyboard_rows)
         )
     except Exception as e:
         logger.error("send_service_details error for service_id %s: %s", service_id, e, exc_info=True)
@@ -168,16 +174,14 @@ async def show_link_options_menu(message: Message, user_uuid: str, service_id: i
     text = "لطفاً نوع لینک اشتراک مورد نظر را انتخاب کنید:"
     try:
         if is_edit:
-            if getattr(message, "photo", None):
-                await message.delete()
-                await context.bot.send_message(chat_id=message.chat_id, text=text, reply_markup=markup(rows))
-            else:
-                await message.edit_text(text, reply_markup=markup(rows))
+            # همیشه پیام قبلی (که عکس است) را پاک کن و پیام جدید بفرست
+            await message.delete()
+            await context.bot.send_message(chat_id=message.chat_id, text=text, reply_markup=markup(rows))
         else:
             await message.reply_text(text, reply_markup=markup(rows))
     except BadRequest as e:
-        if "message is not modified" not in str(e):
-            logger.error("show_link_options_menu error: %s", e)
+        if "message to delete not found" not in str(e):
+             logger.error("show_link_options_menu error: %s", e)
 
 
 async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
