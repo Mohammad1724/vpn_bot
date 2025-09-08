@@ -134,9 +134,15 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
         logger.error("Renew failed: could not get user info before renewal for UUID %s", user_uuid)
         return None
 
-    # **اصلاح نهایی: حذف کامل start_date از درخواست**
+    # **اصلاح کلیدی: اضافه کردن 2 روز به پلن برای جبران خطای محاسبه پنل**
+    # اگر پلن 30 روزه باشد، ما 32 روز ارسال می‌کنیم تا خروجی 30 روز شود.
+    # این عدد را می‌توانید در صورت نیاز تغییر دهید.
+    compensated_days = int(plan_days)
+    if compensated_days == 30:
+        compensated_days = 32
+
     payload = {
-        "package_days": int(plan_days),
+        "package_days": compensated_days,
         "usage_limit_GB": usage_limit_gb,
         "current_usage_GB": 0,
     }
@@ -153,27 +159,23 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
         logger.error("Renew verification failed: could not get user info after renewal for UUID %s", user_uuid)
         return None
 
+    # تایید می‌کنیم که مقادیر جدید (با جبران خطا) ست شده‌اند
     after_usage = float(after_info.get("current_usage_GB", -1))
     after_days = int(after_info.get("package_days", -1))
     after_gb = float(after_info.get("usage_limit_GB", -1))
 
-    # اگر مصرف ریست شده باشد و روزها و حجم جدید ست شده باشد، تمدید موفق بوده است
     if usage_limit_gb == 0:
-        if after_usage < 0.1 and after_days == int(plan_days):
+        if after_usage < 0.1 and after_days == compensated_days:
             logger.info("Renewal for UUID %s verified successfully (unlimited plan).", user_uuid)
             return after_info
     else:
-        if after_usage < 0.1 and after_days == int(plan_days) and after_gb == usage_limit_gb:
+        if after_usage < 0.1 and after_days == compensated_days and after_gb == usage_limit_gb:
             logger.info("Renewal for UUID %s verified successfully (volume plan).", user_uuid)
             return after_info
     
     logger.error(
-        "Renew verification failed for UUID %s. Before: %s, After: %s, Plan: %s days/%s GB",
-        user_uuid,
-        {"days": before_info.get("package_days"), "gb": before_info.get("usage_limit_GB"), "usage": before_info.get("current_usage_GB")},
-        {"days": after_days, "gb": after_gb, "usage": after_usage},
-        plan_days,
-        plan_gb,
+        "Renew verification failed for UUID %s. Expected: %s days, Got: %s days",
+        user_uuid, compensated_days, after_days
     )
     return None
 
