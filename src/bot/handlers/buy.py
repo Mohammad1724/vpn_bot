@@ -1,5 +1,5 @@
 # filename: bot/handlers/buy.py
-# (کل فایل)
+# -*- coding: utf-8 -*-
 
 import asyncio
 import logging
@@ -301,9 +301,9 @@ async def _send_service_info_to_user(context, user_id, new_uuid, plan):
         await context.bot.send_message(chat_id=user_id, text="❌ خطای داخلی: سرویس ساخته شد اما در دیتابیس یافت نشد.")
         return
 
-    # **اصلاح کلیدی: صبر هوشمند برای آپدیت شدن اطلاعات در پنل**
+    # صبر هوشمند برای آپدیت شدن اطلاعات در پنل
     user_data = None
-    expected_days = hiddify_api._compensate_days(plan['days'])
+    expected_days = getattr(hiddify_api, "_compensate_days", lambda x: int(x))(int(plan['days']))
     for attempt in range(5):
         user_data = await hiddify_api.get_user_info(new_uuid)
         if user_data and int(user_data.get("package_days", 0)) == expected_days:
@@ -317,7 +317,8 @@ async def _send_service_info_to_user(context, user_id, new_uuid, plan):
         safe_name = quote_plus(config_name)
 
         base_main = new_service_record.get('sub_link') or utils.build_subscription_url(new_uuid)
-        final_link = f"{base_main.rstrip('/')}#{safe_name}"
+        # باید قبل از # یک / باشد => .../sub/#Name
+        final_link = f"{base_main}#{safe_name}" if base_main.endswith('/') else f"{base_main}/#{safe_name}"
 
         qr_bio = utils.make_qr_bytes(final_link)
         caption = utils.create_service_info_caption(
