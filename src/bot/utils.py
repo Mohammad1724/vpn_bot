@@ -1,3 +1,4 @@
+# filename: bot/utils.py
 # -*- coding: utf-8 -*-
 
 import io
@@ -21,7 +22,7 @@ except ImportError:
 try:
     from config import UNLIMITED_DISPLAY_THRESHOLD_GB
 except Exception:
-    UNLIMITED_DISPLAY_THRESHOLD_GB = 900.0
+    UNLIMITED_DISPLAY_THRESHOLD_GB = 900.0  # اگر total_gb >= این مقدار باشد، «نامحدود» نمایش می‌دهیم
 
 try:
     import jdatetime
@@ -30,6 +31,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# نگاشت ارقام لاتین به فارسی (ممکن است در بخش‌های دیگر ربات استفاده شود)
 _PERSIAN_DIGIT_MAP = str.maketrans("0123456789,-", "۰۱۲۳۴۵۶۷۸۹،-")
 
 
@@ -115,10 +117,9 @@ def _ensure_https_host(host: str) -> str:
 
 def build_subscription_url(user_uuid: str) -> str:
     """
-    خروجی استاندارد:
+    خروجی استاندارد (بدون پارامتر asn):
       - با secret: https://{domain}/{secret}/{uuid}/sub/
       - بدون secret: https://{domain}/{sub_path}/{uuid}/
-    (بدون پارامتر asn)
     """
     domain = (random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN)
     host = _ensure_https_host(domain)
@@ -141,6 +142,9 @@ def make_qr_bytes(data: str) -> io.BytesIO:
 
 
 def _get_panel_expire_dt(user_data: dict) -> Optional[datetime]:
+    """
+    تلاش برای به‌دست آوردن تاریخ انقضا از فیلد expire (ثانیه/میلی‌ثانیه).
+    """
     expire_ts = user_data.get("expire")
     if isinstance(expire_ts, (int, float, str)):
         try:
@@ -154,6 +158,11 @@ def _get_panel_expire_dt(user_data: dict) -> Optional[datetime]:
 
 
 def _pick_start_dt(user_data: dict, service_db_record: Optional[dict], now: datetime) -> Optional[datetime]:
+    """
+    انتخاب بهترین زمان شروع برای محاسبه انقضا/روزهای باقی‌مانده:
+    - اگر created_at (در DB) موجود و سرویس تازه باشد (<=36h)، همان را مبنا می‌گیریم.
+    - در غیر این صورت جدیدترین بین last_reset_time/start_date/created_at/create_time (از پنل).
+    """
     created_at_db = None
     if service_db_record:
         ca = service_db_record.get("created_at") or service_db_record.get("create_time")
@@ -181,6 +190,12 @@ def _pick_start_dt(user_data: dict, service_db_record: Optional[dict], now: date
 
 
 def _format_expiry_and_days(user_data: dict, service_db_record: Optional[dict] = None) -> Tuple[str, int]:
+    """
+    خروجی: (expire_str, days_left)
+    - اگر expire معتبر داریم: مبنا همان است.
+    - اگر سرویس تازه باشد و مقدار پنل غیرمنطقی، از created_at DB استفاده می‌کنیم.
+    - در غیر این صورت از start/reset پنل استفاده می‌کنیم.
+    """
     now_utc = datetime.now(timezone.utc)
 
     try:
@@ -244,13 +259,24 @@ def create_service_info_caption(
     title: str = "🎉 سرویس شما!",
     override_sub_url: Optional[str] = None
 ) -> str:
-    # اعداد لاتین برای پیام
+    # فرمت عدد گیگابایت: بدون نمای علمی، نزدیک صفر=0، اگر تقریباً صحیح بود بدون اعشار، در غیر این صورت تا دو اعشار
+    def _fmt_gb(x: float) -> str:
+        try:
+            v = float(x)
+        except Exception:
+            v = 0.0
+        if abs(v) < 0.005:  # حذف نویزهای بسیار کوچک
+            v = 0.0
+        if abs(v - round(v)) < 0.005:
+            return f"{int(round(v))}"
+        return f"{v:.2f}"
+
+    # فرمت ساده اعداد روزها (لاتین)
     def _fmt_num(x: float) -> str:
         try:
-            s = "{:g}".format(float(x))
+            return str(int(x))
         except Exception:
-            s = str(x)
-        return s
+            return str(x)
 
     try:
         expire_jalali, days_left = _format_expiry_and_days(user_data, service_db_record)
@@ -272,7 +298,7 @@ def create_service_info_caption(
 
     service_name = user_data.get('name') or user_data.get('uuid', 'N/A')
 
-    # لینک اشتراک استاندارد (بدون کنترل‌گرهای LTR/RTL)
+    # لینک اشتراک استاندارد (خالص، بدون کاراکترهای کنترلی LTR/RTL)
     if override_sub_url:
         sub_url = override_sub_url
     elif service_db_record and service_db_record.get('sub_link'):
@@ -283,12 +309,12 @@ def create_service_info_caption(
 
     # ترافیک
     if unlimited:
-        traffic_line = f"📦 ترافیک: نامحدود • مصرف: {_fmt_num(used_gb)} گیگ"
+        traffic_line = f"📦 ترافیک: نامحدود • مصرف: {_fmt_gb(used_gb)} گیگ"
     else:
         remaining_gb = max(total_gb - used_gb, 0.0)
         traffic_line = (
-            f"📦 ترافیک: {_fmt_num(used_gb)}/{_fmt_num(total_gb)} گیگ "
-            f"(باقی: {_fmt_num(remaining_gb)} گیگ)"
+            f"📦 ترافیک: {_fmt_gb(used_gb)}/{_fmt_gb(total_gb)} گیگ "
+            f"(باقی: {_fmt_gb(remaining_gb)} گیگ)"
         )
 
     package_days = int(user_data.get('package_days', 0) or 0)
@@ -296,7 +322,6 @@ def create_service_info_caption(
     days_left_str = _fmt_num(days_left)
     package_days_str = _fmt_num(package_days)
 
-    # مهم: لینک را خالص می‌گذاریم تا کلاینت‌ها خطا نگیرند (بدون U+2066/U+2069)
     caption = (
         "━━━━━━━━━━━━━━━━\n"
         "🎉 سرویس شما فعال شد\n"
