@@ -47,10 +47,10 @@ async def _make_client(timeout: float = 20.0) -> httpx.AsyncClient:
 
 def _normalize_unlimited_value(val):
     """
-    HIDDIFY_UNLIMITED_VALUE می‌تواند یکی از حالت‌های زیر باشد:
-      - عددی (مثلاً -1 یا 0)
+    HIDDIFY_UNLIMITED_VALUE می‌تواند:
+      - عددی (مثل -1 یا 0)
       - "null" -> ارسال null
-      - "omit" -> اصلاً فیلد usage_limit_GB ارسال نشود
+      - "omit" -> اصلاً usage_limit_GB ارسال نشود
     """
     if isinstance(val, str):
         s = val.strip().lower()
@@ -69,16 +69,19 @@ def _normalize_unlimited_value(val):
 
 
 def _is_unlimited_value(x) -> bool:
-    """
-    تشخیص نامحدود بودن مقدار برگشتی پنل.
-    هر مقدار None یا <= 0 را نامحدود در نظر می‌گیریم تا سازگار با انواع پنل‌ها باشد.
-    """
+    # هر مقدار None یا <=0 را نامحدود فرض می‌کنیم
     if x is None:
         return True
     try:
         return float(x) <= 0.0
     except Exception:
         return False
+
+
+# برای سازگاری با buy.py
+def _compensate_days(days: int) -> int:
+    # قبلاً 30 را به 32 جبران می‌کرد؛ اکنون بدون تغییر برمی‌گردانیم
+    return int(days)
 
 
 async def _make_request(method: str, url: str, **kwargs) -> Optional[Dict[str, Any]]:
@@ -174,25 +177,18 @@ async def _apply_and_verify_plan(user_uuid: str, plan_days: int, plan_gb: float)
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
 
     # مقدار حجمی
-    usage_limit_gb: Optional[float]
     unlimited_mode = False
+    payload = {
+        "package_days": int(plan_days),
+        "current_usage_GB": 0,
+    }
     if plan_gb is None or float(plan_gb) <= 0.0:
         unlimited_mode = True
         unl_val = _normalize_unlimited_value(HIDDIFY_UNLIMITED_VALUE)
-        # payload را می‌سازیم و اگر unl_val == "OMIT" بود، usage_limit_GB را نمی‌فرستیم
-        payload = {
-            "package_days": int(plan_days),
-            "current_usage_GB": 0,
-        }
         if unl_val != "OMIT":
             payload["usage_limit_GB"] = unl_val  # None یا عدد
     else:
-        usage_limit_gb = float(plan_gb)
-        payload = {
-            "package_days": int(plan_days),
-            "usage_limit_GB": usage_limit_gb,
-            "current_usage_GB": 0,
-        }
+        payload["usage_limit_GB"] = float(plan_gb)
 
     response = await _make_request("patch", endpoint, json=payload)
     if response is None or response.get("_not_found"):
@@ -201,6 +197,8 @@ async def _apply_and_verify_plan(user_uuid: str, plan_days: int, plan_gb: float)
 
     # تایید
     exact_days = int(plan_days)
+    expected_gb = None if unlimited_mode else float(plan_gb)
+
     for attempt in range(VERIFICATION_RETRIES):
         await asyncio.sleep(VERIFICATION_DELAY)
         after_info = await get_user_info(user_uuid)
@@ -213,7 +211,6 @@ async def _apply_and_verify_plan(user_uuid: str, plan_days: int, plan_gb: float)
         after_gb_raw = after_info.get("usage_limit_GB", None)
 
         if unlimited_mode:
-            # نامحدود: روزها دقیق باشد و usage_limit_GB نامحدود تلقی شود (None یا <=0)
             if after_days == exact_days and _is_unlimited_value(after_gb_raw):
                 logger.info("Update (unlimited) for UUID %s verified on attempt %d.", user_uuid, attempt + 1)
                 return after_info
@@ -222,16 +219,14 @@ async def _apply_and_verify_plan(user_uuid: str, plan_days: int, plan_gb: float)
                 after_gb = float(after_gb_raw)
             except Exception:
                 after_gb = None
-
-            if after_days == exact_days and after_gb is not None and abs(after_gb - usage_limit_gb) < 1e-6:
+            if after_days == exact_days and after_gb is not None and abs(after_gb - expected_gb) < 1e-6:
                 logger.info("Update for UUID %s verified successfully on attempt %d.", user_uuid, attempt + 1)
                 return after_info
 
         logger.warning(
             "Verification attempt %d for UUID %s failed. Expected (days:%s, gb:%s), Got (days:%s, gb:%s)",
             attempt + 1, user_uuid,
-            exact_days,
-            "UNLIMITED" if unlimited_mode else usage_limit_gb,
+            exact_days, "UNLIMITED" if unlimited_mode else expected_gb,
             after_days, after_gb_raw
         )
 
