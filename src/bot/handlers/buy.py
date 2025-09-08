@@ -1,5 +1,5 @@
 # filename: bot/handlers/buy.py
-# -*- coding: utf-8 -*-
+# (کل فایل)
 
 import logging
 from datetime import datetime
@@ -8,6 +8,7 @@ from typing import List, Optional
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, InputFile
 from telegram.constants import ParseMode
+from telegram.error import BadRequest
 
 import database as db
 import hiddify_api
@@ -37,13 +38,6 @@ def _vol_label(gb: int) -> str:
 
 
 def _get_global_discount_params() -> tuple[bool, float, Optional[datetime], Optional[datetime]]:
-    """
-    خواندن تنظیمات تخفیف همگانی از DB:
-      - global_discount_enabled: 1/0
-      - global_discount_percent: عدد (مثلاً 10)
-      - global_discount_starts_at: اختیاری (ISO یا فرمت رایج)
-      - global_discount_expires_at: اختیاری
-    """
     enabled = str(db.get_setting("global_discount_enabled") or "0").lower() in ("1", "true", "on", "yes")
     try:
         percent = float(db.get_setting("global_discount_percent") or 0)
@@ -73,7 +67,6 @@ def _short_label(p: dict) -> str:
     vol = _vol_label(gb)
     price_str = _short_price(p.get('price', 0))
     days_fa = utils.to_persian_digits(str(days))
-    # برچسب کوتاه برای نمایش تخفیف همگانی (اگر فعال باشد)
     gd_active, gd_percent = _is_global_discount_active()
     off_tag = f" | {int(gd_percent)}٪ آف" if gd_active and gd_percent > 0 else ""
     label = f"{name} | {days_fa} روز | {vol} | {price_str}{off_tag}"
@@ -218,7 +211,6 @@ async def _ask_purchase_confirm(update: Update, context: ContextTypes.DEFAULT_TY
         'final_price': final_price,
     }
 
-    # ساخت متن قیمت
     lines = [f"قیمت: {_short_price(base_price)}"]
     if gd_amount > 0:
         lines.append(f"تخفیف همگانی ({int(gd_percent)}٪): {_short_price(gd_amount)}")
@@ -249,7 +241,7 @@ async def confirm_purchase_callback(update: Update, context: ContextTypes.DEFAUL
     await q.answer()
     data = context.user_data.get('pending_buy')
     if not data or not context.user_data.get('buy_plan_id'):
-        await q.edit_message_text("⏳ زمان تایید شما منقضی شده است. لطفماً دوباره خرید را شروع کنید.")
+        await q.edit_message_text("⏳ زمان تایید شما منقضی شده است. لطفاً دوباره خرید را شروع کنید.")
         return
     await _do_purchase_confirmed(q, context, data.get('custom_name', ''))
     for k in ('pending_buy', 'buy_plan_id', 'buy_custom_name', 'buy_promo_code'):
@@ -285,20 +277,14 @@ async def _do_purchase_confirmed(q, context: ContextTypes.DEFAULT_TYPE, custom_n
             custom_name=(custom_name or default_name)
         )
         if not provision or not provision.get("uuid"):
-            raise RuntimeError("Failed to create service in panel/local")
+            raise RuntimeError("Failed to create service in panel")
 
-        main_uuid = provision["uuid"]
-        main_sublink = provision.get("full_link", "")
-
-        # نهایی‌سازی تراکنش و ثبت سرویس
+        main_uuid, main_sublink = provision["uuid"], provision.get("full_link", "")
         db.finalize_purchase_transaction(txn_id, main_uuid, main_sublink, custom_name)
 
-        # ثبت استفاده از کدتخفیف (در صورت وجود)
         if data.get('promo_code'):
             db.mark_promo_code_as_used(user_id, data['promo_code'])
-
         await _send_service_info_to_user(context, user_id, main_uuid)
-
     except Exception as e:
         logger.error("Purchase failed for user %s plan %s: %s", user_id, data.get('plan_id'), e, exc_info=True)
         db.cancel_purchase_transaction(txn_id)
@@ -306,6 +292,8 @@ async def _do_purchase_confirmed(q, context: ContextTypes.DEFAULT_TYPE, custom_n
 
 
 async def _send_service_info_to_user(context, user_id, new_uuid):
+    from urllib.parse import quote_plus
+
     new_service_record = db.get_service_by_uuid(new_uuid)
     if not new_service_record:
         await context.bot.send_message(chat_id=user_id, text="❌ خطای داخلی: سرویس ساخته شد اما در دیتابیس یافت نشد.")
@@ -314,20 +302,11 @@ async def _send_service_info_to_user(context, user_id, new_uuid):
     user_data = await hiddify_api.get_user_info(new_uuid)
 
     if user_data:
-        admin_default_type = utils.normalize_link_type(db.get_setting("default_sub_link_type") or "sub")
         config_name = (user_data.get('name', 'config') if isinstance(user_data, dict) else 'config') or 'config'
-        safe_name = str(config_name).replace(' ', '_')
+        safe_name = quote_plus(config_name)
 
-        # لینک اصلی: اول sub_link ذخیره‌شده، در غیر اینصورت بر اساس uuid
         base_main = new_service_record.get('sub_link') or utils.build_subscription_url(new_uuid)
-
-        # ساخت لینک نهایی بر اساس نوع لینک پیش‌فرض
-        base = (base_main or "").rstrip("/")
-        if admin_default_type == "sub":
-            final_link = base_main
-        else:
-            t = admin_default_type.replace('clashmeta', 'clash-meta')
-            final_link = f"{base}/{t}/?name={safe_name}"
+        final_link = f"{base_main.rstrip('/')}#{safe_name}"
 
         qr_bio = utils.make_qr_bytes(final_link)
         caption = utils.create_service_info_caption(
