@@ -101,7 +101,7 @@ async def create_hiddify_user(
     base_name = custom_name if custom_name else f"tg-{user_telegram_id.split(':')[-1]}"
     unique_user_name = f"{base_name}-{random_suffix}"
 
-    # مرحله ۱: ساخت کاربر با حداقل اطلاعات
+    # مرحله ۱: ساخت کاربر با حداقل اطلاعات (چون پنل سایر پارامترها را نادیده می‌گیرد)
     payload_create = {
         "name": unique_user_name,
         "comment": user_telegram_id,
