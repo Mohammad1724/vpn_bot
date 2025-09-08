@@ -89,13 +89,13 @@ async def create_hiddify_user(
     except Exception:
         usage_limit_gb = 0.0
 
+    # **اصلاح کلیدی: حذف start_date از درخواست ساخت کاربر**
     payload = {
         "name": unique_user_name,
         "package_days": int(plan_days),
         "usage_limit_GB": usage_limit_gb,
         "comment": user_telegram_id,
         "current_usage_GB": 0,
-        "start_date": datetime.now().astimezone().isoformat(),  # **اصلاح کلیدی برای خرید**
     }
 
     data = await _make_request("post", endpoint, json=payload)
@@ -135,24 +135,17 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
         logger.error("Renew failed: could not get user info before renewal for UUID %s", user_uuid)
         return None
 
-    # **اصلاح کلیدی برای تمدید**
     payload = {
         "package_days": int(plan_days),
         "usage_limit_GB": usage_limit_gb,
-        "start_date": datetime.now().astimezone().isoformat(),
         "current_usage_GB": 0,
     }
 
     response = await _make_request("patch", endpoint, json=payload)
     if response is None or response.get("_not_found"):
-        # اگر خطا داد، بدون start_date دوباره تلاش می‌کنیم
-        logger.warning("Renew with start_date failed for UUID %s. Retrying without start_date.", user_uuid)
-        payload.pop("start_date")
-        response = await _make_request("patch", endpoint, json=payload)
-        if response is None or response.get("_not_found"):
-            logger.error("Renew PATCH request failed completely for UUID %s", user_uuid)
-            return None
-
+        logger.error("Renew PATCH request failed or user not found for UUID %s", user_uuid)
+        return None
+    
     await asyncio.sleep(1)
 
     after_info = await get_user_info(user_uuid)
@@ -160,7 +153,6 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
         logger.error("Renew verification failed: could not get user info after renewal for UUID %s", user_uuid)
         return None
 
-    # تایید می‌کنیم که مقادیر جدید ست شده‌اند
     after_usage = float(after_info.get("current_usage_GB", -1))
     
     if after_usage < 0.1:
