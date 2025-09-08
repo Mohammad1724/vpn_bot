@@ -134,11 +134,12 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
         logger.error("Renew failed: could not get user info before renewal for UUID %s", user_uuid)
         return None
 
+    # **اصلاح کلیدی:** ارسال start_date با فرمت ISO برای ریست کامل
     payload = {
         "package_days": int(plan_days),
         "usage_limit_GB": usage_limit_gb,
+        "start_date": datetime.now().astimezone().isoformat(),
         "current_usage_GB": 0,
-        # **start_date به طور کامل حذف شد**
     }
 
     response = await _make_request("patch", endpoint, json=payload)
@@ -157,12 +158,10 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
     after_days = int(after_info.get("package_days", -1))
     after_gb = float(after_info.get("usage_limit_GB", -1))
 
-    # برای حجم نامحدود (0)، فقط روزها را چک می‌کنیم
     if usage_limit_gb == 0:
         if after_usage < 0.1 and after_days == int(plan_days):
             logger.info("Renewal for UUID %s verified successfully (unlimited plan).", user_uuid)
             return after_info
-    # برای حجم محدود، همه موارد را چک می‌کنیم
     else:
         if after_usage < 0.1 and after_days == int(plan_days) and after_gb == usage_limit_gb:
             logger.info("Renewal for UUID %s verified successfully (volume plan).", user_uuid)
