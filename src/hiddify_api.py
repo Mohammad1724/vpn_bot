@@ -7,7 +7,6 @@ import uuid
 import random
 import logging
 from typing import Optional, Dict, Any
-from datetime import datetime
 
 try:
     from config import PANEL_DOMAIN, ADMIN_PATH, API_KEY, SUB_DOMAINS, SUB_PATH, PANEL_SECRET_UUID, HIDDIFY_API_VERIFY_SSL
@@ -25,8 +24,8 @@ logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 3
 BASE_RETRY_DELAY = 1.0
-VERIFICATION_RETRIES = 5  # تعداد تلاش برای تایید
-VERIFICATION_DELAY = 1.0  # تاخیر بین هر تلاش برای تایید (ثانیه)
+VERIFICATION_RETRIES = 5
+VERIFICATION_DELAY = 1.0
 
 
 def _get_base_url() -> str:
@@ -81,6 +80,14 @@ async def _make_request(method: str, url: str, **kwargs) -> Optional[Dict[str, A
     return None
 
 
+def _compensate_days(days: int) -> int:
+    """
+    قبلاً برای 30 روز مقدار 32 برمی‌گرداند.
+    اکنون برای جلوگیری از خطا، مقدار ورودی بدون تغییر برگردانده می‌شود.
+    """
+    return int(days)
+
+
 async def create_hiddify_user(
     plan_days: int,
     plan_gb: float,
@@ -93,7 +100,6 @@ async def create_hiddify_user(
     base_name = custom_name if custom_name else f"tg-{user_telegram_id.split(':')[-1]}"
     unique_user_name = f"{base_name}-{random_suffix}"
 
-    # مرحله ۱: ساخت کاربر با حداقل اطلاعات
     payload_create = {
         "name": unique_user_name,
         "comment": user_telegram_id,
@@ -106,7 +112,6 @@ async def create_hiddify_user(
 
     user_uuid = data.get("uuid")
 
-    # مرحله ۲: بلافاصله کاربر ساخته شده را با پلن صحیح آپدیت می‌کنیم
     logger.info("User %s created. Now applying plan details via PATCH...", user_uuid)
     update_success = await _apply_and_verify_plan(user_uuid, plan_days, plan_gb)
 
@@ -134,9 +139,6 @@ async def get_user_info(user_uuid: str) -> Optional[Dict[str, Any]]:
 
 
 async def _apply_and_verify_plan(user_uuid: str, plan_days: int, plan_gb: float) -> Optional[Dict[str, Any]]:
-    """
-    یک پلن را روی کاربر اعمال می‌کند و با چند بار تلاش، صحت آن را تایید می‌کند.
-    """
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
 
     try:
@@ -144,9 +146,11 @@ async def _apply_and_verify_plan(user_uuid: str, plan_days: int, plan_gb: float)
     except Exception:
         usage_limit_gb = 0.0
 
-    # حذف جبران روز - ارسال مقدار دقیق
+    # ارسال دقیق روزها (بدون جبران)
+    exact_days = int(plan_days)
+
     payload = {
-        "package_days": int(plan_days),
+        "package_days": exact_days,
         "usage_limit_GB": usage_limit_gb,
         "current_usage_GB": 0,
     }
@@ -156,7 +160,6 @@ async def _apply_and_verify_plan(user_uuid: str, plan_days: int, plan_gb: float)
         logger.error("Renew/update PATCH request failed for UUID %s", user_uuid)
         return None
 
-    # **منطق تأیید نهایی و دقیق با حلقه و تأخیر**
     for attempt in range(VERIFICATION_RETRIES):
         await asyncio.sleep(VERIFICATION_DELAY)
         after_info = await get_user_info(user_uuid)
@@ -168,13 +171,13 @@ async def _apply_and_verify_plan(user_uuid: str, plan_days: int, plan_gb: float)
         after_days = int(after_info.get("package_days", -1))
         after_gb = float(after_info.get("usage_limit_GB", -1))
 
-        if after_days == int(plan_days) and after_gb == usage_limit_gb:
+        if after_days == exact_days and after_gb == usage_limit_gb:
             logger.info("Update for UUID %s verified successfully on attempt %d.", user_uuid, attempt + 1)
             return after_info
 
         logger.warning(
             "Verification attempt %d for UUID %s failed. Expected (days:%s, gb:%s), Got (days:%s, gb:%s)",
-            attempt + 1, user_uuid, int(plan_days), usage_limit_gb, after_days, after_gb
+            attempt + 1, user_uuid, exact_days, usage_limit_gb, after_days, after_gb
         )
 
     logger.error("Verification failed for UUID %s after %d attempts.", user_uuid, VERIFICATION_RETRIES)
@@ -182,9 +185,6 @@ async def _apply_and_verify_plan(user_uuid: str, plan_days: int, plan_gb: float)
 
 
 async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float) -> Optional[Dict[str, Any]]:
-    """
-    تمدید سرویس کاربر (که حالا از تابع مشترک _apply_and_verify_plan استفاده می‌کند).
-    """
     return await _apply_and_verify_plan(user_uuid, plan_days, plan_gb)
 
 
