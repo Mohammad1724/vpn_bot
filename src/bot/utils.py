@@ -24,7 +24,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# مپ تبدیل اعداد به فارسی
+# تبدیل ارقام به فارسی
 _PERSIAN_DIGIT_MAP = str.maketrans("0123456789,-", "۰۱۲۳۴۵۶۷۸۹،-")
 
 
@@ -53,12 +53,12 @@ def parse_date_flexible(date_str: Union[str, int, float]) -> Union[datetime, Non
     ورودی‌های متنوع تاریخ را به datetime (local tz) تبدیل می‌کند:
     - timestamp ثانیه/میلی‌ثانیه
     - ISO8601
-    - فرمت‌های رایج yyyy-mm-dd و ...
+    - فرمت‌های yyyy-mm-dd و ...
     """
     if date_str is None or date_str == "":
         return None
 
-    # اگر عددی بود (ثانیه یا میلی‌ثانیه)
+    # اگر عددی بود (ثانیه/میلی‌ثانیه)
     if isinstance(date_str, (int, float)) or (isinstance(date_str, str) and re.match(r"^\d+(\.\d+)?$", date_str.strip())):
         try:
             val = float(date_str)
@@ -118,12 +118,11 @@ def make_qr_bytes(data: str) -> io.BytesIO:
     return bio
 
 
-# ========= منطق مقاوم محاسبه انقضا و روزهای باقیمانده =========
+# ========= محاسبه‌ی مقاوم تاریخ انقضا و روزهای باقیمانده =========
 
 def _get_panel_expire_dt(user_data: dict) -> Optional[datetime]:
     """
-    اگر فیلد expire وجود داشته باشد و معتبر باشد، تاریخ انقضا را از آن می‌سازد.
-    (ثانیه یا میلی‌ثانیه)
+    اگر فیلد expire معتبر باشد، همان مبنا قرار می‌گیرد (ثانیه/میلی‌ثانیه).
     """
     expire_ts = user_data.get("expire")
     if isinstance(expire_ts, (int, float, str)):
@@ -140,8 +139,8 @@ def _get_panel_expire_dt(user_data: dict) -> Optional[datetime]:
 def _pick_start_dt(user_data: dict, service_db_record: Optional[dict], now: datetime) -> Optional[datetime]:
     """
     بهترین تاریخ شروع:
-    - اگر created_at در DB هست و سرویس تازه باشد (<= 36h)، همان را مبنا می‌گیریم.
-    - وگرنه جدیدترین بین last_reset_time/start_date/created_at(create_time) از پنل.
+    - اگر created_at در DB هست و سرویس تازه باشد (<= 36h)، همان را مبنا بگیر.
+    - وگرنه جدیدترین بین last_reset_time/start_date/created_at/create_time از پنل.
     """
     created_at_db = None
     if service_db_record:
@@ -174,8 +173,8 @@ def _format_expiry_and_days(user_data: dict, service_db_record: Optional[dict] =
     """
     خروجی: (expire_jalali_str, days_left)
     - اگر expire معتبر داریم: همان مبنا.
-    - اگر سرویس تازه است و days_left پنل غیرمنطقی بود: از created_at DB استفاده می‌کنیم.
-    - در غیر این صورت: از start/reset پنل استفاده می‌کنیم.
+    - اگر سرویس تازه است و days_left پنل غیرمنطقی بود: از created_at DB استفاده کن.
+    - در غیر این صورت: از start/reset پنل استفاده کن.
     """
     now_utc = datetime.now(timezone.utc)
 
@@ -238,7 +237,7 @@ def _format_expiry_and_days(user_data: dict, service_db_record: Optional[dict] =
     return expire_jalali, int(days_left_via_expire or 0)
 
 
-# ========= کپشن با قاب باکسی + لینک ساب قابل‌کپی (یک‌تکه) =========
+# ========= کپشن با استایل انتخابی (پایدار در RTL) =========
 
 def create_service_info_caption(
     user_data: dict,
@@ -258,11 +257,10 @@ def create_service_info_caption(
     def _ltr(s: str) -> str:
         return "\u2066" + s + "\u2069"  # LRI ... PDI
 
-    # محاسبه انقضا و روزهای باقیمانده
+    # محاسبات تاریخ/روز
     try:
         expire_jalali, days_left = _format_expiry_and_days(user_data, service_db_record)
     except TypeError:
-        # سازگاری با نسخه‌هایی که آرگومان دوم را ندارند
         expire_jalali, days_left = _format_expiry_and_days(user_data)
 
     used_gb = float(user_data.get('current_usage_GB', 0.0) or 0)
@@ -288,12 +286,12 @@ def create_service_info_caption(
 
     # ترافیک
     if unlimited:
-        traffic_line = f"│ 📦 ترافیک: نامحدود • مصرف: {_fmt_num(used_gb)} گیگ"
+        traffic_line = f"📦 ترافیک: نامحدود • مصرف: {_fmt_num(used_gb)} گیگ"
     else:
         remaining_gb = max(total_gb - used_gb, 0.0)
         traffic_line = (
-            f"│ 📦 ترافیک: {_fmt_num(used_gb)}/{_fmt_num(total_gb)} گیگ "
-            f"(باقی‌مانده: {_fmt_num(remaining_gb)} گیگ)"
+            f"📦 ترافیک: {_fmt_num(used_gb)}/{_fmt_num(total_gb)} گیگ "
+            f"(باقی: {_fmt_num(remaining_gb)} گیگ)"
         )
 
     # روزها و تاریخ
@@ -302,14 +300,15 @@ def create_service_info_caption(
     days_left_fa = _fmt_num(days_left)
     package_days_fa = _fmt_num(package_days)
 
-    # قاب باکسی پایدار در RTL
-    # توجه: نمایش این کپشن با parse_mode=MARKDOWN انجام می‌شود؛ کاراکترهای خاص Markdown در متن نداریم.
+    # قالب پایدار در RTL (بدون خطوط عمودی)
     caption = (
-        "╭──────── 🎉 سرویس شما فعال شد 🎉 ────────╮\n"
-        f"│ 🆔 {service_name} • {status_badge}\n"
-        f"│ ⏳ {days_left_fa}/{package_days_fa} روز • 📅 {expire_fa}\n"
+        "━━━━━━━━━━━━━━━━\n"
+        "🎉 سرویس شما فعال شد\n"
+        "━━━━━━━━━━━━━━━━\n"
+        f"🆔 {service_name} • {status_badge}\n"
+        f"⏳ {days_left_fa}/{package_days_fa} روز • 📅 {expire_fa}\n"
         f"{traffic_line}\n"
-        "╰───────────────────────────────────╯\n"
+        "━━━━━━━━━━━━━━━━\n"
         "📋 لینک اشتراک (برای کپی):\n"
         f"`{_ltr(sub_url)}`"
     )
