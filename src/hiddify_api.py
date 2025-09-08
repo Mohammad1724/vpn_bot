@@ -104,13 +104,13 @@ async def create_hiddify_user(
     except Exception:
         usage_limit_gb = 0.0
 
-    # **اصلاح نهایی و قطعی: ارسال package_days با جبران خطا و عدم ارسال start_date**
+    # **اصلاح نهایی و قطعی: ارسال درخواست ساخت دقیقا مانند فرم دستی**
     payload = {
         "name": unique_user_name,
         "package_days": _compensate_days(int(plan_days)),
         "usage_limit_GB": usage_limit_gb,
         "comment": user_telegram_id,
-        "current_usage_GB": 0,
+        # **فیلد current_usage_GB به طور کامل حذف شد تا پنل آن را نادیده نگیرد**
     }
 
     data = await _make_request("post", endpoint, json=payload)
@@ -151,6 +151,7 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
         return None
 
     compensated_days = _compensate_days(int(plan_days))
+    # در تمدید، ارسال current_usage_GB: 0 برای ریست حجم ضروری است
     payload = {
         "package_days": compensated_days,
         "usage_limit_GB": usage_limit_gb,
