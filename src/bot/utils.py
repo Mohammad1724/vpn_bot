@@ -1,4 +1,5 @@
-#filename: bot/utils.py
+# filename: bot/utils.py
+# -*- coding: utf-8 -*-
 
 import io
 import sqlite3
@@ -47,9 +48,26 @@ def format_toman(amount: Union[int, float, str], persian_digits: bool = False) -
     return s
 
 
-def parse_date_flexible(date_str: str) -> Union[datetime, None]:
-    if not date_str:
+def parse_date_flexible(date_str: Union[str, int, float]) -> Union[datetime, None]:
+    """
+    تلاش برای تبدیل انواع ورودی تاریخ:
+    - عدد (ثانیه یا میلی‌ثانیه)
+    - ISO8601
+    - فرمت‌های رایج yyyy-mm-dd و ...
+    """
+    if date_str is None or date_str == "":
         return None
+
+    # عددی (timestamp به ثانیه/میلی‌ثانیه)
+    if isinstance(date_str, (int, float)) or (isinstance(date_str, str) and re.match(r"^\d+(\.\d+)?$", date_str.strip())):
+        try:
+            val = float(date_str)
+            if val > 1e12:  # میلی‌ثانیه
+                val = val / 1000.0
+            return datetime.fromtimestamp(val, tz=timezone.utc).astimezone()
+        except Exception:
+            pass
+
     s = str(date_str).strip().replace("Z", "+00:00")
     try:
         dt = datetime.fromisoformat(s)
@@ -58,6 +76,7 @@ def parse_date_flexible(date_str: str) -> Union[datetime, None]:
         return dt.astimezone()
     except ValueError:
         pass
+
     fmts = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d")
     for fmt in fmts:
         try:
@@ -65,17 +84,7 @@ def parse_date_flexible(date_str: str) -> Union[datetime, None]:
             return dt_naive.replace(tzinfo=datetime.now().astimezone().tzinfo).astimezone()
         except ValueError:
             continue
-    if re.match(r"^\d+$", s):
-        try:
-            ts = int(s)
-            # بازهٔ معقول یونیکس‌تایم به ثانیه
-            if 946684800 <= ts <= 2145916800:
-                return datetime.fromtimestamp(ts, tz=timezone.utc).astimezone()
-            # اگر میلی‌ثانیه بود
-            if ts > 1_000_000_000_000:
-                return datetime.fromtimestamp(ts / 1000.0, tz=timezone.utc).astimezone()
-        except (ValueError, OverflowError):
-            pass
+
     logger.error(f"Date parse failed for '{date_str}'.")
     return None
 
@@ -109,17 +118,18 @@ def make_qr_bytes(data: str) -> io.BytesIO:
     return bio
 
 
+# ==== منطق مقاوم محاسبه تاریخ انقضا و روزهای باقیمانده ====
+
 def _get_panel_expire_dt(user_data: dict) -> Optional[datetime]:
     """
-    فقط اگر فیلد expire وجود داشته باشد و معتبر باشد، تاریخ انقضا را از آن می‌سازد.
+    اگر فیلد expire وجود داشته باشد و معتبر باشد، تاریخ انقضا را از آن می‌سازد.
     (به ثانیه یا میلی‌ثانیه)
     """
     expire_ts = user_data.get("expire")
     if isinstance(expire_ts, (int, float, str)):
         try:
             val = float(expire_ts)
-            # میلی‌ثانیه؟
-            if val > 1e12:
+            if val > 1e12:  # میلی‌ثانیه
                 val = val / 1000.0
             return datetime.fromtimestamp(val, tz=timezone.utc)
         except Exception:
@@ -132,7 +142,6 @@ def _pick_start_dt(user_data: dict, service_db_record: Optional[dict], now: date
     انتخاب بهترین تاریخ شروع برای محاسبه انقضا/روزهای باقیمانده:
     - اگر created_at در DB وجود داشته باشد و سرویس «تازه» باشد (<= 36 ساعت)، همان را مبنا می‌گیریم.
     - در غیر این صورت، از جدیدترین مقدار بین last_reset_time، start_date، created_at/create_time (از پنل) استفاده می‌کنیم.
-    - اگر هیچکدام نبود، None.
     """
     created_at_db = None
     if service_db_record:
@@ -142,7 +151,6 @@ def _pick_start_dt(user_data: dict, service_db_record: Optional[dict], now: date
 
     fresh_hours = 36
     is_fresh = created_at_db is not None and 0 <= (now - created_at_db).total_seconds() <= fresh_hours * 3600
-
     if is_fresh:
         return created_at_db
 
@@ -154,11 +162,10 @@ def _pick_start_dt(user_data: dict, service_db_record: Optional[dict], now: date
             if dt:
                 candidates.append(dt)
 
-    # اگر تاریخ‌های پنل در آینده بودند، کنار بگذار
+    # تاریخ‌های آینده را کنار بگذار
     candidates = [dt for dt in candidates if dt <= now + timedelta(hours=2)]
-
     if not candidates:
-        return created_at_db  # شاید created_at_db داریم ولی تازه نیست
+        return created_at_db
 
     return max(candidates)
 
@@ -166,19 +173,19 @@ def _pick_start_dt(user_data: dict, service_db_record: Optional[dict], now: date
 def _format_expiry_and_days(user_data: dict, service_db_record: Optional[dict] = None) -> Tuple[str, int]:
     """
     محاسبه تاریخ نمایش و روزهای باقیمانده با رویکرد مقاوم:
-    - اگر expire معتبر از پنل داریم و عدد معقولی می‌دهد، همان مبناست.
-    - اگر سرویس تازه ساخته شده و عدد روزهای باقیمانده از پنل کمتر از مدت پلن بود،
-      از created_at دیتابیس برای شروع استفاده می‌کنیم تا بلافاصله پس از خرید، باقیمانده=مدت پلن شود.
-    - در غیر این صورت از جدیدترین start/last_reset در پنل استفاده می‌کنیم.
+    - اگر expire معتبر از پنل داریم: مبنا همان است.
+    - اگر سرویس تازه ساخته شده و days_left پنل غیرمنطقی بود، از created_at DB برای شروع استفاده می‌کنیم
+      تا بلافاصله پس از خرید، باقیمانده = مدت پلن شود.
+    - در غیر این صورت از جدیدترین start/last_reset پنل استفاده می‌کنیم.
     """
     now_utc = datetime.now(timezone.utc)
-    package_days_raw = user_data.get("package_days", 0)
+
     try:
-        package_days = int(package_days_raw or 0)
+        package_days = int(user_data.get("package_days") or 0)
     except Exception:
         package_days = 0
 
-    # گزینه 1: expire مستقیم از پنل
+    # 1) expire مستقیم از پنل
     expire_dt = _get_panel_expire_dt(user_data)
     days_left_via_expire = None
     if expire_dt:
@@ -187,17 +194,13 @@ def _format_expiry_and_days(user_data: dict, service_db_record: Optional[dict] =
         else:
             days_left_via_expire = 0
 
-    # اگر سرویس تازه است و باقیمانده پنل به‌وضوح کمتر از مدت پلن است، از created_at استفاده کن
+    # 2) گزینه جایگزین برای سرویس تازه
     start_dt_candidate = _pick_start_dt(user_data, service_db_record, now_utc)
     if package_days > 0 and start_dt_candidate:
         alt_expire_dt = start_dt_candidate.astimezone(timezone.utc) + timedelta(days=package_days)
         alt_days_left = max(0, math.ceil((alt_expire_dt - now_utc).total_seconds() / (24 * 3600)))
 
         use_alt = False
-        # معیار انتخاب جایگزین:
-        # - اگر days_left_via_expire وجود ندارد
-        # - یا اگر سرویس تازه (بر اساس created_at DB) بوده و اختلاف قابل‌توجه است (کمتر از مدت-2)
-        # - یا اگر عدد پنل غیرمنطقی باشد (منفی/بیش از مدت پلن + 2)
         created_at_db = None
         if service_db_record:
             ca = service_db_record.get("created_at") or service_db_record.get("create_time")
@@ -216,7 +219,7 @@ def _format_expiry_and_days(user_data: dict, service_db_record: Optional[dict] =
             expire_dt = alt_expire_dt
             days_left_via_expire = alt_days_left
 
-    # اگر هنوز تاریخ نداریم ولی package_days>0 داریم، از now به‌عنوان شروع استفاده کن
+    # 3) اگر هنوز تاریخ نداریم ولی package_days>0 داریم، از now به‌عنوان شروع استفاده کن
     if not expire_dt and package_days > 0:
         expire_dt = now_utc + timedelta(days=package_days)
         days_left_via_expire = package_days
@@ -236,28 +239,40 @@ def _format_expiry_and_days(user_data: dict, service_db_record: Optional[dict] =
     return expire_jalali, int(days_left_via_expire or 0)
 
 
+# ==== کپشن شیک و مینیمال با قاب + لینک افزودن به اپلیکیشن + لینک قابل‌کپی ====
+
 def create_service_info_caption(
     user_data: dict,
     service_db_record: Optional[dict] = None,
     title: str = "🎉 سرویس شما!",
     override_sub_url: Optional[str] = None
 ) -> str:
-    used_gb = round(float(user_data.get('current_usage_GB', 0.0)), 2)
-    total_gb = round(float(user_data.get('usage_limit_GB', 0.0)), 2)
+    # اعداد را تمیز و فارسی کنیم
+    def _fmt_num(x: float) -> str:
+        try:
+            s = "{:g}".format(float(x))
+        except Exception:
+            s = str(x)
+        return to_persian_digits(s)
+
+    used_gb = float(user_data.get('current_usage_GB', 0.0) or 0)
+    total_gb = float(user_data.get('usage_limit_GB', 0.0) or 0)
     unlimited = (total_gb <= 0.0)
 
+    # محاسبه انقضا و روزهای باقیمانده (با درنظرگرفتن رکورد DB در صورت وجود)
     expire_jalali, days_left = _format_expiry_and_days(user_data, service_db_record)
+
+    # وضعیت فعال/غیرفعال
     is_active = not (
         user_data.get('status') in ('disabled', 'limited')
         or days_left <= 0
         or (not unlimited and total_gb > 0 and used_gb >= total_gb)
     )
+    status_badge = "🟢 فعال" if is_active else "🔴 غیرفعال"
 
-    status_text = "✅ فعال" if is_active else "❌ غیرفعال"
     service_name = user_data.get('name') or user_data.get('uuid', 'N/A')
-    if unlimited and isinstance(service_name, str) and "0 گیگ" in service_name:
-        service_name = service_name.replace("0 گیگ", "نامحدود")
 
+    # لینک اشتراک
     if override_sub_url:
         sub_url = override_sub_url
     elif service_db_record and service_db_record.get('sub_link'):
@@ -265,22 +280,33 @@ def create_service_info_caption(
     else:
         sub_url = build_subscription_url(user_data['uuid'])
 
-    traffic_line = (
-        f"حجم: نامحدود | مصرف: {used_gb}GB"
-        if unlimited
-        else f"حجم: {used_gb}/{total_gb}GB (باقی: {round(max(total_gb - used_gb, 0.0), 2)}GB)"
-    )
+    # ترافیک
+    if unlimited:
+        traffic_line = f"│ 📦 ترافیک: نامحدود • مصرف: {_fmt_num(used_gb)} گیگ"
+    else:
+        remaining_gb = max(total_gb - used_gb, 0.0)
+        traffic_line = (
+            f"│ 📦 ترافیک: {_fmt_num(used_gb)}/{_fmt_num(total_gb)} گیگ "
+            f"(باقی‌مانده: {_fmt_num(remaining_gb)} گیگ)"
+        )
 
+    # روزها و تاریخ
     package_days = int(user_data.get('package_days', 0) or 0)
+    expire_fa = to_persian_digits(expire_jalali or "نامشخص")
+    days_left_fa = _fmt_num(days_left)
+    package_days_fa = _fmt_num(package_days)
 
-    return (
-        f"{title}\n"
-        f"{service_name}\n\n"
-        f"وضعیت: {status_text}\n"
+    caption = (
+        "╭──────── 🎉 سرویس شما فعال شد 🎉 ────────╮\n"
+        f"│ 🆔 {service_name} • {status_badge}\n"
+        f"│ ⏳ {days_left_fa}/{package_days_fa} روز • 📅 {expire_fa}\n"
         f"{traffic_line}\n"
-        f"انقضا: {expire_jalali} | مدت: {package_days} روز | باقیمانده: {days_left} روز\n\n"
-        f"لینک اشتراک:\n`{sub_url}`"
+        "╰───────────────────────────────────╯\n"
+        f"[➕ افزودن به اپلیکیشن]({sub_url})\n\n"
+        "📋 لینک اشتراک (برای کپی):\n"
+        f"`{sub_url}`"
     )
+    return caption
 
 
 def get_service_status(hiddify_info: dict) -> Tuple[str, str, bool]:
@@ -289,8 +315,8 @@ def get_service_status(hiddify_info: dict) -> Tuple[str, str, bool]:
     if hiddify_info.get('status') in ('disabled', 'limited'):
         is_expired = True
 
-    usage_limit = hiddify_info.get('usage_limit_GB', 0)
-    current_usage = hiddify_info.get('current_usage_GB', 0)
+    usage_limit = float(hiddify_info.get('usage_limit_GB', 0) or 0)
+    current_usage = float(hiddify_info.get('current_usage_GB', 0) or 0)
     if usage_limit > 0 and current_usage >= usage_limit:
         is_expired = True
 
