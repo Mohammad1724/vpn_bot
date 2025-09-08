@@ -39,7 +39,7 @@ def _link_label(link_type: str) -> str:
 
 def _strip_qf_and_sub(url: str) -> str:
     """
-    حذف query, fragment و بخش /sub/ از انتهای URL برای ساخت لینک‌های دیگر.
+    حذف query, fragment و بخش /sub/ از انتهای URL.
     """
     pr = urlsplit(url)
     path = pr.path
@@ -174,7 +174,6 @@ async def show_link_options_menu(message: Message, user_uuid: str, service_id: i
     text = "لطفاً نوع لینک اشتراک مورد نظر را انتخاب کنید:"
     try:
         if is_edit:
-            # همیشه پیام قبلی (که عکس است) را پاک کن و پیام جدید بفرست
             await message.delete()
             await context.bot.send_message(chat_id=message.chat_id, text=text, reply_markup=markup(rows))
         else:
@@ -383,7 +382,7 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     if original_message:
-        await original_message.edit_text("در حال ارسال درخواست تمدید... ⏳")
+        await original_message.edit_text("در حال تمدید سرویس در پنل... ⏳")
 
     service = db.get_service(service_id)
     plan = db.get_plan(plan_id)
@@ -405,8 +404,8 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
             plan_gb=float(plan['gb'])
         )
 
-        if not isinstance(new_info, dict) or new_info.get("_not_found"):
-            logger.error(f"Renewal failed for UUID {service['sub_uuid']}: verification failed.")
+        if not new_info:
+            logger.error(f"Renewal failed for UUID {service['sub_uuid']}: Panel verification failed.")
             raise ValueError("Panel verification failed")
 
         db.finalize_renewal_transaction(txn_id, plan_id)
@@ -418,7 +417,7 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
     except Exception as e:
         logger.error(f"Service renewal failed for UUID {service['sub_uuid']}: {e}", exc_info=True)
         db.cancel_renewal_transaction(txn_id)
-        await _send_renewal_error(original_message, "❌ تمدید اعمال نشد. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.")
+        await _send_renewal_error(original_message, "❌ تمدید در پنل اعمال نشد. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.")
     finally:
         context.user_data.pop('renewal_service_id', None)
         context.user_data.pop('renewal_plan_id', None)
