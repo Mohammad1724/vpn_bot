@@ -1,3 +1,5 @@
+#filename: bot/utils.py
+
 import io
 import sqlite3
 import random
