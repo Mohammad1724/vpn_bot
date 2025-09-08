@@ -44,9 +44,9 @@ def _strip_qf_and_sub(url: str) -> str:
     pr = urlsplit(url)
     path = pr.path
     if path.endswith('/sub/'):
-        path = path[:-5]  # remove /sub/
+        path = path[:-5]
     elif path.endswith('/sub'):
-        path = path[:-4]  # remove /sub
+        path = path[:-4]
     
     return urlunsplit((pr.scheme, pr.netloc, path.rstrip('/'), '', ''))
 
