@@ -38,9 +38,6 @@ def _link_label(link_type: str) -> str:
 
 
 def _strip_qf_and_sub(url: str) -> str:
-    """
-    حذف query, fragment و بخش /sub/ از انتهای URL.
-    """
     pr = urlsplit(url)
     path = pr.path
     if path.endswith('/sub/'):
@@ -294,9 +291,15 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
         return
 
     if not data.startswith("delete_service_confirm_"):
+        # **اصلاح کلیدی: پیام قبلی را حذف و پیام جدید ارسال کن**
+        try:
+            await q.message.delete()
+        except BadRequest:
+            pass
         kb = markup([confirm_row(f"delete_service_confirm_{service_id}", f"delete_service_cancel_{service_id}")])
-        await q.edit_message_text(
-            "آیا از حذف این سرویس مطمئن هستید؟ این عمل سرویس را از پنل اصلی حذف می‌کند و قابل بازگشت نیست.",
+        await context.bot.send_message(
+            chat_id=q.from_user.id,
+            text="آیا از حذف این سرویس مطمئن هستید؟ این عمل سرویس را از پنل اصلی حذف می‌کند و قابل بازگشت نیست.",
             reply_markup=kb
         )
         return
