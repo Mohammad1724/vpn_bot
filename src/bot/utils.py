@@ -1,5 +1,5 @@
 # filename: bot/utils.py
-# (کل فایل - اصلاح شده)
+# (کل فایل - اصلاح شده با debug)
 
 import io
 import sqlite3
@@ -147,6 +147,9 @@ def _format_expiry_and_days(user_data: dict) -> Tuple[str, int]:
         if expire_dt_utc > now_utc:
             time_left = expire_dt_utc - now_utc
             days_left = math.ceil(time_left.total_seconds() / (24 * 3600))
+            
+        # Debug logging
+        logger.debug(f"Debug info for user: expire_dt_utc={expire_dt_utc}, now_utc={now_utc}, days_left={days_left}")
 
     return expire_jalali, days_left
 
@@ -186,8 +189,13 @@ def create_service_info_caption(
         else f"حجم: {used_gb}/{total_gb}GB (باقی: {round(max(total_gb - used_gb, 0.0), 2)}GB)"
     )
 
-    # اصلاح: نمایش کل روزهای پلن و روزهای باقیمانده
+    # نمایش مدت کل پلن و روزهای باقیمانده
     package_days = user_data.get('package_days', 0)
+    
+    # Debug info
+    start_date = user_data.get('start_date', 'N/A')
+    expire_ts = user_data.get('expire', 'N/A')
+    logger.debug(f"Service debug: package_days={package_days}, start_date={start_date}, expire={expire_ts}, days_left={days_left}")
     
     return (
         f"{title}\n"
