@@ -1,6 +1,3 @@
-# filename: bot/handlers/user_services.py
-# (کل فایل)
-
 import io
 import json
 import logging
@@ -19,10 +16,11 @@ from bot import utils
 from bot.ui import nav_row, markup, chunk, btn, confirm_row
 
 try:
-    from config import ADMIN_ID, HIDDIFY_API_VERIFY_SSL
+    from config import ADMIN_ID, HIDDIFY_API_VERIFY_SSL, DEFAULT_ASN
 except ImportError:
     ADMIN_ID = None
     HIDDIFY_API_VERIFY_SSL = True
+    DEFAULT_ASN = "MCI"
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +42,7 @@ def _strip_qf_and_sub(url: str) -> str:
         path = path[:-5]
     elif path.endswith('/sub'):
         path = path[:-4]
-    
+
     return urlunsplit((pr.scheme, pr.netloc, path.rstrip('/'), '', ''))
 
 
@@ -130,7 +128,7 @@ async def send_service_details(
                 await original_message.delete()
             except BadRequest:
                 pass
-        
+
         await context.bot.send_photo(
             chat_id=chat_id,
             photo=InputFile(qr_bio),
@@ -194,7 +192,12 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     config_name = (info.get('name', 'config') if isinstance(info, dict) else 'config') or 'config'
     safe_name = quote_plus(config_name)
 
+    # لینک پایه (با asn)
     base_link = service.get('sub_link') or utils.build_subscription_url(user_uuid)
+    if "asn=" not in base_link:
+        sep = "&" if "?" in base_link else "?"
+        base_link = base_link.rstrip("/") + f"{sep}asn={DEFAULT_ASN}"
+
     base_user_path = _strip_qf_and_sub(base_link)
 
     if link_type == "full":
@@ -218,7 +221,8 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if link_type == "sub":
         final_link = f"{base_link.rstrip('/')}#{safe_name}"
     else:
-        final_link = f"{base_user_path}/{link_type}/?name={safe_name}"
+        # سایر لینک‌ها با asn
+        final_link = f"{base_user_path}/{link_type}/?name={safe_name}&asn={DEFAULT_ASN}"
 
     qr_bio = utils.make_qr_bytes(final_link)
     caption = f"نام کانفیگ: **{config_name}**\nنوع لینک: **{_link_label(link_type)}**\n\n`{final_link}`"
@@ -291,7 +295,6 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
         return
 
     if not data.startswith("delete_service_confirm_"):
-        # **اصلاح کلیدی: پیام قبلی را حذف و پیام جدید ارسال کن**
         try:
             await q.message.delete()
         except BadRequest:
