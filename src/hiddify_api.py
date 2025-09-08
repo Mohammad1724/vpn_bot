@@ -59,8 +59,15 @@ async def _make_request(method: str, url: str, **kwargs) -> Optional[Dict[str, A
         except httpx.HTTPStatusError as e:
             status = e.response.status_code if e.response is not None else None
             text = e.response.text if e.response is not None else str(e)
+            
+            # **اصلاح کلیدی: مدیریت خطای 500 که حاوی پیام 404 است**
+            if status == 500 and "404 Not Found" in text:
+                logger.warning("Treating 500 error with '404 Not Found' message as a 404 for URL %s", url)
+                return {"_not_found": True}
+            
             if status == 404:
                 return {"_not_found": True}
+                
             if status in (401, 403, 422):
                 logger.error("%s to %s failed with %s: %s", method.upper(), url, status, text)
                 break
@@ -89,7 +96,6 @@ async def create_hiddify_user(
     except Exception:
         usage_limit_gb = 0.0
 
-    # **اصلاح کلیدی: حذف start_date از درخواست ساخت کاربر**
     payload = {
         "name": unique_user_name,
         "package_days": int(plan_days),
