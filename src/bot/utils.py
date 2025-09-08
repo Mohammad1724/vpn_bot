@@ -1,5 +1,5 @@
 # filename: bot/utils.py
-# (کل فایل)
+# (کل فایل - اصلاح شده)
 
 import io
 import sqlite3
@@ -89,7 +89,7 @@ def _clean_path(seg: Optional[str]) -> str:
 def build_subscription_url(user_uuid: str) -> str:
     domain = (random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN)
     client_secret = _clean_path(PANEL_SECRET_UUID)
-    
+
     if not client_secret:
         logger.warning("PANEL_SECRET_UUID is not set in config.py! Subscription links will be incorrect.")
         sub_path = _clean_path(SUB_PATH) or "sub"
@@ -110,7 +110,7 @@ def make_qr_bytes(data: str) -> io.BytesIO:
 def _panel_expiry_from_info(user_data: dict) -> Optional[datetime]:
     if not isinstance(user_data, dict):
         return None
-    
+
     # اولویت اول: فیلد expire (timestamp)
     expire_ts = user_data.get("expire")
     if isinstance(expire_ts, (int, float)) and expire_ts > 0:
@@ -126,14 +126,14 @@ def _panel_expiry_from_info(user_data: dict) -> Optional[datetime]:
         start_dt = parse_date_flexible(start_str)
         if start_dt:
             return start_dt + timedelta(days=days)
-            
+
     return None
 
 
 def _format_expiry_and_days(user_data: dict) -> Tuple[str, int]:
     expire_dt_utc = _panel_expiry_from_info(user_data)
     now_utc = datetime.now(timezone.utc)
-    
+
     expire_jalali, days_left = "نامشخص", 0
 
     if expire_dt_utc:
@@ -143,7 +143,7 @@ def _format_expiry_and_days(user_data: dict) -> Tuple[str, int]:
             expire_jalali = jdatetime.date.fromgregorian(date=expire_local.date()).strftime('%Y/%m/%d') if jdatetime else expire_local.strftime("%Y-%m-%d")
         except Exception:
             expire_jalali = expire_local.strftime("%Y-%m-%d")
-        
+
         if expire_dt_utc > now_utc:
             time_left = expire_dt_utc - now_utc
             days_left = math.ceil(time_left.total_seconds() / (24 * 3600))
@@ -186,12 +186,15 @@ def create_service_info_caption(
         else f"حجم: {used_gb}/{total_gb}GB (باقی: {round(max(total_gb - used_gb, 0.0), 2)}GB)"
     )
 
+    # اصلاح: نمایش کل روزهای پلن و روزهای باقیمانده
+    package_days = user_data.get('package_days', 0)
+    
     return (
         f"{title}\n"
         f"{service_name}\n\n"
         f"وضعیت: {status_text}\n"
         f"{traffic_line}\n"
-        f"انقضا: {expire_jalali} | باقیمانده: {days_left} روز\n\n"
+        f"انقضا: {expire_jalali} | مدت: {package_days} روز | باقیمانده: {days_left} روز\n\n"
         f"لینک اشتراک:\n`{sub_url}`"
     )
 
@@ -201,7 +204,7 @@ def get_service_status(hiddify_info: dict) -> Tuple[str, str, bool]:
     is_expired = days_left <= 0
     if hiddify_info.get('status') in ('disabled', 'limited'):
         is_expired = True
-    
+
     usage_limit = hiddify_info.get('usage_limit_GB', 0)
     current_usage = hiddify_info.get('current_usage_GB', 0)
     if usage_limit > 0 and current_usage >= usage_limit:
