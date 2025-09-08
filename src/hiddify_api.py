@@ -81,13 +81,10 @@ async def _make_request(method: str, url: str, **kwargs) -> Optional[Dict[str, A
 
 def _compensate_days(days: int) -> int:
     """
-    جبران خطای محاسبه روز در پنل.
-    اگر پلن 30 روزه باشد، 32 روز ارسال می‌کنیم تا خروجی 30 روز شود.
-    این تابع را می‌توانید برای پلن‌های دیگر نیز تنظیم کنید.
+    جبران خطای محاسبه روز در پنل برای تمدید.
     """
     if days == 30:
         return 32
-    # برای سایر پلن‌ها، همان مقدار اصلی را برمی‌گردانیم
     return days
 
 
@@ -107,18 +104,25 @@ async def create_hiddify_user(
     except Exception:
         usage_limit_gb = 0.0
 
+    # **اصلاح کلیدی برای خرید: ارسال start_date برای ریست تاریخ**
     payload = {
         "name": unique_user_name,
-        "package_days": _compensate_days(int(plan_days)),  # **اصلاح کلیدی برای خرید**
+        "package_days": int(plan_days),
         "usage_limit_GB": usage_limit_gb,
         "comment": user_telegram_id,
         "current_usage_GB": 0,
+        "start_date": datetime.now().astimezone().isoformat(),
     }
 
     data = await _make_request("post", endpoint, json=payload)
     if not data or not data.get("uuid"):
-        logger.error("create_hiddify_user: failed or UUID missing (check PANEL_DOMAIN/ADMIN_PATH/API_KEY)")
-        return None
+        # اگر با start_date خطا داد، بدون آن دوباره تلاش می‌کنیم
+        logger.warning("create_user with start_date failed. Retrying without it.")
+        payload.pop("start_date")
+        data = await _make_request("post", endpoint, json=payload)
+        if not data or not data.get("uuid"):
+            logger.error("create_hiddify_user failed completely (check PANEL_DOMAIN/ADMIN_PATH/API_KEY)")
+            return None
 
     user_uuid = data.get("uuid")
     sub_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
@@ -152,7 +156,7 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
         logger.error("Renew failed: user with UUID %s not found in panel.", user_uuid)
         return None
 
-    compensated_days = _compensate_days(int(plan_days)) # **اصلاح کلیدی برای تمدید**
+    compensated_days = _compensate_days(int(plan_days))
     payload = {
         "package_days": compensated_days,
         "usage_limit_GB": usage_limit_gb,
