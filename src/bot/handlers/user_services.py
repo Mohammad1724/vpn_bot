@@ -37,10 +37,18 @@ def _link_label(link_type: str) -> str:
     }.get(lt, "V2Ray (sub)")
 
 
-def _strip_qf(url: str) -> str:
-    """حذف query و fragment از URL پایه."""
+def _strip_qf_and_sub(url: str) -> str:
+    """
+    حذف query, fragment و بخش /sub/ از انتهای URL.
+    """
     pr = urlsplit(url)
-    return urlunsplit((pr.scheme, pr.netloc, pr.path.rstrip('/'), '', ''))
+    path = pr.path
+    if path.endswith('/sub/'):
+        path = path[:-5]  # remove /sub/
+    elif path.endswith('/sub'):
+        path = path[:-4]  # remove /sub
+    
+    return urlunsplit((pr.scheme, pr.netloc, path.rstrip('/'), '', ''))
 
 
 async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -187,14 +195,13 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     safe_name = quote_plus(config_name)
 
     base_link = service.get('sub_link') or utils.build_subscription_url(user_uuid)
-    # مسیر پایه کاربر بدون /sub/ در انتها
-    base_user_path = base_link.rsplit('/sub/', 1)[0]
+    base_user_path = _strip_qf_and_sub(base_link)
 
     if link_type == "full":
         try:
             await q.edit_message_text("در حال دریافت کانفیگ‌های تکی... ⏳")
             full_url = f"{base_user_path}/all.txt"
-            async with httpx.AsyncClient(timeout=20, verify=HIDDIFY_API_VERIFY_SSL) as c:
+            async with httpx.AsyncClient(timeout=20, verify=HIDDIFY_API_VERIFY_SSL, follow_redirects=True) as c:
                 resp = await c.get(full_url)
                 resp.raise_for_status()
             await q.message.delete()
@@ -211,7 +218,6 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if link_type == "sub":
         final_link = f"{base_link.rstrip('/')}#{safe_name}"
     else:
-        # برای لینک‌های غیر از sub، از ?name= استفاده می‌شود
         final_link = f"{base_user_path}/{link_type}/?name={safe_name}"
 
     qr_bio = utils.make_qr_bytes(final_link)
