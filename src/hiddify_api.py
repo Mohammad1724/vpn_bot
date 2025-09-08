@@ -1,3 +1,4 @@
+# filename: hiddify_api.py
 # -*- coding: utf-8 -*-
 
 import asyncio
@@ -8,7 +9,7 @@ import logging
 import types
 from typing import Optional, Dict, Any
 
-# --- Robust config loader (no ImportError cascade) ---
+# --- Robust config loader ---
 try:
     import config as _cfg
 except Exception:
@@ -52,9 +53,9 @@ def _normalize_host(host: str) -> str:
 def _strip_scheme(host: str) -> str:
     h = (host or "").strip()
     if h.startswith("https://"):
-        h = h[len("https://") :]
+        h = h[len("https://"):]
     elif h.startswith("http://"):
-        h = h[len("http://") :]
+        h = h[len("http://"):]
     return h.strip("/")
 
 
@@ -74,8 +75,8 @@ SUB_DOMAINS = _normalize_subdomains(SUB_DOMAINS)
 
 def _get_base_url() -> str:
     """
-    URL پایه API. الزامی است PANEL_DOMAIN را در config ست کنید.
-    اگر خالی بود، سعی می‌کنیم از اولین SUB_DOMAINS استفاده کنیم (ممکن است برای API مناسب نباشد).
+    URL پایه API. PANEL_DOMAIN را در config ست کنید.
+    اگر خالی بود، سعی با SUB_DOMAINS[0]؛ در نهایت فقط برای جلوگیری از کرش به localhost می‌افتد.
     """
     base = _normalize_host(PANEL_DOMAIN)
     if not base:
@@ -85,7 +86,7 @@ def _get_base_url() -> str:
             base = alt
         else:
             logger.error("PANEL_DOMAIN and SUB_DOMAINS are empty. Please set PANEL_DOMAIN in config.py.")
-            base = "https://localhost"  # فقط برای جلوگیری از کرش؛ کار نخواهد کرد
+            base = "https://localhost"
 
     clean_admin = str(ADMIN_PATH or "").strip().strip("/")
     if clean_admin:
@@ -153,7 +154,6 @@ async def _make_request(method: str, url: str, **kwargs) -> Optional[Dict[str, A
         except httpx.HTTPStatusError as e:
             status = e.response.status_code if e.response is not None else None
             text = e.response.text if e.response is not None else str(e)
-
             if status == 500 and "404 Not Found" in text:
                 logger.warning("Treating 500 error with '404 Not Found' message as a 404 for URL %s", url)
                 return {"_not_found": True}
@@ -200,11 +200,8 @@ async def create_hiddify_user(
         if "|srv:" not in comment:
             comment = f"{comment}|srv:{safe_srv}" if comment else f"srv:{safe_srv}"
 
-    # ساخت کاربر
-    payload_create = {
-        "name": unique_user_name,
-        "comment": comment,
-    }
+    # مرحله ۱: ساخت کاربر
+    payload_create = {"name": unique_user_name, "comment": comment}
     data = await _make_request("post", endpoint, json=payload_create)
     if not data or not data.get("uuid"):
         logger.error("create_hiddify_user (step 1 - POST): failed or UUID missing")
@@ -212,7 +209,7 @@ async def create_hiddify_user(
 
     user_uuid = data.get("uuid")
 
-    # اعمال پلن
+    # مرحله ۲: اعمال پلن
     logger.info("User %s created. Now applying plan details via PATCH...", user_uuid)
     update_success = await _apply_and_verify_plan(user_uuid, plan_days, plan_gb)
     if not update_success:
@@ -220,16 +217,15 @@ async def create_hiddify_user(
         await delete_user_from_panel(user_uuid)
         return None
 
-    # ساخت لینک sub با asn
+    # ساخت لینک سابسکریپشن با الگوی .../sub/ (بدون asn)
     sub_host = _strip_scheme(random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN)
     client_secret = str(PANEL_SECRET_UUID or "").strip().strip("/")
-    asn_qs = f"?asn={(DEFAULT_ASN or '').strip()}" if (DEFAULT_ASN or "").strip() else ""
 
     if not client_secret:
         sub_path = str(SUB_PATH or "sub").strip().strip("/")
-        full_link = f"https://{sub_host}/{sub_path}/{user_uuid}/{asn_qs}"
+        full_link = f"https://{sub_host}/{sub_path}/{user_uuid}/"
     else:
-        full_link = f"https://{sub_host}/{client_secret}/{user_uuid}/sub/{asn_qs}"
+        full_link = f"https://{sub_host}/{client_secret}/{user_uuid}/sub/"
 
     return {"full_link": full_link, "uuid": user_uuid, "name": unique_user_name}
 
@@ -240,6 +236,9 @@ async def get_user_info(user_uuid: str, server_name: Optional[str] = None, **kwa
 
 
 async def _try_set_unlimited(user_uuid: str, exact_days: int) -> Optional[Dict[str, Any]]:
+    """
+    حالت auto: چند استراتژی مختلف برای نامحدود واقعی.
+    """
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
     pref = _normalize_unlimited_value(HIDDIFY_UNLIMITED_VALUE)
 
@@ -289,6 +288,9 @@ async def _try_set_unlimited(user_uuid: str, exact_days: int) -> Optional[Dict[s
 
 
 async def _set_large_quota(user_uuid: str, exact_days: int, large_gb: float) -> Optional[Dict[str, Any]]:
+    """
+    نامحدود به‌صورت سقف حجمی بزرگ (مثلاً 1000GB).
+    """
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
     large_gb = float(large_gb)
     payload = {
