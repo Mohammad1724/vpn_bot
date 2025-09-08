@@ -1,9 +1,11 @@
 # filename: bot/handlers/buy.py
 # (کل فایل)
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import List, Optional
+from urllib.parse import quote_plus
 
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, InputFile
@@ -266,7 +268,7 @@ async def _do_purchase_confirmed(q, context: ContextTypes.DEFAULT_TYPE, custom_n
         await q.edit_message_text(f"❌ موجودی کافی نیست. لطفاً ابتدا حسابتان را شارژ کنید.")
         return
     try:
-        await q.edit_message_text("⏳ در حال ایجاد سرویس شما...")
+        await q.edit_message_text("⏳ در حال ایجاد و تنظیم سرویس شما... (این مرحله ممکن است چند ثانیه طول بکشد)")
         note = f"tg:@{username}|id:{user_id}" if username else f"tg:id:{user_id}"
         gb_i = int(plan['gb'])
         default_name = "سرویس نامحدود" if gb_i == 0 else f"سرویس {utils.to_persian_digits(str(gb_i))} گیگ"
@@ -277,21 +279,21 @@ async def _do_purchase_confirmed(q, context: ContextTypes.DEFAULT_TYPE, custom_n
             custom_name=(custom_name or default_name)
         )
         if not provision or not provision.get("uuid"):
-            raise RuntimeError("Failed to create service in panel")
+            raise RuntimeError("Failed to create and configure service in panel")
 
         main_uuid, main_sublink = provision["uuid"], provision.get("full_link", "")
         db.finalize_purchase_transaction(txn_id, main_uuid, main_sublink, custom_name)
 
         if data.get('promo_code'):
             db.mark_promo_code_as_used(user_id, data['promo_code'])
-        await _send_service_info_to_user(context, user_id, main_uuid)
+        await _send_service_info_to_user(context, user_id, main_uuid, plan)
     except Exception as e:
         logger.error("Purchase failed for user %s plan %s: %s", user_id, data.get('plan_id'), e, exc_info=True)
         db.cancel_purchase_transaction(txn_id)
         await context.bot.send_message(chat_id=user_id, text="❌ خطا در ایجاد سرویس. به پشتیبانی اطلاع دهید.", reply_markup=get_main_menu_keyboard(user_id))
 
 
-async def _send_service_info_to_user(context, user_id, new_uuid):
+async def _send_service_info_to_user(context, user_id, new_uuid, plan):
     from urllib.parse import quote_plus
 
     new_service_record = db.get_service_by_uuid(new_uuid)
@@ -299,7 +301,16 @@ async def _send_service_info_to_user(context, user_id, new_uuid):
         await context.bot.send_message(chat_id=user_id, text="❌ خطای داخلی: سرویس ساخته شد اما در دیتابیس یافت نشد.")
         return
 
-    user_data = await hiddify_api.get_user_info(new_uuid)
+    # **اصلاح کلیدی: صبر هوشمند برای آپدیت شدن اطلاعات در پنل**
+    user_data = None
+    expected_days = hiddify_api._compensate_days(plan['days'])
+    for attempt in range(5):
+        user_data = await hiddify_api.get_user_info(new_uuid)
+        if user_data and int(user_data.get("package_days", 0)) == expected_days:
+            logger.info("Panel info for %s is up-to-date on attempt %d.", new_uuid, attempt + 1)
+            break
+        logger.warning("Panel info for %s is stale on attempt %d. Retrying...", new_uuid, attempt + 1)
+        await asyncio.sleep(1.5)
 
     if user_data:
         config_name = (user_data.get('name', 'config') if isinstance(user_data, dict) else 'config') or 'config'
