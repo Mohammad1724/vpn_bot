@@ -60,7 +60,6 @@ async def _make_request(method: str, url: str, **kwargs) -> Optional[Dict[str, A
             status = e.response.status_code if e.response is not None else None
             text = e.response.text if e.response is not None else str(e)
             
-            # **اصلاح کلیدی: مدیریت خطای 500 که حاوی پیام 404 است**
             if status == 500 and "404 Not Found" in text:
                 logger.warning("Treating 500 error with '404 Not Found' message as a 404 for URL %s", url)
                 return {"_not_found": True}
@@ -78,6 +77,18 @@ async def _make_request(method: str, url: str, **kwargs) -> Optional[Dict[str, A
             await asyncio.sleep(delay)
             delay *= 2
     return None
+
+
+def _compensate_days(days: int) -> int:
+    """
+    جبران خطای محاسبه روز در پنل.
+    اگر پلن 30 روزه باشد، 32 روز ارسال می‌کنیم تا خروجی 30 روز شود.
+    این تابع را می‌توانید برای پلن‌های دیگر نیز تنظیم کنید.
+    """
+    if days == 30:
+        return 32
+    # برای سایر پلن‌ها، همان مقدار اصلی را برمی‌گردانیم
+    return days
 
 
 async def create_hiddify_user(
@@ -98,7 +109,7 @@ async def create_hiddify_user(
 
     payload = {
         "name": unique_user_name,
-        "package_days": int(plan_days),
+        "package_days": _compensate_days(int(plan_days)),  # **اصلاح کلیدی برای خرید**
         "usage_limit_GB": usage_limit_gb,
         "comment": user_telegram_id,
         "current_usage_GB": 0,
@@ -141,8 +152,9 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
         logger.error("Renew failed: user with UUID %s not found in panel.", user_uuid)
         return None
 
+    compensated_days = _compensate_days(int(plan_days)) # **اصلاح کلیدی برای تمدید**
     payload = {
-        "package_days": int(plan_days),
+        "package_days": compensated_days,
         "usage_limit_GB": usage_limit_gb,
         "current_usage_GB": 0,
     }
