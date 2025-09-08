@@ -1,4 +1,3 @@
-# filename: hiddify_api.py
 # -*- coding: utf-8 -*-
 
 import asyncio
@@ -85,7 +84,7 @@ def _normalize_unlimited_value(val):
 
 def _is_unlimited_value(x) -> bool:
     """
-    هر مقدار None یا <= 0 را «نامحدود» در نظر می‌گیریم (برای سازگاری با نسخه‌های مختلف).
+    هر مقدار None یا <= 0 را «نامحدود» در نظر می‌گیریم.
     """
     if x is None:
         return True
@@ -201,7 +200,10 @@ async def create_hiddify_user(
     return {"full_link": full_link, "uuid": user_uuid, "name": unique_user_name}
 
 
-async def get_user_info(user_uuid: str) -> Optional[Dict[str, Any]]:
+async def get_user_info(user_uuid: str, server_name: Optional[str] = None, **kwargs) -> Optional[Dict[str, Any]]:
+    """
+    server_name و سایر پارامترهای اضافی را برای سازگاری می‌پذیرد (نادیده گرفته می‌شوند).
+    """
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
     return await _make_request("get", endpoint)
 
