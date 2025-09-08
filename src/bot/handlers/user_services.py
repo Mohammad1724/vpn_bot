@@ -1,3 +1,6 @@
+# filename: bot/handlers/user_services.py
+# -*- coding: utf-8 -*-
+
 import io
 import json
 import logging
@@ -42,7 +45,7 @@ def _strip_qf_and_sub(url: str) -> str:
         path = path[:-5]
     elif path.endswith('/sub'):
         path = path[:-4]
-
+    # حذف query و fragment
     return urlunsplit((pr.scheme, pr.netloc, path.rstrip('/'), '', ''))
 
 
@@ -106,6 +109,8 @@ async def send_service_details(
 
         config_name = (info.get('name', 'config') if isinstance(info, dict) else 'config') or 'config'
         safe_name = quote_plus(config_name)
+
+        # لینک پایه با asn (از utils که scheme و asn را رعایت می‌کند)
         base_link = utils.build_subscription_url(service['sub_uuid'])
         preferred_url = f"{base_link.rstrip('/')}#{safe_name}"
 
@@ -175,7 +180,7 @@ async def show_link_options_menu(message: Message, user_uuid: str, service_id: i
             await message.reply_text(text, reply_markup=markup(rows))
     except BadRequest as e:
         if "message to delete not found" not in str(e):
-             logger.error("show_link_options_menu error: %s", e)
+            logger.error("show_link_options_menu error: %s", e)
 
 
 async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -192,12 +197,19 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     config_name = (info.get('name', 'config') if isinstance(info, dict) else 'config') or 'config'
     safe_name = quote_plus(config_name)
 
-    # لینک پایه (با asn)
-    base_link = service.get('sub_link') or utils.build_subscription_url(user_uuid)
+    # لینک پایه: اول DB، در غیر این صورت از utils
+    base_link = (service.get('sub_link') or utils.build_subscription_url(user_uuid) or "").strip()
+
+    # 1) تضمین scheme (برای لینک‌های قدیمی ذخیره‌شده بدون https)
+    if base_link and not base_link.startswith(("http://", "https://")):
+        base_link = "https://" + base_link.lstrip("/")
+
+    # 2) تضمین پارامتر asn
     if "asn=" not in base_link:
         sep = "&" if "?" in base_link else "?"
         base_link = base_link.rstrip("/") + f"{sep}asn={DEFAULT_ASN}"
 
+    # 3) ساخت مسیر پایه کاربر بدون /sub و بدون query/fragment
     base_user_path = _strip_qf_and_sub(base_link)
 
     if link_type == "full":
@@ -209,7 +221,8 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 resp.raise_for_status()
             await q.message.delete()
             await context.bot.send_document(
-                chat_id=q.from_user.id, document=InputFile(io.BytesIO(resp.content), filename=f"{safe_name}_configs.txt"),
+                chat_id=q.from_user.id,
+                document=InputFile(io.BytesIO(resp.content), filename=f"{safe_name}_configs.txt"),
                 caption="📄 کانفیگ‌های تکی شما به صورت فایل ارسال شد.",
                 reply_markup=markup([nav_row(back_cb=f"more_links_{user_uuid}", home_cb="home_menu")])
             )
@@ -221,7 +234,7 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if link_type == "sub":
         final_link = f"{base_link.rstrip('/')}#{safe_name}"
     else:
-        # سایر لینک‌ها با asn
+        # سایر لینک‌ها (Clash/SingBox/ClashMeta) + asn
         final_link = f"{base_user_path}/{link_type}/?name={safe_name}&asn={DEFAULT_ASN}"
 
     qr_bio = utils.make_qr_bytes(final_link)
@@ -231,7 +244,10 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except BadRequest:
         pass
     await context.bot.send_photo(
-        chat_id=q.message.chat_id, photo=qr_bio, caption=caption, parse_mode=ParseMode.MARKDOWN,
+        chat_id=q.message.chat_id,
+        photo=qr_bio,
+        caption=caption,
+        parse_mode=ParseMode.MARKDOWN,
         reply_markup=markup([nav_row(back_cb=f"more_links_{user_uuid}", home_cb="home_menu")])
     )
 
