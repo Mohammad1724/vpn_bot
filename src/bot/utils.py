@@ -1,15 +1,14 @@
 # filename: bot/utils.py
-# (کل فایل - اصلاح شده با debug)
+# (کل فایل - اصلاح شده)
 
 import io
 import sqlite3
 import random
 import logging
-from typing import Union, Optional, Tuple, Dict, Any
+from typing import Union, Optional, Tuple
 from datetime import datetime, timedelta, timezone
 import math
 import re
-from urllib.parse import quote_plus
 
 import qrcode
 import database as db
@@ -111,45 +110,59 @@ def _panel_expiry_from_info(user_data: dict) -> Optional[datetime]:
     if not isinstance(user_data, dict):
         return None
 
-    # اولویت اول: فیلد expire (timestamp)
+    # 1) اگر expire وجود داشت (ثانیه یا میلی‌ثانیه) از آن استفاده کن
     expire_ts = user_data.get("expire")
-    if isinstance(expire_ts, (int, float)) and expire_ts > 0:
+    if isinstance(expire_ts, (int, float, str)):
         try:
-            return datetime.fromtimestamp(int(expire_ts), tz=timezone.utc)
+            val = float(expire_ts)
+            # میلی‌ثانیه؟
+            if val > 1e12:
+                val = val / 1000.0
+            return datetime.fromtimestamp(val, tz=timezone.utc)
         except Exception:
             pass
 
-    # اولویت دوم: محاسبه بر اساس start_date و package_days
-    start_str = user_data.get("start_date") or user_data.get("last_reset_time")
-    days = user_data.get("package_days")
-    if start_str and isinstance(days, int) and days > 0:
-        start_dt = parse_date_flexible(start_str)
-        if start_dt:
-            return start_dt + timedelta(days=days)
+    # 2) در غیر این صورت از جدیدترین زمان بین last_reset_time و start_date (و حتی created_at) استفاده کن
+    days_raw = user_data.get("package_days")
+    try:
+        days = int(days_raw) if days_raw is not None else 0
+    except Exception:
+        days = 0
+    if days <= 0:
+        return None
 
-    return None
+    candidates = []
+    for key in ("last_reset_time", "start_date", "created_at", "create_time"):
+        val = user_data.get(key)
+        if val:
+            dt = parse_date_flexible(val)
+            if dt:
+                candidates.append(dt)
+
+    # اگر هیچ تاریخی نبود، برنمی‌گردیم (تابع بالادستی صفر نمایش می‌دهد)
+    if not candidates:
+        return None
+
+    start_dt = max(candidates)  # جدیدترین تاریخ را مبنا بگیر
+    return start_dt + timedelta(days=days)
 
 
 def _format_expiry_and_days(user_data: dict) -> Tuple[str, int]:
-    expire_dt_utc = _panel_expiry_from_info(user_data)
-    now_utc = datetime.now(timezone.utc)
+    expire_dt = _panel_expiry_from_info(user_data)
+    now = datetime.now(timezone.utc)
 
     expire_jalali, days_left = "نامشخص", 0
 
-    if expire_dt_utc:
-        # تبدیل به منطقه زمانی محلی برای نمایش صحیح
-        expire_local = expire_dt_utc.astimezone()
+    if expire_dt:
+        expire_local = expire_dt.astimezone()
         try:
             expire_jalali = jdatetime.date.fromgregorian(date=expire_local.date()).strftime('%Y/%m/%d') if jdatetime else expire_local.strftime("%Y-%m-%d")
         except Exception:
             expire_jalali = expire_local.strftime("%Y-%m-%d")
 
-        if expire_dt_utc > now_utc:
-            time_left = expire_dt_utc - now_utc
+        if expire_dt > now:
+            time_left = expire_dt - now
             days_left = math.ceil(time_left.total_seconds() / (24 * 3600))
-            
-        # Debug logging
-        logger.debug(f"Debug info for user: expire_dt_utc={expire_dt_utc}, now_utc={now_utc}, days_left={days_left}")
 
     return expire_jalali, days_left
 
@@ -189,14 +202,8 @@ def create_service_info_caption(
         else f"حجم: {used_gb}/{total_gb}GB (باقی: {round(max(total_gb - used_gb, 0.0), 2)}GB)"
     )
 
-    # نمایش مدت کل پلن و روزهای باقیمانده
-    package_days = user_data.get('package_days', 0)
-    
-    # Debug info
-    start_date = user_data.get('start_date', 'N/A')
-    expire_ts = user_data.get('expire', 'N/A')
-    logger.debug(f"Service debug: package_days={package_days}, start_date={start_date}, expire={expire_ts}, days_left={days_left}")
-    
+    package_days = int(user_data.get('package_days', 0) or 0)
+
     return (
         f"{title}\n"
         f"{service_name}\n\n"
