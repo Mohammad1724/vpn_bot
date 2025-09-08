@@ -1,5 +1,5 @@
 # filename: hiddify_api.py
-# -*- coding: utf-8 -*-
+# (کل فایل)
 
 import asyncio
 import httpx
@@ -15,6 +15,11 @@ except ImportError:
     PANEL_SECRET_UUID = ""
     HIDDIFY_API_VERIFY_SSL = True
 
+try:
+    from config import DEFAULT_ASN
+except Exception:
+    DEFAULT_ASN = "MCI"
+    
 logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 3
@@ -35,7 +40,7 @@ def _get_api_headers() -> dict:
 
 
 async def _make_client(timeout: float = 20.0) -> httpx.AsyncClient:
-    return httpx.AsyncClient(timeout=timeout, verify=HIDDIFY_API_VERIFY_SSL)
+    return httpx.AsyncClient(timeout=timeout, verify=HIDDIFY_API_VERIFY_SSL, follow_redirects=True)
 
 
 async def _make_request(method: str, url: str, **kwargs) -> Optional[Dict[str, Any]]:
@@ -54,12 +59,11 @@ async def _make_request(method: str, url: str, **kwargs) -> Optional[Dict[str, A
             status = e.response.status_code if e.response is not None else None
             text = e.response.text if e.response is not None else str(e)
             if status == 404:
-                logger.warning("%s to %s -> 404 Not Found", method.upper(), url)
                 return {"_not_found": True}
             if status in (401, 403, 422):
                 logger.error("%s to %s failed with %s: %s", method.upper(), url, status, text)
                 break
-            logger.warning("%s to %s failed with %s (retry %d/%d)", method.upper(), url, status, attempt, MAX_RETRIES)
+            logger.warning("%s to %s failed with %s: %s (retry %d/%d)", method.upper(), url, status, text, attempt, MAX_RETRIES)
         except Exception as e:
             logger.error("%s to %s failed: %s", method.upper(), url, e, exc_info=True)
         if attempt < MAX_RETRIES:
@@ -108,7 +112,7 @@ async def create_hiddify_user(
     else:
         full_link = f"https://{sub_domain}/{client_secret}/{user_uuid}/sub/"
 
-    return {"full_link": full_link, "uuid": user_uuid}
+    return {"full_link": full_link, "uuid": user_uuid, "name": unique_user_name}
 
 
 async def get_user_info(user_uuid: str) -> Optional[Dict[str, Any]]:
