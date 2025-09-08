@@ -1,12 +1,12 @@
 # filename: bot/handlers/user_services.py
-# (کل فایل)
+# -*- coding: utf-8 -*-
 
 import io
 import json
 import logging
 import httpx
 from typing import List, Optional
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlsplit, urlunsplit
 
 from telegram.ext import ContextTypes
 from telegram import Update, Message, InputFile
@@ -19,11 +19,12 @@ from bot import utils
 from bot.ui import nav_row, markup, chunk, btn, confirm_row
 
 try:
-    from config import ADMIN_ID, SUBCONVERTER_ENABLED, SUBCONVERTER_DEFAULT_TARGET
+    from config import ADMIN_ID, SUBCONVERTER_ENABLED, SUBCONVERTER_DEFAULT_TARGET, HIDDIFY_API_VERIFY_SSL
 except ImportError:
     ADMIN_ID = None
     SUBCONVERTER_ENABLED = False
     SUBCONVERTER_DEFAULT_TARGET = "v2ray"
+    HIDDIFY_API_VERIFY_SSL = True
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,12 @@ def _link_label(link_type: str) -> str:
         "singbox": "SingBox", "xray": "Xray", "clash": "Clash", "clashmeta": "Clash Meta",
         "unified": "لینک واحد (Subconverter)",
     }.get(lt, "V2Ray (sub)")
+
+
+def _strip_qf(url: str) -> str:
+    """حذف query و fragment از URL پایه."""
+    pr = urlsplit(url)
+    return urlunsplit((pr.scheme, pr.netloc, pr.path.rstrip('/'), '', ''))
 
 
 async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -179,14 +186,15 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     info = await hiddify_api.get_user_info(user_uuid)
     config_name = (info.get('name', 'config') if isinstance(info, dict) else 'config') or 'config'
     safe_name = quote_plus(config_name)
-    base_link = utils.build_subscription_url(user_uuid).rstrip('/')
+    base_link = utils.build_subscription_url(user_uuid)
+    base_clean = _strip_qf(base_link)
 
     if link_type == "full":
         try:
             await q.edit_message_text("در حال دریافت کانفیگ‌های تکی... ⏳")
-            full_link = f"{base_link}/all.txt"
-            async with httpx.AsyncClient(timeout=20, verify=utils.HIDDIFY_API_VERIFY_SSL) as c:
-                resp = await c.get(full_link)
+            full_url = f"{base_clean}/all.txt"
+            async with httpx.AsyncClient(timeout=20, verify=HIDDIFY_API_VERIFY_SSL) as c:
+                resp = await c.get(full_url)
                 resp.raise_for_status()
             await q.message.delete()
             await context.bot.send_document(
@@ -199,11 +207,11 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text("❌ دریافت کانفیگ‌های تکی با خطا مواجه شد.")
         return
 
-    # برای لینک‌های غیر از sub، از ?name= استفاده می‌شود (طبق ساختار هیدیفای)
-    if link_type != "sub":
-        final_link = f"{base_link}/{link_type}/?name={safe_name}"
+    if link_type == "sub":
+        final_link = f"{base_link.rstrip('/')}#{safe_name}"
     else:
-        final_link = f"{base_link}/#{safe_name}"
+        # برای لینک‌های غیر از sub، از ?name= استفاده می‌شود
+        final_link = f"{base_clean}/{link_type}/?name={safe_name}"
 
     qr_bio = utils.make_qr_bytes(final_link)
     caption = f"نام کانفیگ: **{config_name}**\nنوع لینک: **{_link_label(link_type)}**\n\n`{final_link}`"
@@ -212,7 +220,7 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except BadRequest:
         pass
     await context.bot.send_photo(
-        chat_id=q.message.chat_id, photo=qr_bio, caption=caption, parse_mode="Markdown",
+        chat_id=q.message.chat_id, photo=qr_bio, caption=caption, parse_mode=ParseMode.MARKDOWN,
         reply_markup=markup([nav_row(back_cb=f"more_links_{user_uuid}", home_cb="home_menu")])
     )
 
@@ -239,7 +247,7 @@ async def refresh_service_details(update: Update, context: ContextTypes.DEFAULT_
                 await context.bot.send_message(
                     chat_id=q.from_user.id,
                     text=f"-- DEBUG INFO --\n<pre>{json.dumps(info, indent=2, ensure_ascii=False)}</pre>",
-                    parse_mode="HTML"
+                    parse_mode=ParseMode.HTML
                 )
         except Exception as e:
             await context.bot.send_message(chat_id=q.from_user.id, text=f"Debug error: {e}")
