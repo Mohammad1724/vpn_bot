@@ -109,7 +109,7 @@ async def send_service_details(
         config_name = (info.get('name', 'config') if isinstance(info, dict) else 'config') or 'config'
         safe_name = quote_plus(config_name)
 
-        # لینک استاندارد از utils (بدون asn)
+        # لینک استاندارد از utils (بدون asn) مثل: https://domain/secret/uuid/sub/
         base_link = utils.build_subscription_url(service['sub_uuid'])
         preferred_url = f"{base_link.rstrip('/')}#{safe_name}"
 
@@ -393,7 +393,10 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     if original_message:
-        await original_message.edit_text("در حال تمدید سرویس در پنل... ⏳")
+        try:
+            await original_message.edit_text("در حال تمدید سرویس در پنل... ⏳")
+        except BadRequest:
+            pass
 
     service = db.get_service(service_id)
     plan = db.get_plan(plan_id)
@@ -401,7 +404,10 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
         await _send_renewal_error(original_message, "❌ اطلاعات سرویس یا پلن نامعتبر است.")
         return
 
-    logger.info(f"Renewal Attempt: user={user_id}, service={service_id}, plan={plan_id}, uuid={service['sub_uuid']}, days={plan['days']}, gb={plan['gb']}")
+    logger.info(
+        "Renewal Attempt: user=%s, service=%s, plan=%s, uuid=%s, days=%s, gb=%s",
+        user_id, service_id, plan_id, service['sub_uuid'], plan['days'], plan['gb']
+    )
 
     txn_id = db.initiate_renewal_transaction(user_id, service_id, plan_id)
     if not txn_id:
@@ -416,10 +422,37 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
         if not new_info:
-            logger.error(f"Renewal failed for UUID {service['sub_uuid']}: Panel verification failed.")
+            logger.error("Renewal failed for UUID %s: Panel verification failed.", service['sub_uuid'])
             raise ValueError("Panel verification failed")
 
         db.finalize_renewal_transaction(txn_id, plan_id)
 
         if original_message:
-            await original_message.edit_text("✅ سرویس با موفقیت تمدید 
+            try:
+                await original_message.edit_text("✅ سرویس با موفقیت تمدید شد!")
+            except BadRequest:
+                pass
+
+        await send_service_details(context, user_id, service_id, original_message=original_message, is_from_menu=True)
+
+    except Exception as e:
+        logger.error("Service renewal failed for UUID %s: %s", service['sub_uuid'], e, exc_info=True)
+        db.cancel_renewal_transaction(txn_id)
+        await _send_renewal_error(original_message, "❌ تمدید در پنل اعمال نشد. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.")
+    finally:
+        context.user_data.pop('renewal_service_id', None)
+        context.user_data.pop('renewal_plan_id', None)
+
+
+async def _send_renewal_error(message, error_text: str):
+    if message:
+        try:
+            await message.edit_text(error_text)
+        except Exception:
+            pass
+
+
+async def cancel_renewal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    q = update.callback_query
+    await q.answer()
+    await q.edit_message_text("عملیات تمدید لغو شد.")
