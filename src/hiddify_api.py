@@ -1,5 +1,5 @@
 # filename: hiddify_api.py
-# (کل فایل)
+# (کل فایل - اصلاح شده)
 
 import asyncio
 import httpx
@@ -20,7 +20,7 @@ try:
     from config import DEFAULT_ASN
 except Exception:
     DEFAULT_ASN = "MCI"
-    
+
 logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 3
@@ -61,14 +61,14 @@ async def _make_request(method: str, url: str, **kwargs) -> Optional[Dict[str, A
         except httpx.HTTPStatusError as e:
             status = e.response.status_code if e.response is not None else None
             text = e.response.text if e.response is not None else str(e)
-            
+
             if status == 500 and "404 Not Found" in text:
                 logger.warning("Treating 500 error with '404 Not Found' message as a 404 for URL %s", url)
                 return {"_not_found": True}
-            
+
             if status == 404:
                 return {"_not_found": True}
-                
+
             if status in (401, 403, 422):
                 logger.error("%s to %s failed with %s: %s", method.upper(), url, status, text)
                 break
@@ -81,22 +81,13 @@ async def _make_request(method: str, url: str, **kwargs) -> Optional[Dict[str, A
     return None
 
 
-def _compensate_days(days: int) -> int:
-    """
-    جبران خطای محاسبه روز در پنل.
-    """
-    if days == 30:
-        return 32
-    return days
-
-
 async def create_hiddify_user(
     plan_days: int,
     plan_gb: float,
     user_telegram_id: str,
     custom_name: str = "",
 ) -> Optional[Dict[str, Any]]:
-    
+
     endpoint = _get_base_url() + "user/"
     random_suffix = uuid.uuid4().hex[:4]
     base_name = custom_name if custom_name else f"tg-{user_telegram_id.split(':')[-1]}"
@@ -114,11 +105,11 @@ async def create_hiddify_user(
         return None
 
     user_uuid = data.get("uuid")
-    
+
     # مرحله ۲: بلافاصله کاربر ساخته شده را با پلن صحیح آپدیت می‌کنیم
     logger.info("User %s created. Now applying plan details via PATCH...", user_uuid)
     update_success = await _apply_and_verify_plan(user_uuid, plan_days, plan_gb)
-    
+
     if not update_success:
         logger.error("create_hiddify_user (step 2 - PATCH): Failed to apply plan details to user %s. Deleting user.", user_uuid)
         await delete_user_from_panel(user_uuid)
@@ -126,7 +117,7 @@ async def create_hiddify_user(
 
     sub_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
     client_secret = str(PANEL_SECRET_UUID or "").strip().strip("/")
-    
+
     if not client_secret:
         logger.error("PANEL_SECRET_UUID is not set in config.py! Subscription links will be incorrect.")
         sub_path = str(SUB_PATH or "sub").strip().strip("/")
@@ -147,16 +138,15 @@ async def _apply_and_verify_plan(user_uuid: str, plan_days: int, plan_gb: float)
     یک پلن را روی کاربر اعمال می‌کند و با چند بار تلاش، صحت آن را تایید می‌کند.
     """
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
-    
+
     try:
         usage_limit_gb = float(plan_gb)
     except Exception:
         usage_limit_gb = 0.0
 
-    compensated_days = _compensate_days(int(plan_days))
-    
+    # حذف جبران روز - ارسال مقدار دقیق
     payload = {
-        "package_days": compensated_days,
+        "package_days": int(plan_days),
         "usage_limit_GB": usage_limit_gb,
         "current_usage_GB": 0,
     }
@@ -165,26 +155,26 @@ async def _apply_and_verify_plan(user_uuid: str, plan_days: int, plan_gb: float)
     if response is None or response.get("_not_found"):
         logger.error("Renew/update PATCH request failed for UUID %s", user_uuid)
         return None
-    
+
     # **منطق تأیید نهایی و دقیق با حلقه و تأخیر**
     for attempt in range(VERIFICATION_RETRIES):
         await asyncio.sleep(VERIFICATION_DELAY)
         after_info = await get_user_info(user_uuid)
-        
+
         if not after_info:
             logger.warning("Verification attempt %d: could not get user info.", attempt + 1)
             continue
 
         after_days = int(after_info.get("package_days", -1))
         after_gb = float(after_info.get("usage_limit_GB", -1))
-        
-        if after_days == compensated_days and after_gb == usage_limit_gb:
+
+        if after_days == int(plan_days) and after_gb == usage_limit_gb:
             logger.info("Update for UUID %s verified successfully on attempt %d.", user_uuid, attempt + 1)
             return after_info
 
         logger.warning(
             "Verification attempt %d for UUID %s failed. Expected (days:%s, gb:%s), Got (days:%s, gb:%s)",
-            attempt + 1, user_uuid, compensated_days, usage_limit_gb, after_days, after_gb
+            attempt + 1, user_uuid, int(plan_days), usage_limit_gb, after_days, after_gb
         )
 
     logger.error("Verification failed for UUID %s after %d attempts.", user_uuid, VERIFICATION_RETRIES)
