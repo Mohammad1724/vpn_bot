@@ -79,52 +79,40 @@ async def _make_request(method: str, url: str, **kwargs) -> Optional[Dict[str, A
     return None
 
 
-def _compensate_days(days: int) -> int:
-    """
-    جبران خطای محاسبه روز در پنل.
-    """
-    if days == 30:
-        return 32
-    return days
-
-
 async def create_hiddify_user(
     plan_days: int,
     plan_gb: float,
     user_telegram_id: str,
     custom_name: str = "",
 ) -> Optional[Dict[str, Any]]:
-    
     endpoint = _get_base_url() + "user/"
     random_suffix = uuid.uuid4().hex[:4]
     base_name = custom_name if custom_name else f"tg-{user_telegram_id.split(':')[-1]}"
     unique_user_name = f"{base_name}-{random_suffix}"
 
-    # مرحله ۱: ساخت کاربر با حداقل اطلاعات
-    payload_create = {
+    try:
+        usage_limit_gb = float(plan_gb)
+    except Exception:
+        usage_limit_gb = 0.0
+
+    # ارسال مقادیر دقیق پلن بدون جبران خطا
+    payload = {
         "name": unique_user_name,
+        "package_days": int(plan_days),
+        "usage_limit_GB": usage_limit_gb,
         "comment": user_telegram_id,
+        "current_usage_GB": 0,
     }
 
-    data = await _make_request("post", endpoint, json=payload_create)
+    data = await _make_request("post", endpoint, json=payload)
     if not data or not data.get("uuid"):
-        logger.error("create_hiddify_user (step 1 - POST): failed or UUID missing")
+        logger.error("create_hiddify_user: failed or UUID missing (check PANEL_DOMAIN/ADMIN_PATH/API_KEY)")
         return None
 
     user_uuid = data.get("uuid")
-    
-    # مرحله ۲: بلافاصله کاربر ساخته شده را با پلن صحیح آپدیت می‌کنیم
-    logger.info("User %s created. Now applying plan details via PATCH...", user_uuid)
-    update_success = await renew_user_subscription(user_uuid, plan_days, plan_gb, is_creation=True)
-    
-    if not update_success:
-        logger.error("create_hiddify_user (step 2 - PATCH): Failed to apply plan details to user %s. Deleting user.", user_uuid)
-        await delete_user_from_panel(user_uuid)
-        return None
-
     sub_domain = random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN
-    client_secret = str(PANEL_SECRET_UUID or "").strip().strip("/")
     
+    client_secret = str(PANEL_SECRET_UUID or "").strip().strip("/")
     if not client_secret:
         logger.error("PANEL_SECRET_UUID is not set in config.py! Subscription links will be incorrect.")
         sub_path = str(SUB_PATH or "sub").strip().strip("/")
@@ -140,7 +128,7 @@ async def get_user_info(user_uuid: str) -> Optional[Dict[str, Any]]:
     return await _make_request("get", endpoint)
 
 
-async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float, is_creation: bool = False) -> Optional[Dict[str, Any]]:
+async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float) -> Optional[Dict[str, Any]]:
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
     
     try:
@@ -153,38 +141,29 @@ async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float
         logger.error("Renew failed: user with UUID %s not found in panel.", user_uuid)
         return None
 
-    compensated_days = _compensate_days(int(plan_days))
-    
-    # **اصلاح نهایی: ارسال start_date با فرمت YYYY-MM-DD برای ریست تاریخ**
+    # ارسال مقادیر دقیق پلن بدون جبران خطا
     payload = {
-        "package_days": compensated_days,
+        "package_days": int(plan_days),
         "usage_limit_GB": usage_limit_gb,
-        "start_date": datetime.now().astimezone().strftime("%Y-%m-%d"),
         "current_usage_GB": 0,
     }
 
     response = await _make_request("patch", endpoint, json=payload)
-    
     if response is None or response.get("_not_found"):
-        # اگر با start_date خطا داد، بدون آن دوباره تلاش می‌کنیم
-        logger.warning("PATCH with start_date failed for UUID %s. Retrying without it.", user_uuid)
-        payload.pop("start_date")
-        response = await _make_request("patch", endpoint, json=payload)
-        if response is None or response.get("_not_found"):
-            logger.error("Renew/update PATCH request failed completely for UUID %s", user_uuid)
-            return None
-
+        logger.error("Renew PATCH request failed or user not found for UUID %s", user_uuid)
+        return None
+    
     await asyncio.sleep(1)
 
     after_info = await get_user_info(user_uuid)
     if not after_info:
-        logger.error("Verification failed: could not get user info after update for UUID %s", user_uuid)
+        logger.error("Renew verification failed: could not get user info after renewal for UUID %s", user_uuid)
         return None
 
     after_usage = float(after_info.get("current_usage_GB", -1))
     
     if after_usage < 0.1:
-        logger.info("Update/Renew for UUID %s verified successfully.", user_uuid)
+        logger.info("Renewal for UUID %s verified successfully.", user_uuid)
         return after_info
     
     logger.error(
