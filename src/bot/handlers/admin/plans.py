@@ -16,9 +16,6 @@ import database as db
 # ---------- Inline UI builders ----------
 
 def _plan_menu_inline() -> InlineKeyboardMarkup:
-    """
-    منوی اصلی مدیریت پلن‌ها (شیشه‌ای)
-    """
     rows = [
         [
             InlineKeyboardButton("➕ افزودن پلن جدید", callback_data="admin_add_plan"),
@@ -32,14 +29,13 @@ def _plan_menu_inline() -> InlineKeyboardMarkup:
 
 
 def _inline_back_to_plan_menu() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت به مدیریت پلن‌ها", callback_data="admin_plans")],
-                                 [InlineKeyboardButton("🏠 منوی ادمین", callback_data="admin_panel")]])
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔙 بازگشت به مدیریت پلن‌ها", callback_data="admin_plans")],
+        [InlineKeyboardButton("🏠 منوی ادمین", callback_data="admin_panel")]
+    ])
 
 
 async def _reply_or_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup=None, parse_mode=None):
-    """
-    ارسال پیام مناسب با توجه به اینکه آپدیت Message است یا CallbackQuery
-    """
     q = getattr(update, "callback_query", None)
     if q:
         await q.answer()
@@ -52,17 +48,54 @@ async def _reply_or_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, tex
         await update.effective_message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
 
 
+# ---------- کمک‌متدها برای پاکسازی پیام‌های لیست ----------
+
+def _get_pl_store(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Accessor برای ساختار ذخیره پیام‌ها در user_data
+    """
+    store = context.user_data.get('plan_list_store')
+    if not store:
+        store = {'chat_id': None, 'msg_ids': []}
+        context.user_data['plan_list_store'] = store
+    return store
+
+
+async def _store_sent_message(context: ContextTypes.DEFAULT_TYPE, msg):
+    st = _get_pl_store(context)
+    st['chat_id'] = msg.chat_id
+    st['msg_ids'].append(msg.message_id)
+
+
+async def _purge_plan_list_messages(context: ContextTypes.DEFAULT_TYPE):
+    st = context.user_data.get('plan_list_store')
+    if not st or not st.get('msg_ids'):
+        return
+    chat_id = st.get('chat_id')
+    for mid in st['msg_ids']:
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=mid)
+        except Exception:
+            pass
+    # پاکسازی
+    st['msg_ids'].clear()
+
+
 # ---------- Plan management menu ----------
 
 async def plan_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    ورودی مدیریت پلن‌ها (شیشه‌ای)
+    ورودی مدیریت پلن‌ها (شیشه‌ای) + پاکسازی هر پیام لیستی که قبلاً مانده
     """
+    await _purge_plan_list_messages(context)
     await _reply_or_edit(update, context, "بخش مدیریت پلن‌ها", reply_markup=_plan_menu_inline())
     return PLAN_MENU
 
 
 async def list_plans_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # قبل از ساخت لیست جدید، لیست قبلی را پاک کن
+    await _purge_plan_list_messages(context)
+
     q = getattr(update, "callback_query", None)
     if q:
         await q.answer()
@@ -73,9 +106,10 @@ async def list_plans_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return PLAN_MENU
 
     # تیتر
-    await _reply_or_edit(update, context, f"لیست پلن‌های تعریف‌شده ({len(plans)} مورد):", reply_markup=None)
+    title_msg = await update.effective_message.reply_text(f"لیست پلن‌های تعریف‌شده ({len(plans)} مورد):")
+    await _store_sent_message(context, title_msg)
 
-    # هر پلن در یک پیام با دکمه‌های شیشه‌ای
+    # هر پلن در یک پیام جدا
     for plan in plans:
         visibility_icon = "👁️" if plan['is_visible'] else "🙈"
         category_text = f"▫️ دسته‌بندی: {plan['category']}\n" if plan.get('category') else ""
@@ -92,26 +126,24 @@ async def list_plans_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton(f"{visibility_icon} تغییر وضعیت", callback_data=f"admin_toggle_plan_{plan['plan_id']}"),
             InlineKeyboardButton("🗑️ حذف", callback_data=f"admin_delete_plan_{plan['plan_id']}")
         ]]
-        await update.effective_message.reply_text(
+        msg = await update.effective_message.reply_text(
             text,
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode=ParseMode.MARKDOWN
         )
+        await _store_sent_message(context, msg)
 
     # ناوبری پایین
-    await update.effective_message.reply_text("پایان لیست.", reply_markup=_inline_back_to_plan_menu())
+    end_msg = await update.effective_message.reply_text("پایان لیست.", reply_markup=_inline_back_to_plan_menu())
+    await _store_sent_message(context, end_msg)
     return PLAN_MENU
 
 
 # ===== Add Plan Conversation =====
 async def add_plan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    شروع افزودن پلن (می‌تواند با CallbackQuery admin_add_plan یا Message فراخوانی شود)
-    """
     q = getattr(update, "callback_query", None)
     if q:
         await q.answer()
-        # پیام لیست/منو را حذف کنیم تا ورودی تمیز باشد
         try:
             await q.message.delete()
         except Exception:
@@ -174,8 +206,8 @@ async def plan_category_received(update: Update, context: ContextTypes.DEFAULT_T
         context.user_data['plan_gb'],
         context.user_data['plan_category']
     )
-    # پایان و بازگشت به منوی شیشه‌ای
     await update.message.reply_text("✅ پلن جدید با موفقیت اضافه شد.", reply_markup=ReplyKeyboardRemove())
+    # برگشت به منوی شیشه‌ای
     await update.message.reply_text("بخش مدیریت پلن‌ها", reply_markup=_plan_menu_inline())
 
     context.user_data.clear()
@@ -206,6 +238,7 @@ async def edit_plan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data['edit_plan_id'] = plan_id
     context.user_data['edit_plan_data'] = {}
+
     await q.message.reply_text(
         f"در حال ویرایش پلن: *{plan['name']}*\n\nنام جدید را وارد کنید. برای رد شدن، {CMD_SKIP} را بزنید.",
         parse_mode=ParseMode.MARKDOWN,
@@ -235,7 +268,7 @@ async def edit_plan_price_received(update: Update, context: ContextTypes.DEFAULT
         return EDIT_PLAN_PRICE
 
 
-async def skip_edit_plan_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def skip_edit_plan_price(update: Update, Context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"از تغییر قیمت صرف‌نظر شد. مدت جدید (روز) را وارد کنید (یا {CMD_SKIP}).")
     return EDIT_PLAN_DAYS
 
@@ -349,3 +382,21 @@ async def admin_toggle_plan_visibility_callback(update: Update, context: Context
         pass
     await context.bot.send_message(chat_id=q.from_user.id, text="وضعیت نمایش پلن تغییر کرد. برای دیدن تغییرات، لیست را مجدداً باز کنید.", reply_markup=_inline_back_to_plan_menu())
     return PLAN_MENU
+
+
+# ---------- بازگشت به منوی ادمین با پاکسازی لیست ----------
+
+async def back_to_admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    پاکسازی پیام‌های لیست پلن‌ها و بازگشت به منوی ادمین
+    """
+    q = update.callback_query
+    await q.answer()
+    await _purge_plan_list_messages(context)
+    try:
+        await q.message.delete()
+    except Exception:
+        pass
+    # فراخوانی منوی ادمین (ایمپورت محلی برای جلوگیری از حلقه import)
+    from bot.handlers.admin.common import admin_entry
+    return await admin_entry(update, context)
