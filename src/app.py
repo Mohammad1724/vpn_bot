@@ -555,6 +555,8 @@ def build_application():
         CallbackQueryHandler(check_channel_membership(buy_h.buy_service_list), pattern=r"^back_to_cats$"),
         CallbackQueryHandler(admin_plans.plan_management_menu, pattern=r"^admin_plans$"),
         CallbackQueryHandler(admin_plans.list_plans_admin, pattern=r"^admin_list_plans$"),
+        CallbackQueryHandler(admin_plans.back_to_admin_cb, pattern=r"^admin_panel$"),
+     
     ]
     for h in plan_category_handlers:
         application.add_handler(h)
