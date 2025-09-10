@@ -99,6 +99,8 @@ def _calc_promo_discount(user_id: int, plan_price: float, promo_code_in: str | N
     return int(float(plan_price) * (int(code_data['percent']) / 100.0)), ""
 
 
+# ---------------- لیست و دسته‌بندی پلن‌ها ----------------
+
 async def buy_service_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     if q:
@@ -112,6 +114,7 @@ async def buy_service_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_func("در حال حاضر پلنی برای خرید موجود نیست.")
         return
     text, keyboard, row = "🛍️ لطفاً دسته‌بندی مورد نظر خود را انتخاب کنید:", [], []
+    from telegram import InlineKeyboardButton
     for cat in categories:
         row.append(InlineKeyboardButton(cat, callback_data=f"user_cat_{cat}"))
         if len(row) == 2:
@@ -122,7 +125,22 @@ async def buy_service_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_func(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 
-# ---------------- Helpers: cancel/cleanup ----------------
+async def show_plans_in_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    category = q.data.replace("user_cat_", "")
+    plans = db.list_plans(only_visible=True, category=category)
+    if not plans:
+        await q.edit_message_text("در این دسته‌بندی پلنی یافت نشد.")
+        return
+    text = f"پلن‌های دسته‌بندی «{category}»:"
+    from telegram import InlineKeyboardButton
+    kb = [[InlineKeyboardButton(_short_label(p), callback_data=f"user_buy_{p['plan_id']}")] for p in plans]
+    kb.append([InlineKeyboardButton("🔙 بازگشت به دسته‌بندی‌ها", callback_data="back_to_cats")])
+    await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
+
+
+# ---------------- کمک‌متدهای کنسل و پاکسازی ----------------
 
 def _cleanup_buy_state(context: ContextTypes.DEFAULT_TYPE) -> None:
     for k in ('pending_buy', 'buy_plan_id', 'buy_custom_name', 'buy_promo_code'):
@@ -132,7 +150,6 @@ def _cleanup_buy_state(context: ContextTypes.DEFAULT_TYPE) -> None:
 async def _abort_buy(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str = "❌ خرید لغو شد.") -> int:
     _cleanup_buy_state(context)
     try:
-        # حذف Reply Keyboard
         await update.message.reply_text(text, reply_markup=ReplyKeyboardRemove())
     except Exception:
         try:
@@ -140,14 +157,13 @@ async def _abort_buy(update: Update, context: ContextTypes.DEFAULT_TYPE, text: s
         except Exception:
             pass
     try:
-        # منوی اصلی
         await context.bot.send_message(chat_id=update.effective_user.id, text="منوی اصلی:", reply_markup=get_main_menu_keyboard(update.effective_user.id))
     except Exception:
         pass
     return ConversationHandler.END
 
 
-# ---------------- Buy Flow ----------------
+# ---------------- فلو خرید با «بازگشت» ----------------
 
 async def buy_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -180,7 +196,6 @@ async def buy_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def get_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text_in = (update.message.text or "").strip()
 
-    # بازگشت از مرحله نام → نمایش دسته‌بندی‌ها
     if text_in == BACK_BTN:
         try:
             await update.message.reply_text("بازگشت به انتخاب دسته‌بندی‌ها.", reply_markup=ReplyKeyboardRemove())
@@ -190,7 +205,6 @@ async def get_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await buy_service_list(update, context)
         return ConversationHandler.END
 
-    # انصراف
     if text_in == CMD_CANCEL or text_in.lower() == "/cancel":
         return await _abort_buy(update, context)
 
@@ -220,7 +234,6 @@ async def _ask_promo_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def promo_code_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text_in = (update.message.text or "").strip()
 
-    # بازگشت از مرحله کدتخفیف → برگشت به نام سرویس
     if text_in == BACK_BTN:
         await update.message.reply_text(
             "نام دلخواه سرویس را وارد کنید.\nبرای رد شدن از این مرحله، /skip را بزنید.",
@@ -228,7 +241,6 @@ async def promo_code_received(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return GET_CUSTOM_NAME
 
-    # انصراف
     if text_in == CMD_CANCEL or text_in.lower() == "/cancel":
         return await _abort_buy(update, context)
 
@@ -271,7 +283,6 @@ async def _ask_purchase_confirm(update: Update, context: ContextTypes.DEFAULT_TY
     lines.append(f"قیمت نهایی: {_short_price(final_price)}")
     price_block = "\n".join(lines)
 
-    # حذف کیبورد قبل از نمایش تایید
     try:
         await update.message.reply_text("لطفاً تایید کنید:", reply_markup=ReplyKeyboardRemove())
     except Exception:
@@ -281,7 +292,7 @@ async def _ask_purchase_confirm(update: Update, context: ContextTypes.DEFAULT_TY
 نام سرویس: {custom_name or '(بدون نام)'}
 مدت: {utils.to_persian_digits(str(plan['days']))} روز
 حجم: {_vol_label(plan['gb'])}
-{price_block}
+{"\n".join(lines)}
 با تایید، مبلغ از کیف‌پول شما کسر شده و سرویس بلافاصله ساخته می‌شود.""".strip()
 
     kb = InlineKeyboardMarkup([
@@ -294,7 +305,6 @@ async def _ask_purchase_confirm(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def back_to_promo_from_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """بازگشت از صفحه تایید به مرحله کدتخفیف (re-entry به Conversation)."""
     q = update.callback_query
     await q.answer()
     try:
