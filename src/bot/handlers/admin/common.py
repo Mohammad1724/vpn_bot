@@ -1,39 +1,12 @@
-# filename: bot/handlers/admin/common.py
 # -*- coding: utf-8 -*-
 
 import asyncio
 from telegram.ext import ContextTypes, ConversationHandler
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update
 
+from bot.keyboards import get_admin_menu_keyboard, get_main_menu_keyboard
 from bot.constants import ADMIN_MENU
-from bot.keyboards import get_main_menu_keyboard
 import database as db
-
-
-def _admin_inline_menu() -> InlineKeyboardMarkup:
-    """
-    منوی اصلی ادمین به صورت دکمه‌های شیشه‌ای (Inline).
-    callback_data‌ها با app.py فعلی سازگارند.
-    """
-    rows = [
-        [
-            InlineKeyboardButton("➕ مدیریت پلن‌ها", callback_data="admin_plans"),
-            InlineKeyboardButton("📈 گزارش‌ها و آمار", callback_data="admin_reports"),
-        ],
-        [
-            InlineKeyboardButton("💾 پشتیبان‌گیری", callback_data="admin_backup"),
-            InlineKeyboardButton("👥 مدیریت کاربران", callback_data="admin_users"),
-        ],
-        [
-            InlineKeyboardButton("🎁 مدیریت کد هدیه", callback_data="admin_gift"),
-            InlineKeyboardButton("⚙️ تنظیمات", callback_data="admin_settings"),
-        ],
-        [
-            InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="home_menu"),
-            InlineKeyboardButton("🛑 خاموش کردن ربات", callback_data="admin_shutdown"),
-        ],
-    ]
-    return InlineKeyboardMarkup(rows)
 
 
 async def _send_with_kb(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup):
@@ -56,10 +29,9 @@ async def _send_with_kb(update: Update, context: ContextTypes.DEFAULT_TYPE, text
 
 async def admin_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    ورودی منوی ادمین (هم برای Message و هم CallbackQuery).
-    منوی شیشه‌ای را نمایش می‌دهد.
+    ورودی منوی اصلی ادمین (با Reply Keyboard).
     """
-    await _send_with_kb(update, context, "👑 به پنل ادمین خوش آمدید.", _admin_inline_menu())
+    await _send_with_kb(update, context, "👑 به پنل ادمین خوش آمدید.", get_admin_menu_keyboard())
     return ADMIN_MENU
 
 
@@ -73,28 +45,28 @@ async def exit_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def back_to_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    بازگشت به منوی اصلی ادمین در هر نقطه (پاکسازی user_data و نمایش منوی شیشه‌ای).
+    بازگشت به منوی اصلی ادمین (Reply Keyboard).
     """
     context.user_data.clear()
-    await _send_with_kb(update, context, "به منوی اصلی ادمین بازگشتید.", _admin_inline_menu())
+    await _send_with_kb(update, context, "به منوی اصلی ادمین بازگشتید.", get_admin_menu_keyboard())
     return ADMIN_MENU
 
 
 async def admin_generic_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    لغو عملیات جاری و بازگشت به منوی اصلی ادمین.
+    لغو عملیات جاری و بازگشت به منوی اصلی ادمین (Reply Keyboard).
     """
     context.user_data.clear()
-    await _send_with_kb(update, context, "عملیات لغو شد.", _admin_inline_menu())
+    await _send_with_kb(update, context, "عملیات لغو شد.", get_admin_menu_keyboard())
     return ADMIN_MENU
 
 
 async def admin_conv_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    لغو یک Conversation زیرمجموعه و خروج از آن؛ سپس نمایش منوی اصلی ادمین.
+    لغو یک Conversation زیرمجموعه و خروج از آن؛ سپس نمایش منوی اصلی ادمین (Reply Keyboard).
     """
     context.user_data.clear()
-    await _send_with_kb(update, context, "عملیات لغو شد.", _admin_inline_menu())
+    await _send_with_kb(update, context, "عملیات لغو شد.", get_admin_menu_keyboard())
     return ConversationHandler.END
 
 
