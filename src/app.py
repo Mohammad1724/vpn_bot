@@ -119,36 +119,41 @@ def build_application():
     )
 
     # --------- CHARGE ----------
-    charge_conv = ConversationHandler(
-        entry_points=[
-            MessageHandler(filters.Regex(r'^💳 شارژ حساب$') & user_filter, check_channel_membership(charge_h.charge_menu_start)),
-            CallbackQueryHandler(check_channel_membership(charge_h.charge_menu_start), pattern=r"^user_start_charge$"),
+charge_conv = ConversationHandler(
+    entry_points=[
+        # پذیرش دکمه «💳 شارژ حساب» برای همه (ادمین و کاربر)، با Regex منعطف
+        MessageHandler(
+            filters.Regex(r'^[\u200f\u200e\s]*💳\s*شار.? ?حساب[\u200f\u200e\s]*$'),
+            check_channel_membership(charge_h.charge_menu_start)
+        ),
+        # پذیرش مسیرهای اینلاین داخل منو
+        CallbackQueryHandler(check_channel_membership(charge_h.charge_menu_start), pattern=r"^user_start_charge$"),
+    ],
+    states={
+        constants.CHARGE_MENU: [
+            CallbackQueryHandler(charge_h.show_referral_info_inline, pattern=r"^acc_referral$"),
+            CallbackQueryHandler(charge_h.charge_start_payment, pattern=r"^charge_start_payment$"),
+            CallbackQueryHandler(charge_h.charge_menu_start, pattern=r"^charge_menu_main$"),
         ],
-        states={
-            constants.CHARGE_MENU: [
-                CallbackQueryHandler(charge_h.show_referral_info_inline, pattern=r"^acc_referral$"),
-                CallbackQueryHandler(charge_h.charge_start_payment, pattern=r"^charge_start_payment$"),
-                CallbackQueryHandler(charge_h.charge_menu_start, pattern=r"^charge_menu_main$"),
-            ],
-            constants.CHARGE_AMOUNT: [
-                CallbackQueryHandler(charge_h.charge_amount_confirm_cb, pattern=r"^charge_amount_\d+$"),
-                CallbackQueryHandler(charge_h.ask_custom_amount, pattern=r"^charge_custom_amount$"),
-                CallbackQueryHandler(charge_h.charge_menu_start, pattern=r"^charge_menu_main$"),
-            ],
-            constants.AWAIT_CUSTOM_AMOUNT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, charge_h.charge_amount_received),
-                CallbackQueryHandler(charge_h.charge_start_payment, pattern=r"^charge_start_payment_back$"),
-            ],
-            constants.CHARGE_RECEIPT: [
-                MessageHandler(filters.PHOTO, charge_h.charge_receipt_received)
-            ],
-        },
-        fallbacks=[
-            CommandHandler('cancel', charge_h.charge_cancel),
-            CallbackQueryHandler(start_h.start, pattern=r"^home_menu$"),
+        constants.CHARGE_AMOUNT: [
+            CallbackQueryHandler(charge_h.charge_amount_confirm_cb, pattern=r"^charge_amount_\d+$"),
+            CallbackQueryHandler(charge_h.ask_custom_amount, pattern=r"^charge_custom_amount$"),
+            CallbackQueryHandler(charge_h.charge_menu_start, pattern=r"^charge_menu_main$"),
         ],
-        per_user=True, per_chat=True
-    )
+        constants.AWAIT_CUSTOM_AMOUNT: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, charge_h.charge_amount_received),
+            CallbackQueryHandler(charge_h.charge_start_payment, pattern=r"^charge_start_payment_back$"),
+        ],
+        constants.CHARGE_RECEIPT: [
+            MessageHandler(filters.PHOTO, charge_h.charge_receipt_received)
+        ],
+    },
+    fallbacks=[
+        CommandHandler('cancel', charge_h.charge_cancel),
+        CallbackQueryHandler(start_h.start, pattern=r"^home_menu$"),
+    ],
+    per_user=True, per_chat=True
+)
 
     # --------- TRANSFER ----------
     transfer_conv = ConversationHandler(
