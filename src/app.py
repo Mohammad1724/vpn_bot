@@ -66,7 +66,11 @@ def build_application():
 
     # --------- BUY FLOW ----------
     buy_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(check_channel_membership(buy_h.buy_start), pattern=r'^user_buy_')],
+        entry_points=[
+            CallbackQueryHandler(check_channel_membership(buy_h.buy_start), pattern=r'^user_buy_'),
+            # بازگشت از مرحله تایید به مرحله کدتخفیف (ورود مجدد به گفتگو)
+            CallbackQueryHandler(check_channel_membership(buy_h.back_to_promo_from_confirm), pattern=r'^buy_back_to_promo$'),
+        ],
         states={
             constants.GET_CUSTOM_NAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, buy_h.get_custom_name),
@@ -78,7 +82,8 @@ def build_application():
             ],
         },
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
-        per_user=True, per_chat=True
+        per_user=True, per_chat=True,
+        allow_reentry=True
     )
 
     # --------- GIFT CODE REDEEM ----------
@@ -97,7 +102,7 @@ def build_application():
     charge_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(r'^💳 شارژ حساب$') & user_filter, check_channel_membership(charge_h.charge_menu_start)),
-            CallbackQueryHandler(check_channel_membership(charge_h.charge_menu_start), pattern=r'^user_start_charge$'),
+            CallbackQueryHandler(check_channel_membership(charge_h.charge_menu_start), pattern=r"^user_start_charge$"),
         ],
         states={
             constants.CHARGE_MENU: [
@@ -461,7 +466,6 @@ def build_application():
 
     application.add_handler(CallbackQueryHandler(buy_h.confirm_purchase_callback, pattern=r"^confirmbuy$"), group=2)
     application.add_handler(CallbackQueryHandler(buy_h.cancel_purchase_callback, pattern=r"^cancelbuy$"), group=2)
-    application.add_handler(CallbackQueryHandler(buy_h.back_to_promo_from_confirm, pattern=r"^buy_back_to_promo$"), group=2)
 
     application.add_handler(MessageHandler(filters.REPLY & admin_filter, support_h.admin_reply_handler), group=1)
     application.add_handler(CallbackQueryHandler(support_h.close_ticket, pattern=r"^close_ticket_"), group=1)
