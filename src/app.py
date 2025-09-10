@@ -461,6 +461,7 @@ def build_application():
 
     application.add_handler(CallbackQueryHandler(buy_h.confirm_purchase_callback, pattern=r"^confirmbuy$"), group=2)
     application.add_handler(CallbackQueryHandler(buy_h.cancel_purchase_callback, pattern=r"^cancelbuy$"), group=2)
+    application.add_handler(CallbackQueryHandler(buy_h.back_to_promo_from_confirm, pattern=r"^buy_back_to_promo$"), group=2)
 
     application.add_handler(MessageHandler(filters.REPLY & admin_filter, support_h.admin_reply_handler), group=1)
     application.add_handler(CallbackQueryHandler(support_h.close_ticket, pattern=r"^close_ticket_"), group=1)
