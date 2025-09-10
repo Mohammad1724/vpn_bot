@@ -4,11 +4,14 @@
 import asyncio
 import logging
 from datetime import datetime
-from typing import List, Optional
+from typing import Optional
 from urllib.parse import quote_plus
 
 from telegram.ext import ContextTypes, ConversationHandler
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, InputFile
+from telegram import (
+    Update, InlineKeyboardButton, InlineKeyboardMarkup,
+    ReplyKeyboardMarkup, ReplyKeyboardRemove, InputFile
+)
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
 
@@ -19,6 +22,8 @@ from bot.constants import GET_CUSTOM_NAME, CMD_CANCEL, CMD_SKIP, PROMO_CODE_ENTR
 from bot.keyboards import get_main_menu_keyboard
 
 logger = logging.getLogger(__name__)
+
+BACK_BTN = "🔙 بازگشت"
 
 
 def _maint_on() -> bool:
@@ -117,19 +122,32 @@ async def buy_service_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_func(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 
-async def show_plans_in_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    category = q.data.replace("user_cat_", "")
-    plans = db.list_plans(only_visible=True, category=category)
-    if not plans:
-        await q.edit_message_text("در این دسته‌بندی پلنی یافت نشد.")
-        return
-    text = f"پلن‌های دسته‌بندی «{category}»:"
-    kb = [[InlineKeyboardButton(_short_label(p), callback_data=f"user_buy_{p['plan_id']}")] for p in plans]
-    kb.append([InlineKeyboardButton("🔙 بازگشت به دسته‌بندی‌ها", callback_data="back_to_cats")])
-    await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
+# ---------------- Helpers: cancel/cleanup ----------------
 
+def _cleanup_buy_state(context: ContextTypes.DEFAULT_TYPE) -> None:
+    for k in ('pending_buy', 'buy_plan_id', 'buy_custom_name', 'buy_promo_code'):
+        context.user_data.pop(k, None)
+
+
+async def _abort_buy(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str = "❌ خرید لغو شد.") -> int:
+    _cleanup_buy_state(context)
+    try:
+        # حذف Reply Keyboard
+        await update.message.reply_text(text, reply_markup=ReplyKeyboardRemove())
+    except Exception:
+        try:
+            await context.bot.send_message(chat_id=update.effective_user.id, text=text, reply_markup=ReplyKeyboardRemove())
+        except Exception:
+            pass
+    try:
+        # منوی اصلی
+        await context.bot.send_message(chat_id=update.effective_user.id, text="منوی اصلی:", reply_markup=get_main_menu_keyboard(update.effective_user.id))
+    except Exception:
+        pass
+    return ConversationHandler.END
+
+
+# ---------------- Buy Flow ----------------
 
 async def buy_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -154,20 +172,35 @@ async def buy_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(
         chat_id=q.from_user.id,
         text="لطفاً نام دلخواه برای سرویس‌تان را وارد کنید.\nبرای رد شدن از این مرحله، /skip را بزنید.",
-        reply_markup=ReplyKeyboardMarkup([[CMD_CANCEL]], resize_keyboard=True)
+        reply_markup=ReplyKeyboardMarkup([[BACK_BTN, CMD_CANCEL]], resize_keyboard=True)
     )
     return GET_CUSTOM_NAME
 
 
 async def get_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    name = (update.message.text or "").strip()
-    if not name:
+    text_in = (update.message.text or "").strip()
+
+    # بازگشت از مرحله نام → نمایش دسته‌بندی‌ها
+    if text_in == BACK_BTN:
+        try:
+            await update.message.reply_text("بازگشت به انتخاب دسته‌بندی‌ها.", reply_markup=ReplyKeyboardRemove())
+        except Exception:
+            pass
+        _cleanup_buy_state(context)
+        await buy_service_list(update, context)
+        return ConversationHandler.END
+
+    # انصراف
+    if text_in == CMD_CANCEL or text_in.lower() == "/cancel":
+        return await _abort_buy(update, context)
+
+    if not text_in:
         await update.message.reply_text("لطفاً یک نام معتبر وارد کنید یا /skip بزنید.")
         return GET_CUSTOM_NAME
-    if db.get_service_by_name(update.effective_user.id, name):
+    if db.get_service_by_name(update.effective_user.id, text_in):
         await update.message.reply_text("⚠️ شما قبلاً سرویسی با این نام داشته‌اید. لطفاً نام دیگری انتخاب کنید.")
         return GET_CUSTOM_NAME
-    context.user_data['buy_custom_name'] = name
+    context.user_data['buy_custom_name'] = text_in
     return await _ask_promo_code(update, context)
 
 
@@ -179,14 +212,27 @@ async def skip_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def _ask_promo_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "اگر کدتخفیف دارید وارد کنید؛ وگرنه /skip را بزنید.",
-        reply_markup=ReplyKeyboardMarkup([['/skip', CMD_CANCEL]], resize_keyboard=True)
+        reply_markup=ReplyKeyboardMarkup([[CMD_SKIP, BACK_BTN], [CMD_CANCEL]], resize_keyboard=True)
     )
     return PROMO_CODE_ENTRY
 
 
 async def promo_code_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    code = (update.message.text or "").strip()
-    context.user_data['buy_promo_code'] = "" if code.lower() == "/skip" else code
+    text_in = (update.message.text or "").strip()
+
+    # بازگشت از مرحله کدتخفیف → برگشت به نام سرویس
+    if text_in == BACK_BTN:
+        await update.message.reply_text(
+            "نام دلخواه سرویس را وارد کنید.\nبرای رد شدن از این مرحله، /skip را بزنید.",
+            reply_markup=ReplyKeyboardMarkup([[BACK_BTN, CMD_CANCEL]], resize_keyboard=True)
+        )
+        return GET_CUSTOM_NAME
+
+    # انصراف
+    if text_in == CMD_CANCEL or text_in.lower() == "/cancel":
+        return await _abort_buy(update, context)
+
+    context.user_data['buy_promo_code'] = "" if text_in.lower() == "/skip" else text_in
     return await _ask_purchase_confirm(update, context, custom_name=context.user_data.get('buy_custom_name', ''))
 
 
@@ -225,6 +271,12 @@ async def _ask_purchase_confirm(update: Update, context: ContextTypes.DEFAULT_TY
     lines.append(f"قیمت نهایی: {_short_price(final_price)}")
     price_block = "\n".join(lines)
 
+    # حذف کیبورد قبل از نمایش تایید
+    try:
+        await update.message.reply_text("لطفاً تایید کنید:", reply_markup=ReplyKeyboardRemove())
+    except Exception:
+        pass
+
     text = f"""🛒 تایید خرید سرویس
 نام سرویس: {custom_name or '(بدون نام)'}
 مدت: {utils.to_persian_digits(str(plan['days']))} روز
@@ -232,10 +284,29 @@ async def _ask_purchase_confirm(update: Update, context: ContextTypes.DEFAULT_TY
 {price_block}
 با تایید، مبلغ از کیف‌پول شما کسر شده و سرویس بلافاصله ساخته می‌شود.""".strip()
 
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ تایید خرید", callback_data="confirmbuy"),
-                                InlineKeyboardButton("❌ انصراف", callback_data="cancelbuy")]])
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ تایید خرید", callback_data="confirmbuy"),
+         InlineKeyboardButton("❌ انصراف", callback_data="cancelbuy")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="buy_back_to_promo")]
+    ])
     await update.message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
     return ConversationHandler.END
+
+
+async def back_to_promo_from_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """بازگشت از صفحه تایید به مرحله کدتخفیف (re-entry به Conversation)."""
+    q = update.callback_query
+    await q.answer()
+    try:
+        await q.message.delete()
+    except BadRequest:
+        pass
+    await context.bot.send_message(
+        chat_id=q.from_user.id,
+        text="اگر کدتخفیف دارید وارد کنید؛ وگرنه /skip را بزنید.",
+        reply_markup=ReplyKeyboardMarkup([[CMD_SKIP, BACK_BTN], [CMD_CANCEL]], resize_keyboard=True)
+    )
+    return PROMO_CODE_ENTRY
 
 
 async def confirm_purchase_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -253,8 +324,15 @@ async def confirm_purchase_callback(update: Update, context: ContextTypes.DEFAUL
 async def cancel_purchase_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    context.user_data.pop('pending_buy', None)
-    await q.edit_message_text("❌ خرید لغو شد.")
+    _cleanup_buy_state(context)
+    try:
+        await q.edit_message_text("❌ خرید لغو شد.")
+    except Exception:
+        pass
+    try:
+        await context.bot.send_message(chat_id=q.from_user.id, text="منوی اصلی:", reply_markup=get_main_menu_keyboard(q.from_user.id))
+    except Exception:
+        pass
 
 
 async def _do_purchase_confirmed(q, context: ContextTypes.DEFAULT_TYPE, custom_name: str):
@@ -294,14 +372,11 @@ async def _do_purchase_confirmed(q, context: ContextTypes.DEFAULT_TYPE, custom_n
 
 
 async def _send_service_info_to_user(context, user_id, new_uuid, plan):
-    from urllib.parse import quote_plus
-
     new_service_record = db.get_service_by_uuid(new_uuid)
     if not new_service_record:
         await context.bot.send_message(chat_id=user_id, text="❌ خطای داخلی: سرویس ساخته شد اما در دیتابیس یافت نشد.")
         return
 
-    # صبر هوشمند برای آپدیت شدن اطلاعات در پنل
     user_data = None
     expected_days = getattr(hiddify_api, "_compensate_days", lambda x: int(x))(int(plan['days']))
     for attempt in range(5):
@@ -313,22 +388,34 @@ async def _send_service_info_to_user(context, user_id, new_uuid, plan):
         await asyncio.sleep(1.5)
 
     if user_data:
-        config_name = (user_data.get('name', 'config') if isinstance(user_data, dict) else 'config') or 'config'
+        config_name = (user_data.get('name', 'config') or 'config')
         safe_name = quote_plus(config_name)
 
         base_main = new_service_record.get('sub_link') or utils.build_subscription_url(new_uuid)
-        # باید قبل از # یک / باشد => .../sub/#Name
         final_link = f"{base_main}#{safe_name}" if base_main.endswith('/') else f"{base_main}/#{safe_name}"
 
         qr_bio = utils.make_qr_bytes(final_link)
         caption = utils.create_service_info_caption(
-            user_data, service_db_record=new_service_record, title="🎉 سرویس شما با موفقیت ساخته شد!", override_sub_url=final_link
+            user_data,
+            service_db_record=new_service_record,
+            title="🎉 سرویس شما فعال شد",
+            override_sub_url=final_link
         )
         inline_kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("📚 راهنمای اتصال", callback_data="guide_connection"),
              InlineKeyboardButton("📋 سرویس‌های من", callback_data="back_to_services")]
         ])
-        await context.bot.send_photo(chat_id=user_id, photo=InputFile(qr_bio), caption=caption, parse_mode=ParseMode.MARKDOWN, reply_markup=inline_kb)
+        await context.bot.send_photo(
+            chat_id=user_id,
+            photo=InputFile(qr_bio),
+            caption=caption,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=inline_kb
+        )
         await context.bot.send_message(chat_id=user_id, text="منوی اصلی:", reply_markup=get_main_menu_keyboard(user_id))
     else:
-        await context.bot.send_message(chat_id=user_id, text="✅ خرید انجام شد، اما دریافت اطلاعات سرویس با خطا مواجه شد. از «📋 سرویس‌های من» استفاده کنید.", reply_markup=get_main_menu_keyboard(user_id))
+        await context.bot.send_message(
+            chat_id=user_id,
+            text="✅ خرید انجام شد، اما دریافت اطلاعات سرویس با خطا مواجه شد. از «📋 سرویس‌های من» استفاده کنید.",
+            reply_markup=get_main_menu_keyboard(user_id)
+        )
