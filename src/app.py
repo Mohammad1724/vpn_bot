@@ -24,7 +24,6 @@ from bot.handlers.admin import (
     settings as admin_settings, backup as admin_backup, users as admin_users,
     gift_codes as admin_gift
 )
-# نودها حذف شدند (هیچ import یا handler مرتبط با نود وجود ندارد)
 import bot.handlers.admin.trial_settings_ui as trial_ui
 from bot.handlers.trial import get_trial_service as trial_get_trial_service
 from bot.handlers.admin.trial_settings import set_trial_days, set_trial_gb
@@ -65,36 +64,34 @@ def build_application():
     user_filter = ~admin_filter
 
     # --------- BUY FLOW ----------
-buy_conv = ConversationHandler(
-    entry_points=[
-        CallbackQueryHandler(check_channel_membership(buy_h.buy_start), pattern=r'^user_buy_'),
-        # بازگشت از تایید نهایی به کدتخفیف (ورود مجدد به گفتگو)
-        CallbackQueryHandler(check_channel_membership(buy_h.back_to_promo_from_confirm), pattern=r'^buy_back_to_promo$'),
-    ],
-    states={
-        constants.GET_CUSTOM_NAME: [
-            # متن وارد شده به عنوان نام سرویس
-            MessageHandler(filters.TEXT & ~filters.COMMAND, buy_h.get_custom_name),
-            # دکمه‌های شیشه‌ای این مرحله
-            CallbackQueryHandler(buy_h.back_to_cats_from_name, pattern=r'^buy_back_to_cats$'),
-            CallbackQueryHandler(buy_h.skip_name_callback, pattern=r'^buy_skip_name$'),
-            CallbackQueryHandler(buy_h.cancel_buy_callback, pattern=r'^buy_cancel$'),
+    buy_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(check_channel_membership(buy_h.buy_start), pattern=r'^user_buy_'),
+            # بازگشت از تایید نهایی به مرحله کدتخفیف (ورود مجدد به گفتگو)
+            CallbackQueryHandler(check_channel_membership(buy_h.back_to_promo_from_confirm), pattern=r'^buy_back_to_promo$'),
         ],
-        constants.PROMO_CODE_ENTRY: [
-            # متن وارد شده به عنوان کدتخفیف
-            MessageHandler(filters.TEXT & ~filters.COMMAND, buy_h.promo_code_received),
-            # دکمه‌های شیشه‌ای این مرحله
-            CallbackQueryHandler(buy_h.back_to_name_callback, pattern=r'^buy_back_to_name$'),
-            CallbackQueryHandler(buy_h.skip_promo_callback, pattern=r'^buy_skip_promo$'),
-            CallbackQueryHandler(buy_h.cancel_buy_callback, pattern=r'^buy_cancel$'),
-            # پذیرش /skip هم برای سازگاری
-            CommandHandler('skip', buy_h.promo_code_received),
+        states={
+            constants.GET_CUSTOM_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, buy_h.get_custom_name),
+                # دکمه‌های شیشه‌ای مرحله نام
+                CallbackQueryHandler(buy_h.back_to_cats_from_name, pattern=r'^buy_back_to_cats$'),
+                CallbackQueryHandler(buy_h.skip_name_callback, pattern=r'^buy_skip_name$'),
+                CallbackQueryHandler(buy_h.cancel_buy_callback, pattern=r'^buy_cancel$'),
+            ],
+            constants.PROMO_CODE_ENTRY: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, buy_h.promo_code_received),
+                # دکمه‌های شیشه‌ای مرحله کدتخفیف
+                CallbackQueryHandler(buy_h.back_to_name_callback, pattern=r'^buy_back_to_name$'),
+                CallbackQueryHandler(buy_h.skip_promo_callback, pattern=r'^buy_skip_promo$'),
+                CallbackQueryHandler(buy_h.cancel_buy_callback, pattern=r'^buy_cancel$'),
+                CommandHandler('skip', buy_h.promo_code_received),
+            ],
         ],
-    },
-    fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
-    per_user=True, per_chat=True,
-    allow_reentry=True
-)
+        fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
+        per_user=True, per_chat=True,
+        allow_reentry=True
+    )
+
     # --------- GIFT CODE REDEEM ----------
     gift_conv = ConversationHandler(
         entry_points=[
@@ -379,7 +376,6 @@ buy_conv = ConversationHandler(
                 CallbackQueryHandler(admin_gift.gift_code_management_menu, pattern=r"^admin_gift$"),
                 CallbackQueryHandler(admin_c.shutdown_bot, pattern=r"^admin_shutdown$"),
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
-                # نودها به‌طور کامل حذف شده‌اند
                 admin_settings_conv,
                 broadcast_conv,
             ],
