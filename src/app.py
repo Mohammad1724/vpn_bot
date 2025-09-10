@@ -64,33 +64,35 @@ def build_application():
     user_filter = ~admin_filter
 
     # --------- BUY FLOW ----------
-    buy_conv = ConversationHandler(
-        entry_points=[
-            CallbackQueryHandler(check_channel_membership(buy_h.buy_start), pattern=r'^user_buy_'),
-            # بازگشت از تایید نهایی به مرحله کدتخفیف (ورود مجدد به گفتگو)
-            CallbackQueryHandler(check_channel_membership(buy_h.back_to_promo_from_confirm), pattern=r'^buy_back_to_promo$'),
+buy_conv = ConversationHandler(
+    entry_points=[
+        CallbackQueryHandler(check_channel_membership(buy_h.buy_start), pattern=r'^user_buy_'),
+        # بازگشت از تایید نهایی به مرحله کدتخفیف (ورود مجدد به گفتگو)
+        CallbackQueryHandler(check_channel_membership(buy_h.back_to_promo_from_confirm), pattern=r'^buy_back_to_promo$'),
+    ],
+    states={
+        constants.GET_CUSTOM_NAME: [
+            # کاربر نام را تایپ می‌کند
+            MessageHandler(filters.TEXT & ~filters.COMMAND, buy_h.get_custom_name),
+            # دکمه‌های شیشه‌ای مرحله نام
+            CallbackQueryHandler(buy_h.back_to_cats_from_name, pattern=r'^buy_back_to_cats$'),
+            CallbackQueryHandler(buy_h.skip_name_callback, pattern=r'^buy_skip_name$'),
+            CallbackQueryHandler(buy_h.cancel_buy_callback, pattern=r'^buy_cancel$'),
         ],
-        states={
-            constants.GET_CUSTOM_NAME: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, buy_h.get_custom_name),
-                # دکمه‌های شیشه‌ای مرحله نام
-                CallbackQueryHandler(buy_h.back_to_cats_from_name, pattern=r'^buy_back_to_cats$'),
-                CallbackQueryHandler(buy_h.skip_name_callback, pattern=r'^buy_skip_name$'),
-                CallbackQueryHandler(buy_h.cancel_buy_callback, pattern=r'^buy_cancel$'),
-            ],
-            constants.PROMO_CODE_ENTRY: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, buy_h.promo_code_received),
-                # دکمه‌های شیشه‌ای مرحله کدتخفیف
-                CallbackQueryHandler(buy_h.back_to_name_callback, pattern=r'^buy_back_to_name$'),
-                CallbackQueryHandler(buy_h.skip_promo_callback, pattern=r'^buy_skip_promo$'),
-                CallbackQueryHandler(buy_h.cancel_buy_callback, pattern=r'^buy_cancel$'),
-                CommandHandler('skip', buy_h.promo_code_received),
-            ],
+        constants.PROMO_CODE_ENTRY: [
+            # کاربر کدتخفیف را تایپ می‌کند (یا /skip)
+            MessageHandler(filters.TEXT & ~filters.COMMAND, buy_h.promo_code_received),
+            # دکمه‌های شیشه‌ای مرحله کدتخفیف
+            CallbackQueryHandler(buy_h.back_to_name_callback, pattern=r'^buy_back_to_name$'),
+            CallbackQueryHandler(buy_h.skip_promo_callback, pattern=r'^buy_skip_promo$'),
+            CallbackQueryHandler(buy_h.cancel_buy_callback, pattern=r'^buy_cancel$'),
+            CommandHandler('skip', buy_h.promo_code_received),
         ],
-        fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
-        per_user=True, per_chat=True,
-        allow_reentry=True
-    )
+    },  # ← دقت کن اینجا آکولاد بسته می‌شود، نه براکت
+    fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
+    per_user=True, per_chat=True,
+    allow_reentry=True,
+)
 
     # --------- GIFT CODE REDEEM ----------
     gift_conv = ConversationHandler(
