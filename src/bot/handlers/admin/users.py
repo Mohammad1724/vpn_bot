@@ -1,4 +1,3 @@
-# filename: bot/handlers/admin/users.py
 # -*- coding: utf-8 -*-
 
 import re
@@ -74,36 +73,46 @@ def _sanitize_for_code(s: str) -> str:
     return (s or "").replace("`", "")
 
 async def _render_user_panel_text(target_id: int) -> tuple[str, bool]:
-    info = db.get_user(target_id)
-    if not info:
-        return "❌ کاربر یافت نشد.", False
     try:
-        services = db.get_user_services(target_id) or []
-    except Exception:
-        services = []
+        info = db.get_user(target_id)
+        if not info:
+            return "❌ کاربر یافت نشد.", False
 
-    ban_state = bool(info.get('is_banned'))
+        try:
+            services = db.get_user_services(target_id) or []
+        except Exception as e:
+            logger.error(f"Error fetching services for user {target_id}: {e}")
+            services = []
 
-    username = info.get('username') or "-"
-    if username != "-" and not username.startswith("@"):
-        username = f"@{username}"
-    username = _sanitize_for_code(username)
+        ban_state = bool(info.get('is_banned'))
 
-    try:
-        total_usage_gb = db.get_total_user_traffic(target_id)
-    except Exception:
-        total_usage_gb = 0.0
+        username = info.get('username') or "-"
+        if username != "-" and not username.startswith("@"):
+            username = f"@{username}"
+        # Escape Markdown special chars
+        username = username.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`")
 
-    text = (
-        f"👤 شناسه: `{_sanitize_for_code(str(target_id))}`\n"
-        f"👥 نام کاربری: `{username}`\n"
-        f"💰 موجودی: {int(info.get('balance', 0)):,} تومان\n"
-        f"🧪 تست: {'استفاده کرده' if info.get('has_used_trial') else 'آزاد'}\n"
-        f"🚫 وضعیت: {'مسدود' if ban_state else 'آزاد'}\n"
-        f"📋 تعداد سرویس‌ها: {len(services)}\n"
-        f"📊 مصرف کل (همه نودها): {total_usage_gb:.2f} GB"
-    )
-    return text, ban_state
+        try:
+            total_usage_gb = db.get_total_user_traffic(target_id)
+        except Exception as e:
+            logger.error(f"Error getting traffic for user {target_id}: {e}")
+            total_usage_gb = 0.0
+
+        text = (
+            f"👤 شناسه: `{target_id}`\n"
+            f"👥 نام کاربری: `{username}`\n"
+            f"💰 موجودی: {int(info.get('balance', 0)):,} تومان\n"
+            f"🧪 تست: {'استفاده کرده' if info.get('has_used_trial') else 'آزاد'}\n"
+            f"🚫 وضعیت: {'مسدود' if ban_state else 'آزاد'}\n"
+            f"📋 تعداد سرویس‌ها: {len(services)}\n"
+            f"📊 مصرف کل (همه نودها): {total_usage_gb:.2f} GB"
+        )
+        return text, ban_state
+
+    except Exception as e:
+        logger.error(f"Error in _render_user_panel_text for user {target_id}: {e}", exc_info=True)
+        return "❌ خطای داخلی در نمایش اطلاعات کاربر.", False
+
 
 def _ensure_user_exists(user_id: int):
     try:
@@ -149,12 +158,12 @@ async def user_management_menu_cb(update: Update, context: ContextTypes.DEFAULT_
     return await user_management_menu(update, context)
 
 async def ask_user_id_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    🔥 اصلاح شده: فقط state رو تغییر میده — پیام رو عوض نمی‌کنه!
+    کاربر باید مستقیماً ID رو بفرسته — بدون نمایش پیام جدید.
+    """
     q = update.callback_query
-    await q.answer()
-    try:
-        await q.message.edit_text("شناسه عددی کاربر را ارسال کنید…")
-    except Exception:
-        await context.bot.send_message(chat_id=q.from_user.id, text="شناسه عددی کاربر را ارسال کنید…")
+    await q.answer("✅ منتظر ارسال ID کاربر هستم...", show_alert=False)
     return USER_MANAGEMENT_MENU
 
 # -------------------------------
@@ -163,15 +172,40 @@ async def ask_user_id_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def _send_user_panel(update: Update, context: ContextTypes.DEFAULT_TYPE, target_id: int):
     q = getattr(update, "callback_query", None)
-    text, ban_state = await _render_user_panel_text(target_id)
-    kb = _action_kb(target_id, ban_state)
-    if q:
+    chat_id = q.from_user.id if q else update.effective_chat.id
+
+    try:
+        text, ban_state = await _render_user_panel_text(target_id)
+    except Exception as e:
+        logger.error(f"Failed to render user panel for {target_id}: {e}")
+        text = "❌ خطایی در بارگذاری اطلاعات کاربر رخ داد."
+        ban_state = False
+
+    kb = None
+    try:
+        kb = _action_kb(target_id, ban_state)
+    except Exception as e:
+        logger.error(f"Failed to generate action keyboard for {target_id}: {e}")
+        kb = None
+
+    try:
+        if q:
+            try:
+                await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN_V2)
+            except Exception:
+                # fallback to plain text
+                await q.edit_message_text(text, reply_markup=kb)
+        else:
+            try:
+                await update.effective_message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN_V2)
+            except Exception:
+                await update.effective_message.reply_text(text, reply_markup=kb)
+    except Exception as e:
+        logger.error(f"Failed to send user panel to {chat_id}: {e}")
         try:
-            await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+            await context.bot.send_message(chat_id=chat_id, text="❌ خطایی در نمایش پنل کاربر رخ داد. لطفاً دوباره تلاش کنید.")
         except Exception:
-            await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
-    else:
-        await update.effective_message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+            pass
 
 async def manage_user_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     em = update.effective_message
