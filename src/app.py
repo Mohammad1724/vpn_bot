@@ -128,7 +128,7 @@ def build_application():
             constants.CHARGE_RECEIPT: [
                 MessageHandler(filters.PHOTO, charge_h.charge_receipt_received),
             ],
-        ],
+        },
         fallbacks=[
             CommandHandler('cancel', charge_h.charge_cancel),
             CallbackQueryHandler(start_h.start, pattern=r"^home_menu$"),
@@ -211,7 +211,7 @@ def build_application():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_category_received),
                 CommandHandler('skip', admin_plans.skip_edit_plan_category)
             ],
-        ],
+        },
         fallbacks=[CommandHandler('cancel', admin_plans.cancel_edit_plan)],
         map_to_parent={ConversationHandler.END: constants.PLAN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
@@ -411,7 +411,7 @@ def build_application():
 
             # ✅ اصلاح مهم: پذیرش اعداد فارسی/انگلیسی با علائم نامرئی
             constants.USER_MANAGEMENT_MENU: [
-                MessageHandler(filters.Regex(r'^[\u200f\u200e\s]*[0-9۰-۹]+[\u200f\u200e\s]*$') & admin_filter, admin_users.manage_user_id_received),
+                MessageHandler(filters.Regex(r'^[\u200f\u200e\u200c\u200d\s]*[0-9۰-۹]+[\u200f\u200e\u200c\u200d\s]*$') & admin_filter, admin_users.manage_user_id_received),
 
                 # اکشن‌های شیشه‌ای
                 CallbackQueryHandler(admin_users.admin_user_addbal_cb, pattern=r'^admin_user_addbal_\d+$'),
@@ -435,6 +435,7 @@ def build_application():
                 CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
             ],
 
+            # (سایر stateهای ادمین)
             constants.REPORTS_MENU: [
                 MessageHandler(filters.Regex(r'^📊 آمار کلی$') & admin_filter, admin_reports.show_stats_report),
                 MessageHandler(filters.Regex(r'^📈 گزارش فروش امروز$') & admin_filter, admin_reports.show_daily_report),
@@ -471,19 +472,11 @@ def build_application():
                 CallbackQueryHandler(admin_settings.edit_setting_start, pattern=r'^admin_edit_setting_'),
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
                 CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
-                # Nested conversations for gift/promo/referral
-                gift_code_create_conv,
-                promo_create_conv,
-                referral_bonus_conv,
             ],
             constants.AWAIT_SETTING_VALUE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_settings.setting_value_received),
                 MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_backup.backup_target_received),
                 CommandHandler('cancel', admin_backup.cancel_backup_settings),
-            ],
-            # Settings conversation nested (provides its own ADMIN_SETTINGS_MENU handling)
-            constants.ADMIN_SETTINGS_MENU: [
-                admin_settings_conv
             ],
         },
         fallbacks=[
