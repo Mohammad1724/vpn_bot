@@ -23,15 +23,15 @@ import hiddify_api
 logger = logging.getLogger(__name__)
 
 # --- helpers for ID normalization ---
-_INVIS = "".join(["\u200f", "\u200e", "\u200d", "\u200c", " ", "\t", "\n", "\r"])
 _P2E = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
 def normalize_id_input(text: str) -> str:
-    s = (text or "")
-    for ch in _INVIS:
-        s = s.replace(ch, "")
-    s = s.translate(_P2E)
-    s = s.strip()
-    return s
+    """
+    تبدیل اعداد فارسی به انگلیسی و حذف هر کاراکتری غیر از رقم
+    (فاصله، LRM/RLM/ZWNJ، کاما، متن اضافه و ...)
+    """
+    s = (text or "").translate(_P2E)
+    digits_only = "".join(ch for ch in s if ch.isdigit())
+    return digits_only
 
 # -------------------------------
 # Helpers (Inline UI)
@@ -184,8 +184,9 @@ async def manage_user_id_received(update: Update, context: ContextTypes.DEFAULT_
     em = update.effective_message
     raw = (em.text or "")
     norm = normalize_id_input(raw)
-    if not norm or not re.fullmatch(r"\d+", norm):
-        await em.reply_text("❌ شناسه معتبر نیست. یک عدد مثبت وارد کنید.", reply_markup=_user_mgmt_root_inline())
+    logger.info(f"[ADMIN] manage_user_id_received: raw='{raw}' -> norm='{norm}'")
+    if not norm:
+        await em.reply_text("❌ شناسه معتبر نیست. فقط عدد ارسال کنید.", reply_markup=_user_mgmt_root_inline())
         return USER_MANAGEMENT_MENU
 
     try:
@@ -377,11 +378,11 @@ async def admin_delete_service(update: Update, context: ContextTypes.DEFAULT_TYP
     except BadRequest:
         pass
 
-    success = await hiddify_api.delete_user_from_panel(svc['sub_uuid'], server_name=server_name)
+    success = await hiddify_api.delete_user_from_panel(svc['sub_uuid'])
 
     if not success:
         try:
-            probe = await hiddify_api.get_user_info(svc['sub_uuid'], server_name=server_name)
+            probe = await hiddify_api.get_user_info(svc['sub_uuid'])
             if isinstance(probe, dict) and probe.get("_not_found"):
                 success = True
         except Exception:
@@ -529,7 +530,7 @@ async def broadcast_to_user_message_received(update: Update, context: ContextTyp
     return ConversationHandler.END
 
 # -------------------------------
-# Confirm/Reject Charge (RESTORED)
+# Confirm/Reject Charge
 # -------------------------------
 
 async def admin_confirm_charge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
