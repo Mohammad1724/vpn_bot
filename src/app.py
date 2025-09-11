@@ -86,7 +86,8 @@ def build_application():
             ],
         },
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
-        per_user=True, per_chat=True, allow_reentry=True
+        per_user=True, per_chat=True,
+        allow_reentry=True
     )
 
     # --------- GIFT ----------
@@ -169,7 +170,7 @@ def build_application():
         per_user=True, per_chat=True
     )
 
-    # --------- ADMIN: ADD PLAN ----------
+    # --------- ADMIN: ADD/EDIT PLAN ----------
     add_plan_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(r'^➕ افزودن پلن جدید$') & admin_filter, admin_plans.add_plan_start),
@@ -187,7 +188,6 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # --------- ADMIN: EDIT PLAN ----------
     edit_plan_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_plans.edit_plan_start, pattern=r'^admin_edit_plan_\d+$')],
         states={
@@ -217,7 +217,7 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # --------- ADMIN: TRIAL SETTINGS ----------
+    # --------- ADMIN: TRIAL SETTINGS (nested conv) ----------
     trial_settings_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(trial_ui.trial_menu, pattern=r"^settings_trial$")],
         states={
@@ -237,53 +237,6 @@ def build_application():
         },
         fallbacks=[CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^back_to_settings$")],
         map_to_parent={constants.ADMIN_SETTINGS_MENU: constants.ADMIN_SETTINGS_MENU, ConversationHandler.END: constants.ADMIN_SETTINGS_MENU},
-        per_user=True, per_chat=True, allow_reentry=True
-    )
-
-    # --------- ADMIN: GIFT/PROMO ----------
-    gift_code_create_conv = ConversationHandler(
-        entry_points=[
-            MessageHandler(filters.Regex(r'^➕ ساخت کد هدیه جدید$') & admin_filter, admin_gift.create_gift_code_start),
-            CallbackQueryHandler(admin_gift.create_gift_code_start, pattern=r'^admin_gift_create$'),
-        ],
-        states={
-            admin_gift.CREATE_GIFT_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_gift.create_gift_amount_received)]
-        },
-        fallbacks=[CommandHandler('cancel', admin_gift.cancel_create_gift)],
-        map_to_parent={ConversationHandler.END: constants.GIFT_CODES_MENU},
-        per_user=True, per_chat=True, allow_reentry=True
-    )
-
-    promo_create_conv = ConversationHandler(
-        entry_points=[
-            MessageHandler(filters.Regex(r'^➕ ساخت کد تخفیف جدید$') & admin_filter, admin_gift.create_promo_start)
-        ],
-        states={
-            constants.PROMO_GET_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_gift.promo_code_received)],
-            constants.PROMO_GET_PERCENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_gift.promo_percent_received)],
-            constants.PROMO_GET_MAX_USES: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_gift.promo_max_uses_received)],
-            constants.PROMO_GET_EXPIRES: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_gift.promo_days_valid_received),
-                CommandHandler('skip', admin_gift.promo_skip_expires)
-            ],
-            constants.PROMO_GET_FIRST_PURCHASE: [
-                MessageHandler(filters.Regex(r'^(بله|خیر)$'), admin_gift.promo_first_purchase_received)
-            ],
-        },
-        fallbacks=[CommandHandler('cancel', admin_gift.cancel_promo_create)],
-        map_to_parent={ConversationHandler.END: constants.GIFT_CODES_MENU},
-        per_user=True, per_chat=True, allow_reentry=True
-    )
-
-    referral_bonus_conv = ConversationHandler(
-        entry_points=[
-            MessageHandler(filters.Regex(r'^💰 تنظیم هدیه دعوت$') & admin_filter, admin_gift.ask_referral_bonus)
-        ],
-        states={
-            constants.AWAIT_REFERRAL_BONUS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_gift.referral_bonus_received)]
-        },
-        fallbacks=[CommandHandler('cancel', admin_gift.cancel_referral_bonus)],
-        map_to_parent={ConversationHandler.END: constants.GIFT_CODES_MENU},
         per_user=True, per_chat=True, allow_reentry=True
     )
 
@@ -314,45 +267,6 @@ def build_application():
         },
         fallbacks=[CommandHandler('cancel', admin_c.admin_generic_cancel)],
         map_to_parent={ConversationHandler.END: constants.ADMIN_MENU},
-        per_user=True, per_chat=True, allow_reentry=True
-    )
-
-    # --------- ADMIN: SETTINGS (ROOT) ----------
-    admin_settings_conv = ConversationHandler(
-        entry_points=[
-            MessageHandler(filters.Regex(r'^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
-            CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^admin_settings$")
-        ],
-        states={
-            constants.ADMIN_SETTINGS_MENU: [
-                CallbackQueryHandler(admin_settings.maintenance_and_join_submenu, pattern=r"^settings_maint_join$"),
-                CallbackQueryHandler(admin_settings.payment_and_guides_submenu, pattern=r"^settings_payment_guides$"),
-                CallbackQueryHandler(admin_settings.payment_info_submenu, pattern=r"^payment_info_submenu$"),
-                CallbackQueryHandler(admin_settings.service_configs_submenu, pattern=r"^settings_service_configs$"),
-                CallbackQueryHandler(admin_settings.subdomains_submenu, pattern=r"^settings_subdomains$"),
-                CallbackQueryHandler(admin_settings.reports_and_reminders_submenu, pattern=r"^settings_reports_reminders$"),
-                CallbackQueryHandler(admin_settings.usage_aggregation_submenu, pattern=r"^settings_usage_aggregation$"),
-                CallbackQueryHandler(admin_settings.toggle_usage_aggregation, pattern=r"^toggle_usage_aggregation$"),
-                CallbackQueryHandler(admin_settings.edit_default_link_start, pattern=r"^edit_default_link_type$"),
-                CallbackQueryHandler(admin_settings.set_default_link_type, pattern=r"^set_default_link_"),
-                CallbackQueryHandler(admin_settings.toggle_maintenance, pattern=r"^toggle_maintenance$"),
-                CallbackQueryHandler(admin_settings.toggle_force_join, pattern=r"^toggle_force_join$"),
-                CallbackQueryHandler(admin_settings.toggle_expiry_reminder, pattern=r"^toggle_expiry_reminder$"),
-                CallbackQueryHandler(admin_settings.toggle_report_setting, pattern=r"^toggle_report_"),
-                trial_settings_conv,
-                CallbackQueryHandler(admin_settings.edit_setting_start, pattern=r"^admin_edit_setting_"),
-                CallbackQueryHandler(admin_settings.back_to_admin_menu_cb, pattern=r"^admin_back_to_menu$"),
-                CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
-            ],
-            constants.AWAIT_SETTING_VALUE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_settings.setting_value_received)
-            ],
-        },
-        fallbacks=[
-            CommandHandler('cancel', admin_c.admin_generic_cancel),
-            CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^back_to_settings$")
-        ],
-        map_to_parent={constants.ADMIN_MENU: constants.ADMIN_MENU, ConversationHandler.END: constants.ADMIN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
     )
 
@@ -448,16 +362,54 @@ def build_application():
                 CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
             ],
 
-            # REPORTS MENU (inline glass buttons)
+            # REPORTS MENU (inline/glass)
             constants.REPORTS_MENU: [
-                # Reports inline
                 CallbackQueryHandler(admin_reports.reports_menu, pattern=r"^rep_menu$"),
                 CallbackQueryHandler(admin_reports.show_stats_report, pattern=r"^rep_stats$"),
                 CallbackQueryHandler(admin_reports.show_daily_report, pattern=r"^rep_daily$"),
                 CallbackQueryHandler(admin_reports.show_weekly_report, pattern=r"^rep_weekly$"),
                 CallbackQueryHandler(admin_reports.show_popular_plans_report, pattern=r"^rep_popular$"),
-                # Back to admin
                 CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
+            ],
+
+            # SETTINGS MENU (inline/glass, FIXED)
+            constants.ADMIN_SETTINGS_MENU: [
+                # Root (can be called from main menu or back)
+                CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^admin_settings$"),
+                CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^back_to_settings$"),
+
+                # Submenus
+                CallbackQueryHandler(admin_settings.maintenance_and_join_submenu, pattern=r"^settings_maint_join$"),
+                CallbackQueryHandler(admin_settings.payment_and_guides_submenu, pattern=r"^settings_payment_guides$"),
+                CallbackQueryHandler(admin_settings.payment_info_submenu, pattern=r"^payment_info_submenu$"),
+                CallbackQueryHandler(admin_settings.service_configs_submenu, pattern=r"^settings_service_configs$"),
+                CallbackQueryHandler(admin_settings.subdomains_submenu, pattern=r"^settings_subdomains$"),
+                CallbackQueryHandler(admin_settings.reports_and_reminders_submenu, pattern=r"^settings_reports_reminders$"),
+                CallbackQueryHandler(admin_settings.usage_aggregation_submenu, pattern=r"^settings_usage_aggregation$"),
+
+                # Actions/toggles
+                CallbackQueryHandler(admin_settings.toggle_usage_aggregation, pattern=r"^toggle_usage_aggregation$"),
+                CallbackQueryHandler(admin_settings.edit_default_link_start, pattern=r"^edit_default_link_type$"),
+                CallbackQueryHandler(admin_settings.set_default_link_type, pattern=r"^set_default_link_"),
+                CallbackQueryHandler(admin_settings.toggle_maintenance, pattern=r"^toggle_maintenance$"),
+                CallbackQueryHandler(admin_settings.toggle_force_join, pattern=r"^toggle_force_join$"),
+                CallbackQueryHandler(admin_settings.toggle_expiry_reminder, pattern=r"^toggle_expiry_reminder$"),
+                CallbackQueryHandler(admin_settings.toggle_report_setting, pattern=r"^toggle_report_"),
+
+                # Trial nested conversation
+                trial_settings_conv,
+
+                # Edit setting
+                CallbackQueryHandler(admin_settings.edit_setting_start, pattern=r"^admin_edit_setting_"),
+
+                # Back/home
+                CallbackQueryHandler(admin_settings.back_to_admin_menu_cb, pattern=r"^admin_back_to_menu$"),
+                CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
+            ],
+
+            # AWAIT SETTING VALUE
+            constants.AWAIT_SETTING_VALUE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_settings.setting_value_received)
             ],
 
             # BACKUP MENU
@@ -493,17 +445,6 @@ def build_application():
                 CallbackQueryHandler(admin_settings.edit_setting_start, pattern=r'^admin_edit_setting_'),
                 MessageHandler(filters.Regex(f'^{constants.BTN_BACK_TO_ADMIN_MENU}$') & admin_filter, admin_c.admin_entry),
                 CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
-            ],
-
-            constants.AWAIT_SETTING_VALUE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_settings.setting_value_received),
-                MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_backup.backup_target_received),
-                CommandHandler('cancel', admin_backup.cancel_backup_settings),
-            ],
-
-            # Include nested settings conv to handle its own states
-            constants.ADMIN_SETTINGS_MENU: [
-                admin_settings_conv
             ],
         },
         fallbacks=[
@@ -546,7 +487,7 @@ def build_application():
     application.add_handler(CallbackQueryHandler(admin_users.admin_confirm_charge_callback, pattern=r'^admin_confirm_charge_'), group=1)
     application.add_handler(CallbackQueryHandler(admin_users.admin_reject_charge_callback, pattern=r'^admin_reject_charge_'), group=1)
 
-    # Global back-to-user-panel and cancel (work in all states)
+    # Global back for user panel (if you added in users.py)
     application.add_handler(CallbackQueryHandler(admin_users.admin_user_back_cb, pattern=r'^admin_user_back_\d+$'), group=1)
     application.add_handler(CallbackQueryHandler(admin_users.admin_user_refresh_cb, pattern=r'^admin_user_refresh_\d+$'), group=1)
     application.add_handler(CallbackQueryHandler(admin_users.admin_user_amount_cancel_cb, pattern=r'^admin_user_amount_cancel_\d+$'), group=1)
