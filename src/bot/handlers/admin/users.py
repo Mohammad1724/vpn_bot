@@ -22,13 +22,10 @@ import hiddify_api
 
 logger = logging.getLogger(__name__)
 
-# -------------------------------
-# Helpers
-# -------------------------------
 
-# (برای سازگاری بخش‌های دیگر، کیبورد Reply را نگه می‌داریم؛ اما ورودی مدیریت کاربران را شیشه‌ای می‌کنیم)
-def _user_mgmt_keyboard() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup([[BTN_BACK_TO_ADMIN_MENU]], resize_keyboard=True)
+# -------------------------------
+# Helpers (Inline UI)
+# -------------------------------
 
 def _user_mgmt_root_inline() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
@@ -60,6 +57,18 @@ def _action_kb(target_id: int, is_banned: bool) -> InlineKeyboardMarkup:
 
 def _amount_prompt_kb(target_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("❌ انصراف", callback_data=f"admin_user_amount_cancel_{target_id}")]])
+
+async def _send_new(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, kb: InlineKeyboardMarkup | None = None, pm: str | None = None):
+    q = getattr(update, "callback_query", None)
+    if q:
+        await q.answer()
+        try:
+            await q.message.delete()
+        except Exception:
+            pass
+        await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=kb, parse_mode=pm)
+    else:
+        await update.effective_message.reply_text(text, reply_markup=kb, parse_mode=pm)
 
 def _sanitize_for_code(s: str) -> str:
     return (s or "").replace("`", "")
@@ -124,32 +133,17 @@ def _update_balance(user_id: int, delta: int) -> bool:
     return False
 
 # -------------------------------
-# ورود/بازگشت به منوی مدیریت کاربران (شیشه‌ای)
+# Entry Point (Inline UI)
 # -------------------------------
 
 async def user_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    ورود از طریق Reply (منوی اصلی ادمین) یا Callback.
-    منوی شیشه‌ای مدیریت کاربران را نشان می‌دهد.
-    """
-    q = getattr(update, "callback_query", None)
     text = "👥 مدیریت کاربران\n\nشناسه عددی کاربر را تایپ کنید یا از دکمه زیر استفاده کنید."
-    if q:
-        await q.answer()
-        try:
-            await q.message.delete()
-        except Exception:
-            pass
-        await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=_user_mgmt_root_inline())
-    else:
-        await update.effective_message.reply_text(text, reply_markup=_user_mgmt_root_inline())
+    await _send_new(update, context, text, _user_mgmt_root_inline())
     return USER_MANAGEMENT_MENU
 
-# برای callback "admin_users" (بازگشت از پنل یک کاربر به منوی مدیریت کاربران)
 async def user_management_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await user_management_menu(update, context)
 
-# برای callback "admin_users_ask_id"
 async def ask_user_id_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -160,7 +154,7 @@ async def ask_user_id_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return USER_MANAGEMENT_MENU
 
 # -------------------------------
-# نمایش پنل خلاصه کاربر
+# User Panel
 # -------------------------------
 
 async def _send_user_panel(update: Update, context: ContextTypes.DEFAULT_TYPE, target_id: int):
@@ -175,7 +169,6 @@ async def _send_user_panel(update: Update, context: ContextTypes.DEFAULT_TYPE, t
     else:
         await update.effective_message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
 
-# دریافت شناسه و نمایش پنل
 async def manage_user_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     em = update.effective_message
     text = (em.text or "").strip()
@@ -186,12 +179,11 @@ async def manage_user_id_received(update: Update, context: ContextTypes.DEFAULT_
     if target_id <= 0:
         await em.reply_text("شناسه معتبر نیست. یک عدد مثبت وارد کنید.", reply_markup=_user_mgmt_root_inline())
         return USER_MANAGEMENT_MENU
-
     await _send_user_panel(update, context, target_id)
     return USER_MANAGEMENT_MENU
 
 # -------------------------------
-# اکشن‌های پنل کاربر (کال‌بک‌ها)
+# User Actions (Callbacks)
 # -------------------------------
 
 async def admin_user_refresh_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -204,7 +196,6 @@ async def admin_user_services_cb(update: Update, context: ContextTypes.DEFAULT_T
     q = update.callback_query
     target_id = int(q.data.split('_')[-1])
     await q.answer()
-
     services = db.get_user_services(target_id) or []
     if not services:
         try:
@@ -212,7 +203,6 @@ async def admin_user_services_cb(update: Update, context: ContextTypes.DEFAULT_T
         except Exception:
             pass
         return
-
     for s in services:
         name = s.get('name') or f"سرویس {s.get('service_id')}"
         sid = s.get('service_id')
@@ -227,7 +217,6 @@ async def admin_user_purchases_cb(update: Update, context: ContextTypes.DEFAULT_
     q = update.callback_query
     target_id = int(q.data.split('_')[-1])
     await q.answer()
-
     purchases = db.get_user_sales_history(target_id)
     if not purchases:
         try:
@@ -235,7 +224,6 @@ async def admin_user_purchases_cb(update: Update, context: ContextTypes.DEFAULT_
         except Exception:
             pass
         return
-
     for p in purchases[:30]:
         try:
             price = int(float(p.get('price', 0)))
@@ -267,7 +255,6 @@ async def admin_user_toggle_ban_cb(update: Update, context: ContextTypes.DEFAULT
     db.set_user_ban_status(target_id, not ban_state)
     await _send_user_panel(update, context, target_id)
 
-# افزایش/کاهش موجودی → دریافت مبلغ
 async def admin_user_addbal_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -275,10 +262,7 @@ async def admin_user_addbal_cb(update: Update, context: ContextTypes.DEFAULT_TYP
     context.user_data["muid"] = target_id
     context.user_data["mop"] = "add"
     try:
-        await q.edit_message_text(
-            f"➕ مبلغ افزایش موجودی برای کاربر {target_id} را وارد کنید:",
-            reply_markup=_amount_prompt_kb(target_id)
-        )
+        await q.edit_message_text(f"➕ مبلغ افزایش موجودی برای کاربر {target_id} را وارد کنید:", reply_markup=_amount_prompt_kb(target_id))
     except BadRequest:
         await context.bot.send_message(chat_id=q.from_user.id, text=f"➕ مبلغ افزایش موجودی برای کاربر {target_id} را وارد کنید:", reply_markup=_amount_prompt_kb(target_id))
     return MANAGE_USER_AMOUNT
@@ -290,10 +274,7 @@ async def admin_user_subbal_cb(update: Update, context: ContextTypes.DEFAULT_TYP
     context.user_data["muid"] = target_id
     context.user_data["mop"] = "sub"
     try:
-        await q.edit_message_text(
-            f"➖ مبلغ کاهش موجودی برای کاربر {target_id} را وارد کنید:",
-            reply_markup=_amount_prompt_kb(target_id)
-        )
+        await q.edit_message_text(f"➖ مبلغ کاهش موجودی برای کاربر {target_id} را وارد کنید:", reply_markup=_amount_prompt_kb(target_id))
     except BadRequest:
         await context.bot.send_message(chat_id=q.from_user.id, text=f"➖ مبلغ کاهش موجودی برای کاربر {target_id} را وارد کنید:", reply_markup=_amount_prompt_kb(target_id))
     return MANAGE_USER_AMOUNT
@@ -336,10 +317,7 @@ async def manage_user_amount_received(update: Update, context: ContextTypes.DEFA
             op_text = "افزایش" if delta >= 0 else "کاهش"
             amount_str = utils.format_toman(abs(delta), persian_digits=True)
             note_txt = f"موجودی فعلی: {utils.format_toman(new_bal, persian_digits=True)}." if new_bal is not None else ""
-            await context.bot.send_message(
-                chat_id=target_id,
-                text=f"کیف پول شما توسط پشتیبانی {op_text} یافت به مبلغ {amount_str}. {note_txt}"
-            )
+            await context.bot.send_message(chat_id=target_id, text=f"کیف پول شما توسط پشتیبانی {op_text} یافت به مبلغ {amount_str}. {note_txt}")
         except Forbidden:
             pass
         except Exception as e:
@@ -352,9 +330,6 @@ async def manage_user_amount_received(update: Update, context: ContextTypes.DEFA
     await _send_user_panel(update, context, target_id)
     return USER_MANAGEMENT_MENU
 
-# -------------------------------
-# حذف سرویس از سمت ادمین
-# -------------------------------
 async def admin_delete_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -409,7 +384,7 @@ async def admin_delete_service(update: Update, context: ContextTypes.DEFAULT_TYP
             pass
 
 # -------------------------------
-# ارسال پیام (Broadcast) - بدون تغییر
+# Broadcast (untouched)
 # -------------------------------
 def _broadcast_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup([["ارسال به همه کاربران", "ارسال به کاربر خاص"], [BTN_BACK_TO_ADMIN_MENU]], resize_keyboard=True)
@@ -441,7 +416,7 @@ async def broadcast_to_all_confirm(update: Update, context: ContextTypes.DEFAULT
     )
     return BROADCAST_CONFIRM
 
-async def broadcast_confirm_callback(update: Update, Context: ContextTypes.DEFAULT_TYPE):
+async def broadcast_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     if q.data.endswith("no"):
@@ -449,16 +424,16 @@ async def broadcast_confirm_callback(update: Update, Context: ContextTypes.DEFAU
             await q.edit_message_text("ارسال همگانی لغو شد.", reply_markup=None)
         except Exception:
             pass
-        Context.user_data.clear()
+        context.user_data.clear()
         return ConversationHandler.END
 
-    msg = Context.user_data.get("broadcast_message")
+    msg = context.user_data.get("broadcast_message")
     if not msg:
         try:
             await q.edit_message_text("خطا: پیامی برای ارسال یافت نشد.", reply_markup=None)
         except Exception:
             pass
-        Context.user_data.clear()
+        context.user_data.clear()
         return ConversationHandler.END
 
     user_ids = db.get_all_user_ids()
@@ -470,12 +445,12 @@ async def broadcast_confirm_callback(update: Update, Context: ContextTypes.DEFAU
 
     for uid in user_ids:
         try:
-            await Context.bot.copy_message(chat_id=uid, from_chat_id=msg.chat.id, message_id=msg.message_id)
+            await context.bot.copy_message(chat_id=uid, from_chat_id=msg.chat.id, message_id=msg.message_id)
             ok += 1
         except RetryAfter as e:
             await asyncio.sleep(getattr(e, "retry_after", 1) + 1)
             try:
-                await Context.bot.copy_message(chat_id=uid, from_chat_id=msg.chat.id, message_id=msg.message_id)
+                await context.bot.copy_message(chat_id=uid, from_chat_id=msg.chat.id, message_id=msg.message_id)
                 ok += 1
             except Exception:
                 fail += 1
@@ -491,8 +466,7 @@ async def broadcast_confirm_callback(update: Update, Context: ContextTypes.DEFAU
         await q.edit_message_text(summary, reply_markup=None)
     except Exception:
         await q.from_user.send_message(summary)
-
-    Context.user_data.clear()
+    context.user_data.clear()
     return ConversationHandler.END
 
 async def broadcast_to_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -534,3 +508,85 @@ async def broadcast_to_user_message_received(update: Update, context: ContextTyp
         await update.effective_message.reply_text("❌ ارسال ناموفق بود. احتمالاً کاربر بات را مسدود کرده یا آیدی اشتباه است.")
     context.user_data.clear()
     return ConversationHandler.END
+
+
+# -------------------------------
+# Confirm/Reject Charge
+# -------------------------------
+
+async def admin_confirm_charge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    try:
+        charge_id = int(q.data.split('_')[3])
+    except (IndexError, ValueError):
+        await q.edit_message_caption("❌ اطلاعات دکمه نامعتبر است.")
+        return
+
+    req = db.get_charge_request(charge_id)
+    if not req:
+        await q.edit_message_caption("❌ درخواست شارژ یافت نشد یا قبلاً پردازش شده است.")
+        return
+
+    user_id = int(req['user_id'])
+    amount = int(float(req['amount']))
+    promo_code_in = (req.get('note') or "").strip().upper()
+
+    ok = db.confirm_charge_request(charge_id)
+    if not ok:
+        await q.edit_message_caption("❌ تایید شارژ ناموفق بود (احتمالاً در DB).")
+        return
+
+    bonus_applied = 0
+    try:
+        if hasattr(db, "get_user_charge_count") and db.get_user_charge_count(user_id) == 1:
+            pc = (db.get_setting('first_charge_code') or '').upper()
+            pct = int(db.get_setting('first_charge_bonus_percent') or 0)
+            exp_raw = db.get_setting('first_charge_expires_at') or ''
+            exp_dt = utils.parse_date_flexible(exp_raw) if exp_raw else None
+            now = datetime.now().astimezone()
+
+            if promo_code_in and promo_code_in == pc and pct > 0 and (not exp_dt or now <= exp_dt):
+                bonus = int(amount * (pct / 100.0))
+                if bonus > 0:
+                    _update_balance(user_id, bonus)
+                    bonus_applied = bonus
+    except Exception as e:
+        logger.error(f"Error applying first charge bonus: {e}")
+
+    final_text = f"✅ مبلغ {amount:,} تومان برای کاربر `{user_id}` تایید شد."
+    if bonus_applied > 0:
+        final_text += f"\n🎁 پاداش شارژ اول به مبلغ {bonus_applied:,} تومان نیز اعمال شد."
+
+    await q.edit_message_caption(final_text, parse_mode=ParseMode.MARKDOWN)
+
+    try:
+        user_info = db.get_user(user_id)
+        new_balance = user_info['balance'] if user_info else 0
+        user_message = f"✅ حساب شما به مبلغ {amount:,} تومان شارژ شد."
+        if bonus_applied > 0:
+            user_message += f"\n🎁 شما {bonus_applied:,} تومان پاداش شارژ اول دریافت کردید."
+        user_message += f"\n💰 موجودی جدید شما: {new_balance:,.0f} تومان"
+        await context.bot.send_message(chat_id=user_id, text=user_message)
+    except Exception as e:
+        logger.warning(f"Failed to notify user {user_id} about successful charge: {e}")
+
+
+async def admin_reject_charge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    try:
+        charge_id = int(q.data.split('_')[3])
+        user_id = int(q.data.split('_')[4])
+    except (IndexError, ValueError):
+        await q.edit_message_caption("❌ اطلاعات دکمه نامعتبر است.")
+        return
+
+    if db.reject_charge_request(charge_id):
+        await q.edit_message_caption(f"❌ درخواست شارژ کاربر `{user_id}` رد شد.")
+        try:
+            await context.bot.send_message(chat_id=user_id, text="❌ متاسفانه درخواست شارژ شما توسط ادمین رد شد.")
+        except Exception:
+            pass
+    else:
+        await q.edit_message_caption("❌ عملیات ناموفق بود یا درخواست قبلاً پردازش شده است.")
