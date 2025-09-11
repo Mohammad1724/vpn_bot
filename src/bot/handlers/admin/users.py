@@ -1,4 +1,3 @@
-# bot/handlers/admin/users.py
 # -*- coding: utf-8 -*-
 
 import re
@@ -152,72 +151,104 @@ async def user_management_menu(update: Update, context: ContextTypes.DEFAULT_TYP
     return USER_MANAGEMENT_MENU
 
 async def user_management_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    برای دکمه «🔙 مدیریت کاربران».
-    پیام پنل کاربر را حذف و منوی اصلی مدیریت کاربران را نشان می‌دهد.
-    """
     return await user_management_menu(update, context)
 
 async def ask_user_id_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    🔥 اصلاح شده: فقط state رو تغییر میده — پیام رو عوض نمی‌کنه!
-    کاربر باید مستقیماً ID رو بفرسته — بدون نمایش پیام جدید.
+    🔥 فقط state رو تغییر میده — پیام رو عوض نمی‌کنه!
     """
     q = update.callback_query
     await q.answer("✅ منتظر ارسال ID کاربر هستم...", show_alert=False)
     return USER_MANAGEMENT_MENU
 
 # -------------------------------
-# User Panel
+# User Panel — اصلاح شده با لاگ و fallback
 # -------------------------------
 
 async def _send_user_panel(update: Update, context: ContextTypes.DEFAULT_TYPE, target_id: int):
     q = getattr(update, "callback_query", None)
     chat_id = q.from_user.id if q else update.effective_chat.id
 
+    logger.info(f"[DEBUG] Preparing to send panel for user {target_id}")
+
     try:
         text, ban_state = await _render_user_panel_text(target_id)
+        logger.info(f"[DEBUG] Panel text generated for {target_id}: {text[:50]}...")
     except Exception as e:
-        logger.error(f"Failed to render user panel for {target_id}: {e}")
-        text = "❌ خطایی در بارگذاری اطلاعات کاربر رخ داد."
+        logger.error(f"[CRITICAL] Failed to render panel for {target_id}: {e}", exc_info=True)
+        text = "❌ خطای داخلی در بارگذاری اطلاعات کاربر."
         ban_state = False
 
     kb = None
     try:
         kb = _action_kb(target_id, ban_state)
+        logger.info(f"[DEBUG] Keyboard generated for {target_id}")
     except Exception as e:
-        logger.error(f"Failed to generate action keyboard for {target_id}: {e}")
+        logger.error(f"[WARNING] Failed to generate keyboard for {target_id}: {e}")
         kb = None
 
     try:
         if q:
             try:
+                logger.info("[DEBUG] Trying to edit callback query message...")
                 await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN_V2)
-            except Exception:
-                # fallback to plain text
-                await q.edit_message_text(text, reply_markup=kb)
+                logger.info("[DEBUG] Successfully edited message.")
+            except Exception as e1:
+                logger.warning(f"[DEBUG] Edit failed: {e1} — falling back to plain text")
+                try:
+                    await q.edit_message_text(text, reply_markup=kb)
+                    logger.info("[DEBUG] Sent plain text successfully.")
+                except Exception as e2:
+                    logger.error(f"[CRITICAL] Even plain text failed: {e2}")
+                    raise
         else:
             try:
+                logger.info("[DEBUG] Replying to message...")
                 await update.effective_message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN_V2)
-            except Exception:
+                logger.info("[DEBUG] Reply with markdown sent.")
+            except Exception as e1:
+                logger.warning(f"[DEBUG] Markdown reply failed: {e1} — falling back to plain text")
                 await update.effective_message.reply_text(text, reply_markup=kb)
+                logger.info("[DEBUG] Plain text reply sent.")
     except Exception as e:
-        logger.error(f"Failed to send user panel to {chat_id}: {e}")
+        logger.error(f"[CRITICAL] Failed to send panel to {chat_id}: {e}", exc_info=True)
         try:
-            await context.bot.send_message(chat_id=chat_id, text="❌ خطایی در نمایش پنل کاربر رخ داد. لطفاً دوباره تلاش کنید.")
-        except Exception:
-            pass
+            fallback_msg = "❌ خطایی در نمایش پنل کاربر رخ داد. لطفاً دوباره تلاش کنید."
+            if q:
+                await q.message.reply_text(fallback_msg)
+            else:
+                await context.bot.send_message(chat_id=chat_id, text=fallback_msg)
+        except Exception as e3:
+            logger.error(f"[CRITICAL] Even fallback failed: {e3}")
+
+
+# -------------------------------
+# User ID Input Handler — با لاگ DEBUG
+# -------------------------------
 
 async def manage_user_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     em = update.effective_message
     text = (em.text or "").strip()
+    logger.info(f"[DEBUG] User sent: '{text}' in USER_MANAGEMENT_MENU")
+
     if not re.fullmatch(r"\d+", text):
-        await em.reply_text("شناسه معتبر نیست. یک عدد مثبت وارد کنید.", reply_markup=_user_mgmt_root_inline())
+        await em.reply_text("❌ شناسه معتبر نیست. فقط عدد وارد کنید.", reply_markup=_user_mgmt_root_inline())
+        logger.warning(f"[DEBUG] Invalid input: '{text}'")
         return USER_MANAGEMENT_MENU
-    target_id = int(text)
+
+    try:
+        target_id = int(text)
+    except ValueError:
+        await em.reply_text("❌ خطای تبدیل عدد. لطفاً دوباره تلاش کنید.", reply_markup=_user_mgmt_root_inline())
+        logger.error(f"[DEBUG] Failed to convert to int: '{text}'")
+        return USER_MANAGEMENT_MENU
+
     if target_id <= 0:
-        await em.reply_text("شناسه معتبر نیست. یک عدد مثبت وارد کنید.", reply_markup=_user_mgmt_root_inline())
+        await em.reply_text("❌ شناسه باید عدد مثبت باشد.", reply_markup=_user_mgmt_root_inline())
+        logger.warning(f"[DEBUG] Non-positive ID: {target_id}")
         return USER_MANAGEMENT_MENU
+
+    logger.info(f"[DEBUG] Valid ID received: {target_id} — proceeding to show panel...")
     await _send_user_panel(update, context, target_id)
     return USER_MANAGEMENT_MENU
 
