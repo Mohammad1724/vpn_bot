@@ -142,6 +142,10 @@ async def user_management_menu(update: Update, context: ContextTypes.DEFAULT_TYP
     return USER_MANAGEMENT_MENU
 
 async def user_management_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    برای دکمه «🔙 مدیریت کاربران».
+    پیام پنل کاربر را حذف و منوی اصلی مدیریت کاربران را نشان می‌دهد.
+    """
     return await user_management_menu(update, context)
 
 async def ask_user_id_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -508,7 +512,6 @@ async def broadcast_to_user_message_received(update: Update, context: ContextTyp
         await update.effective_message.reply_text("❌ ارسال ناموفق بود. احتمالاً کاربر بات را مسدود کرده یا آیدی اشتباه است.")
     context.user_data.clear()
     return ConversationHandler.END
-
 
 # -------------------------------
 # Confirm/Reject Charge
