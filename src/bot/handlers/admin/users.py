@@ -240,52 +240,58 @@ async def admin_user_refresh_cb(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def admin_user_services_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    target_id = int(q.data.split('_')[-1])
     await q.answer()
+    try:
+        target_id = int(q.data.split('_')[-1])
+    except Exception:
+        try:
+            await q.edit_message_text("❌ شناسه کاربر نامعتبر است.")
+        except Exception:
+            pass
+        return
+
     services = db.get_user_services(target_id) or []
 
     if not services:
         txt = "📋 سرویس‌های فعال\n\nهیچ سرویس فعالی برای این کاربر ثبت نشده است."
+        kb = _back_to_user_panel_kb(target_id)
         try:
-            await q.edit_message_text(txt, reply_markup=_back_to_user_panel_kb(target_id))
+            await q.edit_message_text(txt, reply_markup=kb)
         except Exception:
-            await q.from_user.send_message(txt, reply_markup=_back_to_user_panel_kb(target_id))
+            await q.from_user.send_message(txt, reply_markup=kb)
         return
 
-    # خلاصه قابل بازگشت
+    # فقط یک پیام: خلاصه سرویس‌ها + دکمه‌های حذف، و دکمه بازگشت
     lines = []
-    for s in services:
-        name = s.get('name') or f"سرویس {s.get('service_id')}"
-        sid = s.get('service_id')
-        server_name = s.get('server_name') or "-"
-        lines.append(f"• {name} (ID: {sid}) | نود: {server_name}")
+    kb_rows = []
+    MAX_ITEMS = 40
+    over_limit = len(services) > MAX_ITEMS
 
-    header = "📋 سرویس‌های فعال کاربر:\n\n" + "\n".join(lines[:50])
-    try:
-        await q.edit_message_text(header, reply_markup=_back_to_user_panel_kb(target_id))
-    except Exception:
-        await q.from_user.send_message(header, reply_markup=_back_to_user_panel_kb(target_id))
-
-    # پیام‌های جداگانه هر سرویس با دکمه بازگشت
-    for s in services:
+    for s in services[:MAX_ITEMS]:
         sid = s.get('service_id')
         name = s.get('name') or f"سرویس {sid}"
         server_name = s.get('server_name') or "-"
-        del_and_back = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🗑️ حذف سرویس", callback_data=f"admin_delete_service_{sid}_{target_id}"),
-            InlineKeyboardButton("🔙 بازگشت به پنل کاربر", callback_data=f"admin_user_refresh_{target_id}")
-        ]])
-        try:
-            await q.from_user.send_message(f"- {name} (ID: {sid}) | نود: {server_name}", reply_markup=del_and_back)
-        except Exception:
-            pass
+        lines.append(f"• {name} (ID: {sid}) | نود: {server_name}")
+        kb_rows.append([InlineKeyboardButton(f"🗑️ حذف {name}", callback_data=f"admin_delete_service_{sid}_{target_id}")])
+
+    if over_limit:
+        lines.append(f"\n… و {len(services) - MAX_ITEMS} سرویس دیگر")
+
+    kb_rows.append([InlineKeyboardButton("🔙 بازگشت به پنل کاربر", callback_data=f"admin_user_refresh_{target_id}")])
+    kb = InlineKeyboardMarkup(kb_rows)
+
+    text = "📋 سرویس‌های فعال کاربر:\n\n" + "\n".join(lines)
+    try:
+        await q.edit_message_text(text, reply_markup=kb)
+    except Exception:
+        await q.from_user.send_message(text, reply_markup=kb)
 
 async def admin_user_purchases_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    target_id = int(q.data.split('_')[-1])
     await q.answer()
-    purchases = db.get_user_sales_history(target_id)
+    target_id = int(q.data.split('_')[-1])
 
+    purchases = db.get_user_sales_history(target_id)
     if not purchases:
         text = "🧾 سوابق خرید\n\nهیچ سابقه خریدی یافت نشد."
         kb = _back_to_user_panel_kb(target_id)
@@ -375,7 +381,6 @@ async def manage_user_amount_received(update: Update, context: ContextTypes.DEFA
     try:
         amount = int(abs(float(txt)))
     except Exception:
-        # اگر target_id داریم، دکمه برگشت به پنل همان کاربر را نشان بده
         kb = _back_to_user_panel_kb(int(target_id)) if target_id else _user_mgmt_root_inline()
         await em.reply_text("❌ مبلغ نامعتبر است. یک عدد مثبت وارد کنید.", reply_markup=kb)
         return MANAGE_USER_AMOUNT
