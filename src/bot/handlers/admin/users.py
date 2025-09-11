@@ -33,13 +33,10 @@ def normalize_id_input(text: str) -> str:
 
 def normalize_username_input(text: str) -> str:
     s = (text or "").strip()
-    # remove invisibles and spaces
     for ch in _INVIS:
         s = s.replace(ch, "")
-    # strip t.me links and @
     s = re.sub(r'^(?:https?://)?(?:t(?:elegram)?\.me/)', '', s, flags=re.IGNORECASE)
     s = s.lstrip('@')
-    # keep only allowed username chars
     s = re.sub(r'[^A-Za-z0-9_]', '', s)
     return s
 
@@ -49,7 +46,7 @@ def normalize_username_input(text: str) -> str:
 
 def _user_mgmt_root_inline() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔎 جستجو با آیدی (یوزرنیم)", callback_data="admin_users_ask_id")],
+        [InlineKeyboardButton("🔎 جستجو با آیدی (یا شناسه عددی)", callback_data="admin_users_ask_id")],
         [InlineKeyboardButton("🏠 منوی ادمین", callback_data="admin_panel")],
     ])
 
@@ -192,7 +189,6 @@ async def manage_user_id_received(update: Update, context: ContextTypes.DEFAULT_
     logger.info(f"[ADMIN] manage_user_id_received: raw='{raw}' -> num='{num}'")
 
     target_id = None
-
     if num:
         try:
             target_id = int(num)
