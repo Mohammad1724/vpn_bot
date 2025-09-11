@@ -181,7 +181,7 @@ def build_application():
             constants.PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_days_received)],
             constants.PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_gb_received)],
             constants.PLAN_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_category_received)],
-        ],
+        },
         fallbacks=[CommandHandler('cancel', admin_plans.cancel_add_plan)],
         map_to_parent={ConversationHandler.END: constants.PLAN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
@@ -409,9 +409,12 @@ def build_application():
                 CallbackQueryHandler(admin_plans.back_to_admin_cb, pattern=r"^admin_panel$"),
             ],
 
-            # ✅ اصلاح مهم: پذیرش اعداد فارسی/انگلیسی با علائم نامرئی
+            # ✅ پذیرش اعداد فارسی/انگلیسی با علائم نامرئی
             constants.USER_MANAGEMENT_MENU: [
-                MessageHandler(filters.Regex(r'^[\u200f\u200e\u200c\u200d\s]*[0-9۰-۹]+[\u200f\u200e\u200c\u200d\s]*$') & admin_filter, admin_users.manage_user_id_received),
+                MessageHandler(
+                    filters.Regex(r'^[\u200f\u200e\u200c\u200d\s]*[0-9۰-۹]+[\u200f\u200e\u200c\u200d\s]*$') & admin_filter,
+                    admin_users.manage_user_id_received
+                ),
 
                 # اکشن‌های شیشه‌ای
                 CallbackQueryHandler(admin_users.admin_user_addbal_cb, pattern=r'^admin_user_addbal_\d+$'),
@@ -435,7 +438,7 @@ def build_application():
                 CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
             ],
 
-            # (سایر stateهای ادمین)
+            # (سایر stateهای ادمین بدون تغییر)
             constants.REPORTS_MENU: [
                 MessageHandler(filters.Regex(r'^📊 آمار کلی$') & admin_filter, admin_reports.show_stats_report),
                 MessageHandler(filters.Regex(r'^📈 گزارش فروش امروز$') & admin_filter, admin_reports.show_daily_report),
