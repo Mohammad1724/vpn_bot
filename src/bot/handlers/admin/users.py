@@ -403,7 +403,7 @@ async def admin_delete_service(update: Update, context: ContextTypes.DEFAULT_TYP
             pass
 
 # -------------------------------
-# Broadcast (untouched)
+# Broadcast
 # -------------------------------
 def _broadcast_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup([["ارسال به همه کاربران", "ارسال به کاربر خاص"], [BTN_BACK_TO_ADMIN_MENU]], resize_keyboard=True)
@@ -527,3 +527,83 @@ async def broadcast_to_user_message_received(update: Update, context: ContextTyp
         await update.effective_message.reply_text("❌ ارسال ناموفق بود. احتمالاً کاربر بات را مسدود کرده یا آیدی اشتباه است.")
     context.user_data.clear()
     return ConversationHandler.END
+
+# -------------------------------
+# Confirm/Reject Charge (RESTORED)
+# -------------------------------
+
+async def admin_confirm_charge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    try:
+        charge_id = int(q.data.split('_')[3])
+    except (IndexError, ValueError):
+        await q.edit_message_caption("❌ اطلاعات دکمه نامعتبر است.")
+        return
+
+    req = db.get_charge_request(charge_id)
+    if not req:
+        await q.edit_message_caption("❌ درخواست شارژ یافت نشد یا قبلاً پردازش شده است.")
+        return
+
+    user_id = int(req['user_id'])
+    amount = int(float(req['amount']))
+    promo_code_in = (req.get('note') or "").strip().upper()
+
+    ok = db.confirm_charge_request(charge_id)
+    if not ok:
+        await q.edit_message_caption("❌ تایید شارژ ناموفق بود (احتمالاً در DB).")
+        return
+
+    bonus_applied = 0
+    try:
+        if hasattr(db, "get_user_charge_count") and db.get_user_charge_count(user_id) == 1:
+            pc = (db.get_setting('first_charge_code') or '').upper()
+            pct = int(db.get_setting('first_charge_bonus_percent') or 0)
+            exp_raw = db.get_setting('first_charge_expires_at') or ''
+            exp_dt = utils.parse_date_flexible(exp_raw) if exp_raw else None
+            now = datetime.now().astimezone()
+
+            if promo_code_in and promo_code_in == pc and pct > 0 and (not exp_dt or now <= exp_dt):
+                bonus = int(amount * (pct / 100.0))
+                if bonus > 0:
+                    _update_balance(user_id, bonus)
+                    bonus_applied = bonus
+    except Exception as e:
+        logger.error(f"Error applying first charge bonus: {e}")
+
+    final_text = f"✅ مبلغ {amount:,} تومان برای کاربر `{user_id}` تایید شد."
+    if bonus_applied > 0:
+        final_text += f"\n🎁 پاداش شارژ اول به مبلغ {bonus_applied:,} تومان نیز اعمال شد."
+
+    await q.edit_message_caption(final_text, parse_mode=ParseMode.MARKDOWN)
+
+    try:
+        user_info = db.get_user(user_id)
+        new_balance = user_info['balance'] if user_info else 0
+        user_message = f"✅ حساب شما به مبلغ {amount:,} تومان شارژ شد."
+        if bonus_applied > 0:
+            user_message += f"\n🎁 شما {bonus_applied:,} تومان پاداش شارژ اول دریافت کردید."
+        user_message += f"\n💰 موجودی جدید شما: {new_balance:,.0f} تومان"
+        await context.bot.send_message(chat_id=user_id, text=user_message)
+    except Exception as e:
+        logger.warning(f"Failed to notify user {user_id} about successful charge: {e}")
+
+async def admin_reject_charge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    try:
+        charge_id = int(q.data.split('_')[3])
+        user_id = int(q.data.split('_')[4])
+    except (IndexError, ValueError):
+        await q.edit_message_caption("❌ اطلاعات دکمه نامعتبر است.")
+        return
+
+    if db.reject_charge_request(charge_id):
+        await q.edit_message_caption(f"❌ درخواست شارژ کاربر `{user_id}` رد شد.")
+        try:
+            await context.bot.send_message(chat_id=user_id, text="❌ متاسفانه درخواست شارژ شما توسط ادمین رد شد.")
+        except Exception:
+            pass
+    else:
+        await q.edit_message_caption("❌ عملیات ناموفق بود یا درخواست قبلاً پردازش شده است.")
