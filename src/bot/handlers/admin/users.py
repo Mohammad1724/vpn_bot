@@ -73,7 +73,14 @@ def _action_kb(target_id: int, is_banned: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 def _amount_prompt_kb(target_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[InlineKeyboardButton("❌ انصراف", callback_data=f"admin_user_amount_cancel_{target_id}")]])
+    # هر دو دکمه به یک callback می‌روند که state را پاک کرده و به پنل برمی‌گرداند
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("🔙 بازگشت به پنل کاربر", callback_data=f"admin_user_amount_cancel_{target_id}"),
+        InlineKeyboardButton("❌ انصراف", callback_data=f"admin_user_amount_cancel_{target_id}")
+    ]])
+
+def _back_to_user_panel_kb(target_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت به پنل کاربر", callback_data=f"admin_user_refresh_{target_id}")]])
 
 async def _send_new(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, kb: InlineKeyboardMarkup | None = None, pm: str | None = None):
     q = getattr(update, "callback_query", None)
@@ -236,19 +243,40 @@ async def admin_user_services_cb(update: Update, context: ContextTypes.DEFAULT_T
     target_id = int(q.data.split('_')[-1])
     await q.answer()
     services = db.get_user_services(target_id) or []
+
     if not services:
+        txt = "📋 سرویس‌های فعال\n\nهیچ سرویس فعالی برای این کاربر ثبت نشده است."
         try:
-            await q.from_user.send_message("این کاربر سرویس فعالی ندارد.")
+            await q.edit_message_text(txt, reply_markup=_back_to_user_panel_kb(target_id))
         except Exception:
-            pass
+            await q.from_user.send_message(txt, reply_markup=_back_to_user_panel_kb(target_id))
         return
+
+    # خلاصه قابل بازگشت
+    lines = []
     for s in services:
         name = s.get('name') or f"سرویس {s.get('service_id')}"
         sid = s.get('service_id')
         server_name = s.get('server_name') or "-"
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🗑️ حذف سرویس", callback_data=f"admin_delete_service_{sid}_{target_id}")]])
+        lines.append(f"• {name} (ID: {sid}) | نود: {server_name}")
+
+    header = "📋 سرویس‌های فعال کاربر:\n\n" + "\n".join(lines[:50])
+    try:
+        await q.edit_message_text(header, reply_markup=_back_to_user_panel_kb(target_id))
+    except Exception:
+        await q.from_user.send_message(header, reply_markup=_back_to_user_panel_kb(target_id))
+
+    # پیام‌های جداگانه هر سرویس با دکمه بازگشت
+    for s in services:
+        sid = s.get('service_id')
+        name = s.get('name') or f"سرویس {sid}"
+        server_name = s.get('server_name') or "-"
+        del_and_back = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🗑️ حذف سرویس", callback_data=f"admin_delete_service_{sid}_{target_id}"),
+            InlineKeyboardButton("🔙 بازگشت به پنل کاربر", callback_data=f"admin_user_refresh_{target_id}")
+        ]])
         try:
-            await q.from_user.send_message(f"- {name} (ID: {sid}) | نود: {server_name}", reply_markup=kb)
+            await q.from_user.send_message(f"- {name} (ID: {sid}) | نود: {server_name}", reply_markup=del_and_back)
         except Exception:
             pass
 
@@ -257,23 +285,32 @@ async def admin_user_purchases_cb(update: Update, context: ContextTypes.DEFAULT_
     target_id = int(q.data.split('_')[-1])
     await q.answer()
     purchases = db.get_user_sales_history(target_id)
+
     if not purchases:
+        text = "🧾 سوابق خرید\n\nهیچ سابقه خریدی یافت نشد."
+        kb = _back_to_user_panel_kb(target_id)
         try:
-            await q.from_user.send_message("هیچ سابقه خریدی یافت نشد.")
+            await q.edit_message_text(text, reply_markup=kb)
         except Exception:
-            pass
+            await q.from_user.send_message(text, reply_markup=kb)
         return
+
+    lines = []
     for p in purchases[:30]:
         try:
             price = int(float(p.get('price', 0)))
         except Exception:
             price = 0
         ts = p.get('sale_date') or '-'
-        txt = f"- پلن: {p.get('plan_name') or '-'} | مبلغ: {price:,} تومان | تاریخ: {ts}"
-        try:
-            await q.from_user.send_message(txt)
-        except Exception:
-            pass
+        plan_name = p.get('plan_name') or '-'
+        lines.append(f"• پلن: {plan_name} | مبلغ: {price:,} تومان | تاریخ: {ts}")
+
+    text = "🧾 سوابق خرید (آخرین ۳۰ مورد):\n\n" + "\n".join(lines)
+    kb = _back_to_user_panel_kb(target_id)
+    try:
+        await q.edit_message_text(text, reply_markup=kb)
+    except Exception:
+        await q.from_user.send_message(text, reply_markup=kb)
 
 async def admin_user_trial_reset_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -288,7 +325,7 @@ async def admin_user_toggle_ban_cb(update: Update, context: ContextTypes.DEFAULT
     target_id = int(q.data.split('_')[-1])
     info = db.get_user(target_id)
     if not info:
-        await q.edit_message_text("❌ کاربر یافت نشد.")
+        await q.edit_message_text("❌ کاربر یافت نشد.", reply_markup=_back_to_user_panel_kb(target_id))
         return
     ban_state = bool(info.get('is_banned'))
     db.set_user_ban_status(target_id, not ban_state)
@@ -333,30 +370,33 @@ async def admin_user_amount_cancel_cb(update: Update, context: ContextTypes.DEFA
 async def manage_user_amount_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     em = update.effective_message
     txt = (em.text or "").strip().replace(",", "").replace("٬", "")
+    target_id = context.user_data.get("muid")
+
     try:
         amount = int(abs(float(txt)))
     except Exception:
-        await em.reply_text("❌ مبلغ نامعتبر است. یک عدد مثبت وارد کنید.", reply_markup=_user_mgmt_root_inline())
+        # اگر target_id داریم، دکمه برگشت به پنل همان کاربر را نشان بده
+        kb = _back_to_user_panel_kb(int(target_id)) if target_id else _user_mgmt_root_inline()
+        await em.reply_text("❌ مبلغ نامعتبر است. یک عدد مثبت وارد کنید.", reply_markup=kb)
         return MANAGE_USER_AMOUNT
 
-    target_id = context.user_data.get("muid")
     op = context.user_data.get("mop")
     if not target_id or op not in ("add", "sub"):
         await em.reply_text("❌ حالت نامعتبر. دوباره تلاش کنید.", reply_markup=_user_mgmt_root_inline())
         return USER_MANAGEMENT_MENU
 
     delta = amount if op == "add" else -amount
-    ok = _update_balance(target_id, delta)
+    ok = _update_balance(int(target_id), delta)
 
     if ok:
         await em.reply_text("✅ موجودی کاربر به‌روزرسانی شد.", reply_markup=ReplyKeyboardRemove())
         try:
-            info2 = db.get_user(target_id)
+            info2 = db.get_user(int(target_id))
             new_bal = int(info2.get("balance", 0)) if info2 else None
             op_text = "افزایش" if delta >= 0 else "کاهش"
             amount_str = utils.format_toman(abs(delta), persian_digits=True)
             note_txt = f"موجودی فعلی: {utils.format_toman(new_bal, persian_digits=True)}." if new_bal is not None else ""
-            await context.bot.send_message(chat_id=target_id, text=f"کیف پول شما توسط پشتیبانی {op_text} یافت به مبلغ {amount_str}. {note_txt}")
+            await context.bot.send_message(chat_id=int(target_id), text=f"کیف پول شما توسط پشتیبانی {op_text} یافت به مبلغ {amount_str}. {note_txt}")
         except Forbidden:
             pass
         except Exception as e:
@@ -366,7 +406,7 @@ async def manage_user_amount_received(update: Update, context: ContextTypes.DEFA
 
     context.user_data.pop("muid", None)
     context.user_data.pop("mop", None)
-    await _send_user_panel(update, context, target_id)
+    await _send_user_panel(update, context, int(target_id))
     return USER_MANAGEMENT_MENU
 
 async def admin_delete_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -386,9 +426,10 @@ async def admin_delete_service(update: Update, context: ContextTypes.DEFAULT_TYP
 
     svc = db.get_service(service_id)
     if not svc:
-        await q.edit_message_text("❌ سرویس یافت نشد.")
         if target_id:
-            await _send_user_panel(update, context, target_id)
+            await q.edit_message_text("❌ سرویس یافت نشد.", reply_markup=_back_to_user_panel_kb(target_id))
+        else:
+            await q.edit_message_text("❌ سرویس یافت نشد.")
         return
 
     try:
@@ -417,7 +458,10 @@ async def admin_delete_service(update: Update, context: ContextTypes.DEFAULT_TYP
                 pass
     else:
         try:
-            await q.edit_message_text("❌ حذف سرویس از پنل ناموفق بود.")
+            if target_id:
+                await q.edit_message_text("❌ حذف سرویس از پنل ناموفق بود.", reply_markup=_back_to_user_panel_kb(target_id))
+            else:
+                await q.edit_message_text("❌ حذف سرویس از پنل ناموفق بود.")
         except BadRequest:
             pass
 
