@@ -73,14 +73,15 @@ def _action_kb(target_id: int, is_banned: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 def _amount_prompt_kb(target_id: int) -> InlineKeyboardMarkup:
-    # هر دو دکمه به یک callback می‌روند که state را پاک کرده و به پنل برمی‌گرداند
+    # خروج از state مبلغ و بازگشت به پنل (بدون رفرش DB در صورت وجود کش)
     return InlineKeyboardMarkup([[
         InlineKeyboardButton("🔙 بازگشت به پنل کاربر", callback_data=f"admin_user_amount_cancel_{target_id}"),
         InlineKeyboardButton("❌ انصراف", callback_data=f"admin_user_amount_cancel_{target_id}")
     ]])
 
 def _back_to_user_panel_kb(target_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت به پنل کاربر", callback_data=f"admin_user_refresh_{target_id}")]])
+    # بازگشت سبک (از کش) به پنل
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت به پنل کاربر", callback_data=f"admin_user_back_{target_id}")]])
 
 async def _send_new(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, kb: InlineKeyboardMarkup | None = None, pm: str | None = None):
     q = getattr(update, "callback_query", None)
@@ -96,6 +97,18 @@ async def _send_new(update: Update, context: ContextTypes.DEFAULT_TYPE, text: st
 
 def _sanitize_for_code(s: str) -> str:
     return (s or "").replace("`", "")
+
+# -------------- Panel Cache --------------
+def _cache_panel(context: ContextTypes.DEFAULT_TYPE, target_id: int, text: str, ban_state: bool):
+    # ذخیره متن و وضعیت لازم برای ساخت کیبورد، جهت بازگشت سبک
+    context.user_data[f"panel_cache_{target_id}"] = {"text": text, "ban_state": 1 if ban_state else 0}
+
+def _get_cached_panel(context: ContextTypes.DEFAULT_TYPE, target_id: int):
+    return context.user_data.get(f"panel_cache_{target_id}")
+
+# -------------------------------
+# User Panel rendering
+# -------------------------------
 
 async def _render_user_panel_text(target_id: int) -> tuple[str, bool]:
     info = db.get_user(target_id)
@@ -174,12 +187,13 @@ async def ask_user_id_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return USER_MANAGEMENT_MENU
 
 # -------------------------------
-# User Panel
+# User Panel (send + cache)
 # -------------------------------
 
 async def _send_user_panel(update: Update, context: ContextTypes.DEFAULT_TYPE, target_id: int):
     q = getattr(update, "callback_query", None)
     text, ban_state = await _render_user_panel_text(target_id)
+    _cache_panel(context, target_id, text, ban_state)  # کش کردن پنل برای بازگشت سبک
     kb = _action_kb(target_id, ban_state)
     if q:
         try:
@@ -188,6 +202,36 @@ async def _send_user_panel(update: Update, context: ContextTypes.DEFAULT_TYPE, t
             await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
     else:
         await update.effective_message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+
+# -------------------------------
+# Back to panel (light, from cache)
+# -------------------------------
+
+async def admin_user_back_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    try:
+        target_id = int(q.data.split('_')[-1])
+    except Exception:
+        return USER_MANAGEMENT_MENU
+
+    cached = _get_cached_panel(context, target_id)
+    if not cached:
+        # اگر کش نبود، به صورت ایمن رفرش کن
+        return await admin_user_refresh_cb(update, context)
+
+    text = cached.get("text") or "پنل کاربر"
+    ban_state = bool(cached.get("ban_state", 0))
+    kb = _action_kb(target_id, ban_state)
+    try:
+        await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    except Exception:
+        await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    return USER_MANAGEMENT_MENU
+
+# -------------------------------
+# Receiving user id/username input
+# -------------------------------
 
 async def manage_user_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     em = update.effective_message
@@ -261,7 +305,7 @@ async def admin_user_services_cb(update: Update, context: ContextTypes.DEFAULT_T
             await q.from_user.send_message(txt, reply_markup=kb)
         return
 
-    # فقط یک پیام: خلاصه سرویس‌ها + دکمه‌های حذف، و دکمه بازگشت
+    # فقط یک پیام: خلاصه سرویس‌ها + دکمه‌های حذف، و دکمه بازگشت (بدون ارسال پیام‌های جداگانه)
     lines = []
     kb_rows = []
     MAX_ITEMS = 40
@@ -277,7 +321,7 @@ async def admin_user_services_cb(update: Update, context: ContextTypes.DEFAULT_T
     if over_limit:
         lines.append(f"\n… و {len(services) - MAX_ITEMS} سرویس دیگر")
 
-    kb_rows.append([InlineKeyboardButton("🔙 بازگشت به پنل کاربر", callback_data=f"admin_user_refresh_{target_id}")])
+    kb_rows.append([InlineKeyboardButton("🔙 بازگشت به پنل کاربر", callback_data=f"admin_user_back_{target_id}")])
     kb = InlineKeyboardMarkup(kb_rows)
 
     text = "📋 سرویس‌های فعال کاربر:\n\n" + "\n".join(lines)
@@ -362,6 +406,7 @@ async def admin_user_subbal_cb(update: Update, context: ContextTypes.DEFAULT_TYP
     return MANAGE_USER_AMOUNT
 
 async def admin_user_amount_cancel_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # خروج از state و بازگشت سبک (از کش) اگر موجود باشد
     q = update.callback_query
     await q.answer()
     try:
@@ -370,7 +415,18 @@ async def admin_user_amount_cancel_cb(update: Update, context: ContextTypes.DEFA
         return USER_MANAGEMENT_MENU
     context.user_data.pop("muid", None)
     context.user_data.pop("mop", None)
-    await _send_user_panel(update, context, target_id)
+
+    cached = _get_cached_panel(context, target_id)
+    if cached:
+        text = cached.get("text") or "پنل کاربر"
+        ban_state = bool(cached.get("ban_state", 0))
+        kb = _action_kb(target_id, ban_state)
+        try:
+            await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+        except Exception:
+            await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    else:
+        await _send_user_panel(update, context, target_id)
     return USER_MANAGEMENT_MENU
 
 async def manage_user_amount_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -471,7 +527,7 @@ async def admin_delete_service(update: Update, context: ContextTypes.DEFAULT_TYP
             pass
 
 # -------------------------------
-# Broadcast
+# Broadcast (unchanged)
 # -------------------------------
 def _broadcast_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup([["ارسال به همه کاربران", "ارسال به کاربر خاص"], [BTN_BACK_TO_ADMIN_MENU]], resize_keyboard=True)
