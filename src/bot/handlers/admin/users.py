@@ -22,16 +22,26 @@ import hiddify_api
 
 logger = logging.getLogger(__name__)
 
-# --- helpers for ID normalization ---
+# --- helpers for input normalization ---
 _P2E = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
+_INVIS = '\u200f\u200e\u200c\u200d \t\r\n'
+
 def normalize_id_input(text: str) -> str:
-    """
-    تبدیل اعداد فارسی به انگلیسی و حذف هر کاراکتری غیر از رقم
-    (فاصله، LRM/RLM/ZWNJ، کاما، متن اضافه و ...)
-    """
     s = (text or "").translate(_P2E)
     digits_only = "".join(ch for ch in s if ch.isdigit())
     return digits_only
+
+def normalize_username_input(text: str) -> str:
+    s = (text or "").strip()
+    # remove invisibles and spaces
+    for ch in _INVIS:
+        s = s.replace(ch, "")
+    # strip t.me links and @
+    s = re.sub(r'^(?:https?://)?(?:t(?:elegram)?\.me/)', '', s, flags=re.IGNORECASE)
+    s = s.lstrip('@')
+    # keep only allowed username chars
+    s = re.sub(r'[^A-Za-z0-9_]', '', s)
+    return s
 
 # -------------------------------
 # Helpers (Inline UI)
@@ -39,7 +49,7 @@ def normalize_id_input(text: str) -> str:
 
 def _user_mgmt_root_inline() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔎 جستجو با ID", callback_data="admin_users_ask_id")],
+        [InlineKeyboardButton("🔎 جستجو با آیدی (یوزرنیم)", callback_data="admin_users_ask_id")],
         [InlineKeyboardButton("🏠 منوی ادمین", callback_data="admin_panel")],
     ])
 
@@ -147,21 +157,16 @@ def _update_balance(user_id: int, delta: int) -> bool:
 # -------------------------------
 
 async def user_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = "👥 مدیریت کاربران\n\nشناسه عددی کاربر را تایپ کنید یا از دکمه زیر استفاده کنید."
+    text = "👥 مدیریت کاربران\n\nآیدی کاربر (یوزرنیم مثل @username) یا شناسه عددی را تایپ کنید، یا از دکمه زیر استفاده کنید."
     await _send_new(update, context, text, _user_mgmt_root_inline())
     return USER_MANAGEMENT_MENU
 
 async def user_management_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    برای دکمه «🔙 مدیریت کاربران».
-    پیام پنل کاربر را حذف و منوی اصلی مدیریت کاربران را نشان می‌دهد.
-    """
     return await user_management_menu(update, context)
 
 async def ask_user_id_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # فقط state را فعال می‌کنیم تا عدد را دریافت کنیم؛ پیام فعلی تغییر نمی‌کند.
     q = update.callback_query
-    await q.answer("✅ منتظر ارسال ID کاربر هستم...", show_alert=False)
+    await q.answer("✅ منتظر ارسال آیدی یا شناسه عددی کاربر هستم...", show_alert=False)
     return USER_MANAGEMENT_MENU
 
 # -------------------------------
@@ -183,17 +188,35 @@ async def _send_user_panel(update: Update, context: ContextTypes.DEFAULT_TYPE, t
 async def manage_user_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     em = update.effective_message
     raw = (em.text or "")
-    norm = normalize_id_input(raw)
-    logger.info(f"[ADMIN] manage_user_id_received: raw='{raw}' -> norm='{norm}'")
-    if not norm:
-        await em.reply_text("❌ شناسه معتبر نیست. فقط عدد ارسال کنید.", reply_markup=_user_mgmt_root_inline())
-        return USER_MANAGEMENT_MENU
+    num = normalize_id_input(raw)
+    logger.info(f"[ADMIN] manage_user_id_received: raw='{raw}' -> num='{num}'")
 
-    try:
-        target_id = int(norm)
-    except Exception:
-        await em.reply_text("❌ شناسه معتبر نیست.", reply_markup=_user_mgmt_root_inline())
-        return USER_MANAGEMENT_MENU
+    target_id = None
+
+    if num:
+        try:
+            target_id = int(num)
+        except Exception:
+            target_id = None
+
+    if target_id is None:
+        uname = normalize_username_input(raw)
+        logger.info(f"[ADMIN] manage_user_id_received: uname_norm='{uname}'")
+        if not uname:
+            await em.reply_text("❌ ورودی نامعتبر است. یوزرنیم (مثل @username) یا شناسه عددی ارسال کنید.", reply_markup=_user_mgmt_root_inline())
+            return USER_MANAGEMENT_MENU
+
+        try:
+            rec = db.get_user_by_username(uname)
+        except Exception as e:
+            logger.error(f"get_user_by_username failed for '{uname}': {e}")
+            rec = None
+
+        if not rec:
+            await em.reply_text(f"❌ کاربری با آیدی @{uname} در دیتابیس یافت نشد. کاربر باید قبلاً ربات را استارت کرده باشد.", reply_markup=_user_mgmt_root_inline())
+            return USER_MANAGEMENT_MENU
+
+        target_id = int(rec["user_id"])
 
     if target_id <= 0:
         await em.reply_text("❌ شناسه معتبر نیست. یک عدد مثبت وارد کنید.", reply_markup=_user_mgmt_root_inline())
@@ -372,7 +395,6 @@ async def admin_delete_service(update: Update, context: ContextTypes.DEFAULT_TYP
             await _send_user_panel(update, context, target_id)
         return
 
-    server_name = svc.get('server_name')
     try:
         await q.edit_message_text("در حال حذف سرویس از پنل... ⏳")
     except BadRequest:
@@ -493,18 +515,27 @@ async def broadcast_to_user_start(update: Update, context: ContextTypes.DEFAULT_
     context.user_data.clear()
     context.user_data["broadcast_mode"] = "single"
     await update.effective_message.reply_text(
-        "شناسه عددی کاربر را بفرستید:",
+        "آیدی کاربر (یوزرنیم مثل @username) یا شناسه عددی را بفرستید:",
         reply_markup=ReplyKeyboardMarkup([[BTN_BACK_TO_ADMIN_MENU]], resize_keyboard=True)
     )
     return BROADCAST_TO_USER_ID
 
 async def broadcast_to_user_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        uid = int(normalize_id_input(update.effective_message.text or ""))
-        assert uid > 0
-    except Exception:
-        await update.effective_message.reply_text("شناسه معتبر نیست. یک عدد مثبت بفرستید.")
-        return BROADCAST_TO_USER_ID
+    raw = update.effective_message.text or ""
+    num = normalize_id_input(raw)
+    uid = None
+    if num:
+        try:
+            uid = int(num)
+        except Exception:
+            uid = None
+    if uid is None:
+        uname = normalize_username_input(raw)
+        rec = db.get_user_by_username(uname) if uname else None
+        if not rec:
+            await update.effective_message.reply_text("شناسه/آیدی معتبر نیست یا کاربر در دیتابیس نیست.")
+            return BROADCAST_TO_USER_ID
+        uid = int(rec["user_id"])
 
     context.user_data["target_user_id"] = uid
     await update.effective_message.reply_text(
