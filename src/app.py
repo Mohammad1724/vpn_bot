@@ -384,7 +384,7 @@ def build_application():
             ],
 
             constants.PLAN_MENU: [
-                # هندلرهای Reply اصلی ادمین در این state هم کار کنند
+                # دکمه‌های Reply اصلی ادمین در این state هم کار کنند
                 MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
                 MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
                 MessageHandler(filters.Regex(r'^💾 پشتیبان‌گیری$') & admin_filter, admin_backup.backup_restore_menu),
@@ -392,28 +392,49 @@ def build_application():
                 MessageHandler(filters.Regex(r'^🎁 مدیریت کد هدیه$') & admin_filter, admin_gift.gift_code_management_menu),
                 MessageHandler(filters.Regex(r'^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
                 MessageHandler(filters.Regex(r'^🛑 خاموش کردن ربات$') & admin_filter, admin_c.shutdown_bot),
-
-                # ناوبری شیشه‌ای بین بخش‌های ادمین از داخل مدیریت پلن‌ها
+                # ناوبری شیشه‌ای
                 CallbackQueryHandler(admin_plans.plan_management_menu, pattern=r"^admin_plans$"),
                 CallbackQueryHandler(admin_reports.reports_menu, pattern=r"^admin_reports$"),
                 CallbackQueryHandler(admin_backup.backup_restore_menu, pattern=r"^admin_backup$"),
                 CallbackQueryHandler(admin_users.user_management_menu, pattern=r"^admin_users$"),
                 CallbackQueryHandler(admin_gift.gift_code_management_menu, pattern=r"^admin_gift$"),
                 CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^admin_settings$"),
-
-                # لیست و اکشن‌های پلن
+                # اکشن‌های پلن
                 CallbackQueryHandler(admin_plans.list_plans_admin, pattern=r'^admin_list_plans$'),
                 CallbackQueryHandler(admin_plans.admin_toggle_plan_visibility_callback, pattern=r'^admin_toggle_plan_\d+$'),
                 CallbackQueryHandler(admin_plans.admin_delete_plan_callback, pattern=r'^admin_delete_plan_\d+$'),
-
-                # Conversations زیرمجموعه در همین state
+                # Conversationهای زیرمجموعه
                 add_plan_conv,
                 edit_plan_conv,
-
-                # بازگشت به منوی ادمین با پاکسازی پیام‌های لیست
+                # بازگشت
                 CallbackQueryHandler(admin_plans.back_to_admin_cb, pattern=r"^admin_panel$"),
             ],
 
+            constants.USER_MANAGEMENT_MENU: [
+                # ورودی متن برای جستجو
+                MessageHandler(filters.Regex(r'^\d+$') & admin_filter, admin_users.manage_user_id_received),
+                # اکشن‌های شیشه‌ای
+                CallbackQueryHandler(admin_users.admin_user_addbal_cb, pattern=r'^admin_user_addbal_\d+$'),
+                CallbackQueryHandler(admin_users.admin_user_subbal_cb, pattern=r'^admin_user_subbal_\d+$'),
+                CallbackQueryHandler(admin_users.admin_user_services_cb, pattern=r'^admin_user_services_\d+$'),
+                CallbackQueryHandler(admin_users.admin_user_purchases_cb, pattern=r'^admin_user_purchases_\d+$'),
+                CallbackQueryHandler(admin_users.admin_user_trial_reset_cb, pattern=r'^admin_user_trial_reset_\d+$'),
+                CallbackQueryHandler(admin_users.admin_user_toggle_ban_cb, pattern=r'^admin_user_toggle_ban_\d+$'),
+                CallbackQueryHandler(admin_users.admin_user_refresh_cb, pattern=r'^admin_user_refresh_\d+$'),
+                CallbackQueryHandler(admin_users.admin_delete_service, pattern=r'^admin_delete_service_\d+(_\d+)?$'),
+                # ناوبری شیشه‌ای
+                CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
+                CallbackQueryHandler(admin_users.ask_user_id_cb, pattern=r"^admin_users_ask_id$"),
+                CallbackQueryHandler(admin_users.user_management_menu_cb, pattern=r"^admin_users$"),
+            ],
+
+            constants.MANAGE_USER_AMOUNT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_users.manage_user_amount_received),
+                CallbackQueryHandler(admin_users.admin_user_amount_cancel_cb, pattern=r'^admin_user_amount_cancel_\d+$'),
+                CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
+            ],
+            
+            # (سایر stateهای ادمین بدون تغییر می‌مانند)
             constants.REPORTS_MENU: [
                 MessageHandler(filters.Regex(r'^📊 آمار کلی$') & admin_filter, admin_reports.show_stats_report),
                 MessageHandler(filters.Regex(r'^📈 گزارش فروش امروز$') & admin_filter, admin_reports.show_daily_report),
@@ -438,33 +459,6 @@ def build_application():
                 MessageHandler(filters.Document.ALL & admin_filter, admin_backup.restore_receive_file),
                 CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
             ],
-
-            constants.USER_MANAGEMENT_MENU: [
-                # ورودی متن برای جستجوی کاربر با ID
-                MessageHandler(filters.Regex(r'^\d+$') & admin_filter, admin_users.manage_user_id_received),
-
-                # اکشن‌های شیشه‌ای روی کاربر
-                CallbackQueryHandler(admin_users.admin_user_addbal_cb, pattern=r'^admin_user_addbal_\d+$'),
-                CallbackQueryHandler(admin_users.admin_user_subbal_cb, pattern=r'^admin_user_subbal_\d+$'),
-                CallbackQueryHandler(admin_users.admin_user_services_cb, pattern=r'^admin_user_services_\d+$'),
-                CallbackQueryHandler(admin_users.admin_user_purchases_cb, pattern=r'^admin_user_purchases_\d+$'),
-                CallbackQueryHandler(admin_users.admin_user_trial_reset_cb, pattern=r'^admin_user_trial_reset_\d+$'),
-                CallbackQueryHandler(admin_users.admin_user_toggle_ban_cb, pattern=r'^admin_user_toggle_ban_\d+$'),
-                CallbackQueryHandler(admin_users.admin_user_refresh_cb, pattern=r'^admin_user_refresh_\d+$'),
-                CallbackQueryHandler(admin_users.admin_delete_service, pattern=r'^admin_delete_service_\d+(_\d+)?$'),
-
-                # ناوبری شیشه‌ای
-                CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
-                CallbackQueryHandler(admin_users.ask_user_id_cb, pattern=r"^admin_users_ask_id$"),
-                CallbackQueryHandler(admin_users.user_management_menu_cb, pattern=r"^admin_users$"),
-            ],
-
-            constants.MANAGE_USER_AMOUNT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_users.manage_user_amount_received),
-                CallbackQueryHandler(admin_users.admin_user_amount_cancel_cb, pattern=r'^admin_user_amount_cancel_\d+$'),
-                CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
-            ],
-
             constants.GIFT_CODES_MENU: [
                 MessageHandler(filters.Regex(r'^🎁 مدیریت کدهای هدیه$') & admin_filter, admin_gift.admin_gift_codes_submenu),
                 MessageHandler(filters.Regex(r'^💳 مدیریت کدهای تخفیف$') & admin_filter, admin_gift.admin_promo_codes_submenu),
