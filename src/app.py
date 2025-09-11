@@ -409,14 +409,23 @@ def build_application():
                 CallbackQueryHandler(admin_plans.back_to_admin_cb, pattern=r"^admin_panel$"),
             ],
 
-            # ✅ پذیرش اعداد فارسی/انگلیسی با علائم نامرئی
+            # ✅ اصلاح‌شده: مدیریت کاربران
             constants.USER_MANAGEMENT_MENU: [
-                MessageHandler(
-                    filters.Regex(r'^[\u200f\u200e\u200c\u200d\s]*[0-9۰-۹]+[\u200f\u200e\u200c\u200d\s]*$') & admin_filter,
-                    admin_users.manage_user_id_received
-                ),
+                # اجازه کار با دکمه‌های Reply در این state
+                MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
+                MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
+                MessageHandler(filters.Regex(r'^💾 پشتیبان‌گیری$') & admin_filter, admin_backup.backup_restore_menu),
+                MessageHandler(filters.Regex(r'^👥 مدیریت کاربران$') & admin_filter, admin_users.user_management_menu),
+                MessageHandler(filters.Regex(r'^🎁 مدیریت کد هدیه$') & admin_filter, admin_gift.gift_code_management_menu),
+                MessageHandler(filters.Regex(r'^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
+                MessageHandler(filters.Regex(r'^🛑 خاموش کردن ربات$') & admin_filter, admin_c.shutdown_bot),
 
-                # اکشن‌های شیشه‌ای
+                # ناوبری شیشه‌ای
+                CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
+                CallbackQueryHandler(admin_users.ask_user_id_cb, pattern=r"^admin_users_ask_id$"),
+                CallbackQueryHandler(admin_users.user_management_menu_cb, pattern=r"^admin_users$"),
+
+                # اکشن‌های کاربر
                 CallbackQueryHandler(admin_users.admin_user_addbal_cb, pattern=r'^admin_user_addbal_\d+$'),
                 CallbackQueryHandler(admin_users.admin_user_subbal_cb, pattern=r'^admin_user_subbal_\d+$'),
                 CallbackQueryHandler(admin_users.admin_user_services_cb, pattern=r'^admin_user_services_\d+$'),
@@ -425,11 +434,10 @@ def build_application():
                 CallbackQueryHandler(admin_users.admin_user_toggle_ban_cb, pattern=r'^admin_user_toggle_ban_\d+$'),
                 CallbackQueryHandler(admin_users.admin_user_refresh_cb, pattern=r'^admin_user_refresh_\d+$'),
                 CallbackQueryHandler(admin_users.admin_delete_service, pattern=r'^admin_delete_service_\d+(_\d+)?$'),
+                CallbackQueryHandler(admin_users.admin_user_amount_cancel_cb, pattern=r'^admin_user_amount_cancel_\d+$'),
 
-                # ناوبری شیشه‌ای
-                CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
-                CallbackQueryHandler(admin_users.ask_user_id_cb, pattern=r"^admin_users_ask_id$"),
-                CallbackQueryHandler(admin_users.user_management_menu_cb, pattern=r"^admin_users$"),
+                # خط نهایی: هر متن دیگری (شناسه با اعداد فارسی/انگلیسی، فاصله، علائم نامرئی) را ارسال کن به هندلر دریافت ID
+                MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_users.manage_user_id_received),
             ],
 
             constants.MANAGE_USER_AMOUNT: [
@@ -438,7 +446,7 @@ def build_application():
                 CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
             ],
 
-            # (سایر stateهای ادمین بدون تغییر)
+            # (سایر stateهای ادمین بدون تغییر می‌مانند)
             constants.REPORTS_MENU: [
                 MessageHandler(filters.Regex(r'^📊 آمار کلی$') & admin_filter, admin_reports.show_stats_report),
                 MessageHandler(filters.Regex(r'^📈 گزارش فروش امروز$') & admin_filter, admin_reports.show_daily_report),
