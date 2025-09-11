@@ -522,7 +522,8 @@ def build_application():
 
     application.add_handler(CallbackQueryHandler(admin_users.admin_confirm_charge_callback, pattern=r'^admin_confirm_charge_'), group=1)
     application.add_handler(CallbackQueryHandler(admin_users.admin_reject_charge_callback, pattern=r'^admin_reject_charge_'), group=1)
-
+    application.add_handler(CallbackQueryHandler(admin_users.admin_user_back_cb, pattern=r'^admin_user_back_\d+$'), group=1)
+    
     # === NEW: Back to user panel handlers (work everywhere)
     application.add_handler(CallbackQueryHandler(admin_users.admin_user_refresh_cb, pattern=r'^admin_user_refresh_\d+$'), group=1)
     application.add_handler(CallbackQueryHandler(admin_users.admin_user_amount_cancel_cb, pattern=r'^admin_user_amount_cancel_\d+$'), group=1)
