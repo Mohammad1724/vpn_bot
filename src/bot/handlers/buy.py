@@ -110,6 +110,18 @@ def _calc_promo_discount(user_id: int, plan_price: float, promo_code_in: str | N
     return int(float(plan_price) * (int(code_data['percent']) / 100.0)), ""
 
 
+def _build_copyable_link_message(link: str, title: str = "لینک اشتراک") -> tuple[str, InlineKeyboardMarkup, str]:
+    """
+    متن و کیبورد برای لینک قابل کپی با یک ضربه می‌سازد.
+    """
+    # LRI/PDI برای ایزوله کردن جهت لینک در متن فارسی
+    lri, pdi = "\u2066", "\u2069"
+    safe_link = f"{lri}{link}{pdi}"
+    text = f"🔗 **{title}**\n`{safe_link}`\n\n👆 با یک لمس روی لینک بالا، کپی می‌شود."
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("🚀 باز کردن لینک", url=link)]])
+    return text, kb, ParseMode.MARKDOWN
+
+
 # ---------------- لیست و دسته‌بندی پلن‌ها ----------------
 
 async def buy_service_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -250,7 +262,6 @@ async def cancel_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def get_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # کاربر متن نام را تایپ کرده
     name_text = (update.message.text or "").strip()
     if name_text.lower() == "/cancel" or name_text == CMD_CANCEL:
         _cleanup_buy_state(context)
@@ -265,7 +276,6 @@ async def get_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return GET_CUSTOM_NAME
 
     context.user_data['buy_custom_name'] = name_text
-    # رفتن به مرحله کدتخفیف
     await context.bot.send_message(
         chat_id=update.effective_user.id,
         text="اگر کدتخفیف دارید تایپ کنید؛ یا «⏭️ رد شدن» را بزنید.",
@@ -275,7 +285,6 @@ async def get_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def skip_name_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # رد شدن از نام → نام خالی
     q = update.callback_query
     await q.answer()
     context.user_data['buy_custom_name'] = ""
@@ -292,7 +301,6 @@ async def skip_name_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def back_to_name_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # بازگشت از کدتخفیف به نام
     q = update.callback_query
     await q.answer()
     try:
@@ -314,7 +322,6 @@ async def promo_code_received(update: Update, context: ContextTypes.DEFAULT_TYPE
         _cleanup_buy_state(context)
         return await _abort_buy_message(update.effective_user.id, context) or ConversationHandler.END
 
-    # پذیرش /skip متنی
     if text_in.lower() == "/skip":
         context.user_data['buy_promo_code'] = ""
     else:
@@ -324,11 +331,9 @@ async def promo_code_received(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def skip_promo_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # رد شدن از کدتخفیف
     q = update.callback_query
     await q.answer()
     context.user_data['buy_promo_code'] = ""
-    # ساخت تایید نهایی
     dummy_update = Update(update.update_id, callback_query=q)
     return await _ask_purchase_confirm(dummy_update, context, custom_name=context.user_data.get('buy_custom_name', ''))
 
@@ -377,13 +382,10 @@ async def _ask_purchase_confirm(update: Update, context: ContextTypes.DEFAULT_TY
 {chr(10).join(lines)}
 با تایید، مبلغ از کیف‌پول شما کسر شده و سرویس بلافاصله ساخته می‌شود.""".strip()
 
-    # ارسال تایید با دکمه‌های شیشه‌ای (تایید/انصراف/بازگشت)
     try:
-        # اگر از پیام قبلی آمده، ارسال جدید
         if update.message:
             await update.message.reply_text(text, reply_markup=_kb_confirm_stage(), parse_mode=ParseMode.MARKDOWN)
         else:
-            # اگر از callback آمده، پیام قبلی را ویرایش یا پیام جدید بفرست
             q = update.callback_query
             try:
                 await q.message.edit_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=_kb_confirm_stage())
@@ -396,7 +398,6 @@ async def _ask_purchase_confirm(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def back_to_promo_from_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """بازگشت از صفحه تایید به مرحله کدتخفیف (re-entry به Conversation)."""
     q = update.callback_query
     await q.answer()
     try:
@@ -505,6 +506,10 @@ async def _send_service_info_to_user(context, user_id, new_uuid, plan):
         await context.bot.send_photo(
             chat_id=user_id, photo=InputFile(qr_bio), caption=caption, parse_mode=ParseMode.MARKDOWN, reply_markup=inline_kb
         )
+        # ارسال لینک قابل کپی
+        link_text, link_kb, link_pm = _build_copyable_link_message(final_link, "لینک اشتراک شما")
+        await context.bot.send_message(chat_id=user_id, text=link_text, reply_markup=link_kb, parse_mode=link_pm)
+
         await context.bot.send_message(chat_id=user_id, text="منوی اصلی:", reply_markup=get_main_menu_keyboard(user_id))
     else:
         await context.bot.send_message(
