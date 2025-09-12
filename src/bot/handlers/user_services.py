@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 def _link_label(link_type: str) -> str:
     lt = utils.normalize_link_type(link_type)
     return {
-        "sub": "V2Ray (sub)",
+        "sub": "V2Ray (پیش‌فرض)",
         "singbox": "SingBox",
         "clash": "Clash",
         "clashmeta": "Clash Meta",
@@ -106,10 +106,9 @@ async def send_service_details(
             return
 
         config_name = (info.get('name', 'config') if isinstance(info, dict) else 'config') or 'config'
-        safe_name = quote_plus(config_name)
-
-        base_link = utils.build_subscription_url(service['sub_uuid'])
-        preferred_url = f"{base_link}#{safe_name}"
+        
+        # ساخت لینک بر اساس تنظیمات ادمین
+        preferred_url = utils.build_subscription_url(service['sub_uuid'], name=config_name)
 
         caption = utils.create_service_info_caption(info, service_db_record=service, override_sub_url=preferred_url)
         keyboard_rows = [
@@ -216,10 +215,8 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text("❌ دریافت کانفیگ‌های تکی با خطا مواجه شد.")
         return
 
-    if link_type == "sub":
-        final_link = f"{base_link}#{safe_name}"
-    else:
-        final_link = f"{base_user_path}/{link_type}/?name={safe_name}"
+    # ساخت لینک مشخص با نوع انتخاب‌شده
+    final_link = utils.build_subscription_url(user_uuid, link_type=link_type, name=safe_name)
 
     try:
         await q.message.delete()
@@ -233,7 +230,6 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(
         chat_id=q.message.chat_id, text=text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN
     )
-
 
 async def refresh_service_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
