@@ -195,7 +195,7 @@ def build_application():
             constants.PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_days_received)],
             constants.PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_gb_received)],
             constants.PLAN_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_category_received)],
-        ],
+        },
         fallbacks=[CommandHandler('cancel', admin_plans.cancel_add_plan)],
         map_to_parent={ConversationHandler.END: constants.PLAN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
@@ -224,7 +224,7 @@ def build_application():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_category_received),
                 CommandHandler('skip', admin_plans.skip_edit_plan_category)
             ],
-        ],
+        },
         fallbacks=[CommandHandler('cancel', admin_plans.cancel_edit_plan)],
         map_to_parent={ConversationHandler.END: constants.PLAN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
@@ -284,7 +284,7 @@ def build_application():
                 CallbackQueryHandler(admin_users.broadcast_cancel_cb, pattern=r'^bcast_menu$'),
                 CallbackQueryHandler(admin_c.admin_entry, pattern=r'^admin_panel$'),
             ],
-        ],
+        },
         fallbacks=[CommandHandler('cancel', admin_c.admin_generic_cancel)],
         map_to_parent={ConversationHandler.END: constants.ADMIN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
@@ -537,7 +537,7 @@ def build_application():
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern=r"^check_membership$"))
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern=r"^home_menu$"))
 
-    # Usage (moved to group=2)
+    # Usage
     application.add_handler(CallbackQueryHandler(usage_h.show_usage_menu, pattern=r"^acc_usage$"), group=2)
     application.add_handler(CallbackQueryHandler(usage_h.show_usage_menu, pattern=r"^acc_usage_refresh$"), group=2)
 
@@ -560,7 +560,7 @@ def build_application():
     for h in user_services_handlers:
         application.add_handler(h, group=2)
 
-    # ACCOUNT INFO (moved to group=2)
+    # ACCOUNT INFO (User side) -> moved to group=2
     account_info_handlers = [
         CallbackQueryHandler(check_channel_membership(start_h.show_purchase_history_callback), pattern=r"^acc_purchase_history$"),
         CallbackQueryHandler(check_channel_membership(start_h.show_charge_history_callback), pattern=r"^acc_charge_history$"),
@@ -594,6 +594,7 @@ def build_application():
         MessageHandler(filters.Regex(r'^👤 اطلاعات حساب کاربری$'), check_channel_membership(start_h.show_account_info)),
         MessageHandler(filters.Regex(r'^📚 راهنما$'), check_channel_membership(start_h.show_guide)),
         MessageHandler(filters.Regex(r'^🧪 سرویس تست$'), check_channel_membership(trial_get_trial_service)),
+        # توجه: هندلر عمومی 💳 در منوی اصلی حذف شد تا دوبار پاسخ رخ ندهد.
     ]
     for h in main_menu_handlers:
         application.add_handler(h, group=1)
