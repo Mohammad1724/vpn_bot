@@ -26,7 +26,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-
+# --- Helpers ---
 def _link_label(link_type: str) -> str:
     lt = utils.normalize_link_type(link_type)
     return {
@@ -44,10 +44,17 @@ def _strip_qf_and_sub(url: str) -> str:
         path = path[:-5]
     elif path.endswith('/sub'):
         path = path[:-4]
-    # حذف query و fragment
     return urlunsplit((pr.scheme, pr.netloc, path.rstrip('/'), '', ''))
 
 
+def _build_copyable_link_message(link: str, title: str = "لینک اشتراک") -> tuple[str, markup, str]:
+    lri, pdi = "\u2066", "\u2069"
+    safe_link = f"{lri}{link}{pdi}"
+    text = f"🔗 **{title}**\n`{safe_link}`\n\n👆 با یک لمس روی لینک بالا، کپی می‌شود."
+    kb = markup([[btn("🚀 باز کردن لینک", url=link)]])
+    return text, kb, ParseMode.MARKDOWN
+
+# --- Handlers ---
 async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     services = db.get_user_services(user_id)
@@ -109,9 +116,7 @@ async def send_service_details(
         config_name = (info.get('name', 'config') if isinstance(info, dict) else 'config') or 'config'
         safe_name = quote_plus(config_name)
 
-        # لینک استاندارد از utils (بدون asn) مثل: https://domain/secret/uuid/sub/
         base_link = utils.build_subscription_url(service['sub_uuid'])
-        # باید قبل از # یک / باشد => .../sub/#Name
         preferred_url = f"{base_link}#{safe_name}" if base_link.endswith('/') else f"{base_link}/#{safe_name}"
 
         caption = utils.create_service_info_caption(info, service_db_record=service, override_sub_url=preferred_url)
@@ -197,9 +202,8 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     config_name = (info.get('name', 'config') if isinstance(info, dict) else 'config') or 'config'
     safe_name = quote_plus(config_name)
 
-    # لینک استاندارد (بدون asn)
-    base_link = utils.build_subscription_url(user_uuid)     # .../sub/
-    base_user_path = _strip_qf_and_sub(base_link)           # .../uuid
+    base_link = utils.build_subscription_url(user_uuid)
+    base_user_path = _strip_qf_and_sub(base_link)
 
     if link_type == "full":
         try:
@@ -221,25 +225,19 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if link_type == "sub":
-        # الگوی نهایی: .../sub/#Name (اگر / پایانی نبود، اضافه می‌کنیم)
         final_link = f"{base_link}#{safe_name}" if base_link.endswith('/') else f"{base_link}/#{safe_name}"
     else:
-        # سایر لینک‌ها: .../{link_type}/?name=Name
         final_link = f"{base_user_path}/{link_type}/?name={safe_name}"
 
-    qr_bio = utils.make_qr_bytes(final_link)
-    caption = f"نام کانفیگ: **{config_name}**\nنوع لینک: **{_link_label(link_type)}**\n\n`{final_link}`"
     try:
         await q.message.delete()
     except BadRequest:
         pass
-    await context.bot.send_photo(
-        chat_id=q.message.chat_id,
-        photo=qr_bio,
-        caption=caption,
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=markup([nav_row(back_cb=f"more_links_{user_uuid}", home_cb="home_menu")])
-    )
+    text, kb, pm = _build_copyable_link_message(final_link, f"لینک {_link_label(link_type)}")
+    await context.bot.send_message(chat_id=q.message.chat_id, text=text, reply_markup=kb, parse_mode=pm)
+
+    # بازگشت به منوی لینک‌ها
+    await show_link_options_menu(q.message, user_uuid, service['service_id'], is_edit=False, context=context)
 
 
 async def refresh_service_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
