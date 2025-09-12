@@ -17,7 +17,6 @@ logger = logging.getLogger(__name__)
 _PERSIAN_TO_EN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
 
 def _get_payment_info_text() -> str:
-    """متن راهنمای پرداخت را از دیتابیس می‌خواند."""
     text = db.get_setting("payment_instruction_text")
     if not text:
         text = "راهنمای پرداخت هنوز تنظیم نشده است."
@@ -37,9 +36,6 @@ def _get_payment_info_text() -> str:
 
 # --- Handlers ---
 async def charge_menu_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    نمایش منوی اصلی شارژ با دو گزینه. این تابع نقطه ورود و بازگشت مکالمه است.
-    """
     q = getattr(update, "callback_query", None)
     if q:
         await q.answer()
@@ -63,9 +59,6 @@ async def charge_menu_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     return CHARGE_MENU
 
 async def show_referral_info_inline(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    نمایش اطلاعات معرفی دوستان. پس از نمایش، به منوی شارژ بازمی‌گردد.
-    """
     q = update.callback_query
     await q.answer()
 
@@ -90,9 +83,6 @@ async def show_referral_info_inline(update: Update, context: ContextTypes.DEFAUL
     return CHARGE_MENU
 
 async def charge_start_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    شروع فرآیند پرداخت و انتقال به حالت انتخاب مبلغ.
-    """
     q = update.callback_query
     await q.answer()
 
@@ -112,14 +102,12 @@ async def charge_start_payment(update: Update, context: ContextTypes.DEFAULT_TYP
     return CHARGE_AMOUNT
 
 async def ask_custom_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    درخواست از کاربر برای وارد کردن مبلغ دلخواه.
-    """
     q = update.callback_query
     await q.answer()
 
     kb = [nav_row(back_cb="charge_start_payment_back", home_cb="home_menu")]
-    text = "লطفاً مبلغ دلخواه خود را (به تومان) وارد نمایید:"
+    # اصلاح غلط‌تایپی «لطفاً»
+    text = "لطفاً مبلغ دلخواه خود را (به تومان) وارد نمایید:"
 
     await q.edit_message_text(text, reply_markup=markup(kb))
     return AWAIT_CUSTOM_AMOUNT
@@ -127,7 +115,6 @@ async def ask_custom_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def charge_amount_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
         raw_text = (update.message.text or "").strip().replace(',', '')
-        # پشتیبانی از اعداد فارسی
         raw_text = raw_text.translate(_PERSIAN_TO_EN_DIGITS)
         amount = int(float(raw_text))
         if amount < 1000:
@@ -209,9 +196,6 @@ async def charge_receipt_received(update: Update, context: ContextTypes.DEFAULT_
     return ConversationHandler.END
 
 async def charge_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    لغو کامل مکالمه شارژ و بازگشت به منوی اصلی.
-    """
     q = getattr(update, "callback_query", None)
     if q:
         await q.answer()
