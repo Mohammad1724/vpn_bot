@@ -113,7 +113,9 @@ def build_application():
     # --------- CHARGE (user) ----------
     charge_conv = ConversationHandler(
         entry_points=[
+            # هر پیامی که ایموجی 💳 داشته باشه → منوی شارژ
             MessageHandler(filters.Regex(r'.*💳.*') & user_filter, check_channel_membership(charge_h.charge_menu_start)),
+            # کال‌بک از هر منو: منوی اصلی/اطلاعات حساب/...
             CallbackQueryHandler(check_channel_membership(charge_h.charge_menu_start), pattern=r'^(user_start_charge|acc_start_charge|acc_charge)$'),
         ],
         states={
@@ -193,7 +195,7 @@ def build_application():
             constants.PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_days_received)],
             constants.PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_gb_received)],
             constants.PLAN_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_category_received)],
-        },
+        ],
         fallbacks=[CommandHandler('cancel', admin_plans.cancel_add_plan)],
         map_to_parent={ConversationHandler.END: constants.PLAN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
@@ -222,7 +224,7 @@ def build_application():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_category_received),
                 CommandHandler('skip', admin_plans.skip_edit_plan_category)
             ],
-        },
+        ],
         fallbacks=[CommandHandler('cancel', admin_plans.cancel_edit_plan)],
         map_to_parent={ConversationHandler.END: constants.PLAN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
@@ -270,7 +272,6 @@ def build_application():
             ],
             constants.BROADCAST_CONFIRM: [
                 CallbackQueryHandler(admin_users.broadcast_confirm_callback, pattern=r'^broadcast_confirm_(yes|no)$'),
-                CallbackQueryHandler(admin_users.broadcast_cancel_cb, pattern=r'^bcast_menu
                 CallbackQueryHandler(admin_users.broadcast_cancel_cb, pattern=r'^bcast_menu$'),
             ],
             constants.BROADCAST_TO_USER_ID: [
@@ -283,7 +284,7 @@ def build_application():
                 CallbackQueryHandler(admin_users.broadcast_cancel_cb, pattern=r'^bcast_menu$'),
                 CallbackQueryHandler(admin_c.admin_entry, pattern=r'^admin_panel$'),
             ],
-        },
+        ],
         fallbacks=[CommandHandler('cancel', admin_c.admin_generic_cancel)],
         map_to_parent={ConversationHandler.END: constants.ADMIN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
@@ -443,7 +444,7 @@ def build_application():
         MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
         MessageHandler(filters.Regex(r'^💾 پشتیبان‌گیری$') & admin_filter, admin_backup.backup_restore_menu),
         MessageHandler(filters.Regex(r'^👥 مدیریت کاربران$') & admin_filter, admin_users.user_management_menu),
-                MessageHandler(filters.Regex(r'^🎁 مدیریت کد هدیه$') & admin_filter, admin_gift.gift_code_management_menu),
+        MessageHandler(filters.Regex(r'^🎁 مدیریت کد هدیه$') & admin_filter, admin_gift.gift_code_management_menu),
         MessageHandler(filters.Regex(r'^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
 
         CallbackQueryHandler(admin_backup.backup_restore_menu, pattern=r'^back_to_backup_menu$'),
@@ -520,24 +521,6 @@ def build_application():
     application.add_handler(support_conv, group=0)
     application.add_handler(admin_conv, group=0)
 
-    # --------- CRITICAL: Force handlers for account history with highest priority ----------
-    async def force_charge_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        logger.info(f"FORCE charge_history triggered for user {update.effective_user.id}")
-        await start_h.show_charge_history_callback(update, context)
-
-    async def force_purchase_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        logger.info(f"FORCE purchase_history triggered for user {update.effective_user.id}")
-        await start_h.show_purchase_history_callback(update, context)
-
-    async def force_charging_guide(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        logger.info(f"FORCE charging_guide triggered for user {update.effective_user.id}")
-        await start_h.show_charging_guide_callback(update, context)
-
-    # Register with highest priority (group=-1)
-    application.add_handler(CallbackQueryHandler(force_charge_history, pattern=r"^acc_charge_history$"), group=-1)
-    application.add_handler(CallbackQueryHandler(force_purchase_history, pattern=r"^acc_purchase_history$"), group=-1)
-    application.add_handler(CallbackQueryHandler(force_charging_guide, pattern=r"^acc_charging_guide$"), group=-1)
-
     # Admin settings commands
     application.add_handler(CommandHandler("set_trial_days", set_trial_days, filters=admin_filter))
     application.add_handler(CommandHandler("set_trial_gb", set_trial_gb, filters=admin_filter))
@@ -554,7 +537,7 @@ def build_application():
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern=r"^check_membership$"))
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern=r"^home_menu$"))
 
-    # Usage
+    # Usage (moved to group=2)
     application.add_handler(CallbackQueryHandler(usage_h.show_usage_menu, pattern=r"^acc_usage$"), group=2)
     application.add_handler(CallbackQueryHandler(usage_h.show_usage_menu, pattern=r"^acc_usage_refresh$"), group=2)
 
@@ -577,8 +560,15 @@ def build_application():
     for h in user_services_handlers:
         application.add_handler(h, group=2)
 
-    # ACCOUNT INFO - now handled by force handlers above, but keep this for acc_back_to_main
-    application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.show_account_info), pattern=r"^acc_back_to_main$"), group=2)
+    # ACCOUNT INFO (moved to group=2)
+    account_info_handlers = [
+        CallbackQueryHandler(check_channel_membership(start_h.show_purchase_history_callback), pattern=r"^acc_purchase_history$"),
+        CallbackQueryHandler(check_channel_membership(start_h.show_charge_history_callback), pattern=r"^acc_charge_history$"),
+        CallbackQueryHandler(check_channel_membership(start_h.show_charging_guide_callback), pattern=r"^acc_charging_guide$"),
+        CallbackQueryHandler(check_channel_membership(start_h.show_account_info), pattern=r"^acc_back_to_main$"),
+    ]
+    for h in account_info_handlers:
+        application.add_handler(h, group=2)
 
     # GUIDES
     guide_handlers = [
