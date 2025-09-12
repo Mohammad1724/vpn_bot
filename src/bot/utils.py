@@ -112,7 +112,7 @@ def build_subscription_url(user_uuid: str) -> str:
     client_secret = _clean_path(PANEL_SECRET_UUID)
 
     if client_secret:
-        return f"https://{host}/{client_secret}/{user_uuid}/sub/"
+        return f"https://{host}/{client_secret}/{user_uuid}/"
     else:
         sub_path = _clean_path(SUB_PATH) or "sub"
         return f"https://{host}/{sub_path}/{user_uuid}/"
@@ -245,10 +245,7 @@ def create_service_info_caption(
 
     link = override_sub_url or service_db_record.get('sub_link')
     
-    lri, pdi = "\u2066", "\u2069"
-    safe_link = f"{lri}{link}{pdi}" if link else "یافت نشد"
-
-    traffic_str = "نامحدود" if usage_limit <= 0 else f"{current_usage:.2f}/{int(usage_limit)} GB"
+    traffic_str = "نامحدود" if usage_limit <= 0 or usage_limit > UNLIMITED_DISPLAY_THRESHOLD_GB else f"{current_usage:.2f}/{int(usage_limit)} GB"
 
     caption = (
         f"{title}\n\n"
@@ -256,7 +253,7 @@ def create_service_info_caption(
         f"⏳ {int(hiddify_user_info.get('package_days', 0))} روز | 📅 تا {jalali_exp}\n\n"
         f"📦 ترافیک: {traffic_str}\n"
         f"{bar} {percent}%\n\n"
-        f"🔗 لینک اشتراک (با یک لمس کپی می‌شود):\n`{safe_link}`"
+        f"🔗 لینک اشتراک (با یک لمس کپی می‌شود):\n`{link}`"
     )
     return caption
 
