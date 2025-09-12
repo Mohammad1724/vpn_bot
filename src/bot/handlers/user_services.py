@@ -47,6 +47,14 @@ def _strip_qf_and_sub(url: str) -> str:
     return urlunsplit((pr.scheme, pr.netloc, path.rstrip('/'), '', ''))
 
 
+def _same_user(a, b) -> bool:
+    """مقایسه امن شناسه کاربر برای جلوگیری از ناسازگاری str/int."""
+    try:
+        return int(a) == int(b)
+    except Exception:
+        return str(a) == str(b)
+
+
 async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     services = db.get_user_services(user_id)
@@ -91,8 +99,8 @@ async def send_service_details(
             await context.bot.send_message(chat_id=chat_id, text=text)
         return
 
-    # چک مالکیت
-    if service['user_id'] != chat_id:
+    # چک مالکیت امن
+    if not _same_user(service['user_id'], chat_id):
         text = "❌ این سرویس متعلق به شما نیست."
         if original_message:
             try:
@@ -120,7 +128,7 @@ async def send_service_details(
 
         config_name = (info.get('name', 'config') if isinstance(info, dict) else 'config') or 'config'
 
-        # انتخاب نوع دامنه بر اساس تنظیمات ادمین و نوع پلن
+        # انتخاب دامنه بر اساس تنظیمات ادمین و نوع پلن (حجمی/نامحدود)
         plan = db.get_plan(service['plan_id']) if service.get('plan_id') else None
         plan_gb = int(plan['gb']) if plan and 'gb' in plan else None
         preferred_url = utils.build_subscription_url(service['sub_uuid'], name=config_name, plan_gb=plan_gb)
@@ -166,7 +174,7 @@ async def more_links_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     await q.answer()
     uuid = q.data.split('_')[-1]
     service = db.get_service_by_uuid(uuid)
-    if not service or service['user_id'] != q.from_user.id:
+    if not service or not _same_user(service['user_id'], q.from_user.id):
         await q.edit_message_text("❌ سرویس یافت نشد یا متعلق به شما نیست.")
         return
     await show_link_options_menu(q.message, uuid, service['service_id'], is_edit=True, context=context)
@@ -200,18 +208,18 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parts = q.data.split('_')
     link_type, user_uuid = parts[1], parts[2]
     service = db.get_service_by_uuid(user_uuid)
-    if not service or service['user_id'] != q.from_user.id:
+    if not service or not _same_user(service['user_id'], q.from_user.id):
         await q.edit_message_text("❌ سرویس یافت نشد یا متعلق به شما نیست.")
         return
 
     info = await hiddify_api.get_user_info(user_uuid)
     config_name = (info.get('name', 'config') if isinstance(info, dict) else 'config') or 'config'
 
-    # برای فایل all.txt باید مسیر پایه uuid بدون suffix نوع لینک باشد
+    # حالت full: مسیر …/<uuid>/all.txt (بدون suffix نوع لینک)
     if link_type == "full":
         try:
             await q.edit_message_text("در حال دریافت کانفیگ‌های تکی... ⏳")
-            base_user_path = _strip_qf_and_sub(service['sub_link'])  # از لینک ذخیره‌شده در DB استفاده می‌کنیم
+            base_user_path = _strip_qf_and_sub(service['sub_link'])
             full_url = f"{base_user_path}/all.txt"
 
             verify_ssl = HIDDIFY_API_VERIFY_SSL
@@ -262,7 +270,7 @@ async def refresh_service_details(update: Update, context: ContextTypes.DEFAULT_
     service_id = int(q.data.split('_')[1])
     service = db.get_service(service_id)
 
-    if not service or service['user_id'] != q.from_user.id:
+    if not service or not _same_user(service['user_id'], q.from_user.id):
         await q.answer("خطا: این سرویس متعلق به شما نیست.", show_alert=True)
         return
 
@@ -295,7 +303,7 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
         return
 
     service = db.get_service(service_id)
-    if not service or service['user_id'] != q.from_user.id:
+    if not service or not _same_user(service['user_id'], q.from_user.id):
         await q.edit_message_text("❌ سرویس یافت نشد یا متعلق به شما نیست.")
         return
 
@@ -349,7 +357,7 @@ async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TY
     service_id = int(q.data.split('_')[1])
     user_id = q.from_user.id
     service = db.get_service(service_id)
-    if not service or service['user_id'] != user_id:
+    if not service or not _same_user(service['user_id'], user_id):
         await context.bot.send_message(chat_id=user_id, text="❌ سرویس نامعتبر است یا متعلق به شما نیست.")
         return
     plan = db.get_plan(service['plan_id']) if service.get('plan_id') else None
@@ -404,7 +412,7 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
 
     service = db.get_service(service_id)
     plan = db.get_plan(plan_id)
-    if not service or not plan or service['user_id'] != user_id:
+    if not service or not plan or not _same_user(service['user_id'], user_id):
         await _send_renewal_error(original_message, "❌ اطلاعات سرویس یا پلن نامعتبر است.")
         return
 
