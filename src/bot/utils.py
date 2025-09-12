@@ -1,6 +1,5 @@
 # filename: bot/utils.py
 # -*- coding: utf-8 -*-
-
 import io
 import sqlite3
 import random
@@ -18,8 +17,6 @@ try:
 except ImportError:
     PANEL_DOMAIN, SUB_DOMAINS, PANEL_SECRET_UUID, SUB_PATH = "", [], "", "sub"
 
-# اگر در پنل برای نامحدود از سقف بزرگ (مثل 1000GB) استفاده می‌کنید،
-# با این آستانه نمایش را «نامحدود» نشان می‌دهیم.
 try:
     from config import UNLIMITED_DISPLAY_THRESHOLD_GB
 except Exception:
@@ -32,7 +29,6 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# نگاشت ارقام لاتین به فارسی (برای بخش‌هایی از ربات که نیاز دارند)
 _PERSIAN_DIGIT_MAP = str.maketrans("0123456789,-", "۰۱۲۳۴۵۶۷۸۹،-")
 
 
@@ -57,19 +53,13 @@ def format_toman(amount: Union[int, float, str], persian_digits: bool = False) -
 
 
 def parse_date_flexible(date_str: Union[str, int, float]) -> Union[datetime, None]:
-    """
-    تبدیل ورودی تاریخ به datetime (local tz):
-    - timestamp ثانیه/میلی‌ثانیه
-    - ISO8601
-    - فرمت‌های رایج yyyy-mm-dd و ...
-    """
     if date_str is None or date_str == "":
         return None
 
     if isinstance(date_str, (int, float)) or (isinstance(date_str, str) and re.match(r"^\d+(\.\d+)?$", date_str.strip())):
         try:
             val = float(date_str)
-            if val > 1e12:  # میلی‌ثانیه
+            if val > 1e12:
                 val = val / 1000.0
             return datetime.fromtimestamp(val, tz=timezone.utc).astimezone()
         except Exception:
@@ -105,9 +95,6 @@ def _clean_path(seg: Optional[str]) -> str:
 
 
 def _ensure_https_host(host: str) -> str:
-    """
-    ورودی می‌تواند با یا بدون scheme باشد؛ خروجی فقط hostname (بدون http/https)
-    """
     h = (host or "").strip()
     if h.startswith("http://"):
         h = h[len("http://"):]
@@ -117,11 +104,9 @@ def _ensure_https_host(host: str) -> str:
 
 
 def build_subscription_url(user_uuid: str) -> str:
-    """
-    خروجی استاندارد (بدون پارامتر asn):
-      - با secret: https://{domain}/{secret}/{uuid}/sub/
-      - بدون secret: https://{domain}/{sub_path}/{uuid}/
-    """
+    from urllib.parse import urlparse
+    import random
+    
     domain = (random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN)
     host = _ensure_https_host(domain)
     client_secret = _clean_path(PANEL_SECRET_UUID)
@@ -143,9 +128,6 @@ def make_qr_bytes(data: str) -> io.BytesIO:
 
 
 def _get_panel_expire_dt(user_data: dict) -> Optional[datetime]:
-    """
-    تلاش برای به‌دست آوردن تاریخ انقضا از فیلد expire (ثانیه/میلی‌ثانیه).
-    """
     expire_ts = user_data.get("expire")
     if isinstance(expire_ts, (int, float, str)):
         try:
@@ -159,11 +141,6 @@ def _get_panel_expire_dt(user_data: dict) -> Optional[datetime]:
 
 
 def _pick_start_dt(user_data: dict, service_db_record: Optional[dict], now: datetime) -> Optional[datetime]:
-    """
-    انتخاب بهترین زمان شروع برای محاسبه انقضا/روزهای باقی‌مانده:
-    - اگر created_at (در DB) موجود و سرویس تازه باشد (<=36h)، همان را مبنا می‌گیریم.
-    - در غیر این صورت جدیدترین بین last_reset_time/start_date/created_at/create_time (از پنل).
-    """
     created_at_db = None
     if service_db_record:
         ca = service_db_record.get("created_at") or service_db_record.get("create_time")
@@ -191,14 +168,7 @@ def _pick_start_dt(user_data: dict, service_db_record: Optional[dict], now: date
 
 
 def _format_expiry_and_days(user_data: dict, service_db_record: Optional[dict] = None) -> Tuple[str, int]:
-    """
-    خروجی: (expire_str, days_left)
-    - اگر expire معتبر داریم: مبنا همان است.
-    - اگر سرویس تازه باشد و مقدار پنل غیرمنطقی، از created_at DB استفاده می‌کنیم.
-    - در غیر این صورت از start/reset پنل استفاده می‌کنیم.
-    """
     now_utc = datetime.now(timezone.utc)
-
     try:
         package_days = int(user_data.get("package_days") or 0)
     except Exception:
@@ -207,10 +177,7 @@ def _format_expiry_and_days(user_data: dict, service_db_record: Optional[dict] =
     expire_dt = _get_panel_expire_dt(user_data)
     days_left_via_expire = None
     if expire_dt:
-        if expire_dt > now_utc:
-            days_left_via_expire = math.ceil((expire_dt - now_utc).total_seconds() / (24 * 3600))
-        else:
-            days_left_via_expire = 0
+        days_left_via_expire = max(0, math.ceil((expire_dt - now_utc).total_seconds() / (24 * 3600)))
 
     start_dt_candidate = _pick_start_dt(user_data, service_db_record, now_utc)
     if package_days > 0 and start_dt_candidate:
@@ -253,107 +220,43 @@ def _format_expiry_and_days(user_data: dict, service_db_record: Optional[dict] =
 
     return expire_jalali, int(days_left_via_expire or 0)
 
+def create_progress_bar(used, total, blocks=10):
+    if total <= 0: return "", 0
+    ratio = min(1.0, used / total)
+    percent = int(ratio * 100)
+    filled = int(ratio * blocks)
+    bar = "▰" * filled + "▱" * (blocks - filled)
+    return bar, percent
 
 def create_service_info_caption(
-    user_data: dict,
-    service_db_record: Optional[dict] = None,
-    title: Optional[str] = None,   # اگر None باشد، به‌صورت «سرویس فعال/غیرفعال» نمایش می‌دهیم
-    override_sub_url: Optional[str] = None
+    hiddify_user_info: dict,
+    service_db_record: dict,
+    title: str = "اطلاعات سرویس شما",
+    override_sub_url: str | None = None
 ) -> str:
-    # فرمت عدد گیگابایت: بدون نمای علمی، نزدیک صفر=0، اگر تقریباً صحیح بود بدون اعشار، در غیر این صورت تا دو اعشار
-    def _fmt_gb(x: float) -> str:
-        try:
-            v = float(x)
-        except Exception:
-            v = 0.0
-        if abs(v) < 0.005:  # حذف نویزهای بسیار کوچک
-            v = 0.0
-        if abs(v - round(v)) < 0.005:
-            return f"{int(round(v))}"
-        return f"{v:.2f}"
+    status, jalali_exp, is_expired = get_service_status(hiddify_user_info)
+    
+    usage_limit = float(hiddify_user_info.get('usage_limit_GB', 0))
+    current_usage = float(hiddify_user_info.get('current_usage_GB', 0))
+    
+    bar, percent = create_progress_bar(current_usage, usage_limit)
+    
+    name = service_db_record.get('name') or hiddify_user_info.get('name') or "سرویس"
 
-    # فرمت ساده اعداد روزها (لاتین)
-    def _fmt_num(x: float) -> str:
-        try:
-            return str(int(x))
-        except Exception:
-            return str(x)
+    link = override_sub_url or service_db_record.get('sub_link')
+    
+    lri, pdi = "\u2066", "\u2069"
+    safe_link = f"{lri}{link}{pdi}" if link else "یافت نشد"
 
-    # نوار پیشرفت مصرف (بر اساس مصرف‌شده)
-    def _progress_bar(used: float, total: float, blocks: int = 10) -> tuple[str, int]:
-        try:
-            u = max(0.0, float(used))
-            t = max(0.0, float(total))
-        except Exception:
-            u, t = 0.0, 0.0
-        if t <= 0.0:
-            return ("", 0)  # برای نامحدود نوار نشان نمی‌دهیم
-        ratio = min(1.0, u / t)
-        percent = int(round(ratio * 100))
-        filled = int(round(ratio * blocks))
-        filled = max(0, min(blocks, filled))
-        bar = "▰" * filled + "▱" * (blocks - filled)
-        return (bar, percent)
+    traffic_str = "نامحدود" if usage_limit <= 0 else f"{current_usage:.2f}/{int(usage_limit)} GB"
 
-    # محاسبات زمان/روز
-    try:
-        expire_jalali, days_left = _format_expiry_and_days(user_data, service_db_record)
-    except TypeError:
-        expire_jalali, days_left = _format_expiry_and_days(user_data)
-
-    used_gb = float(user_data.get('current_usage_GB', 0.0) or 0)
-    total_gb = float(user_data.get('usage_limit_GB', 0.0) or 0)
-
-    # نامحدود اگر total_gb <= 0 یا خیلی بزرگ باشد
-    unlimited = (total_gb <= 0.0) or (total_gb >= float(UNLIMITED_DISPLAY_THRESHOLD_GB))
-
-    is_active = not (
-        user_data.get('status') in ('disabled', 'limited')
-        or days_left <= 0
-        or (not unlimited and total_gb > 0 and used_gb >= total_gb)
-    )
-    status_badge = "🟢 فعال" if is_active else "🔴 غیرفعال"
-
-    service_name = user_data.get('name') or user_data.get('uuid', 'N/A')
-
-    # لینک اشتراک استاندارد (خالص، بدون کاراکترهای کنترلی LTR/RTL)
-    if override_sub_url:
-        sub_url = override_sub_url
-    elif service_db_record and service_db_record.get('sub_link'):
-        # برای یکنواختی، لینک استاندارد بسازیم
-        sub_url = build_subscription_url(user_data['uuid'])
-    else:
-        sub_url = build_subscription_url(user_data['uuid'])
-
-    # عنوان: اگر title داده نشده، با وضعیت فعلی پر می‌شود
-    if title and str(title).strip():
-        title_text = str(title).strip()
-    else:
-        # طبق خواسته شما: فقط «سرویس فعال/غیرفعال»
-        title_text = f"سرویس {'فعال' if is_active else 'غیرفعال'}"
-
-    # ترافیک و نوار
-    if unlimited:
-        traffic_top = f"📦 ترافیک: نامحدود • مصرف: {_fmt_gb(used_gb)} GB"
-        bar_line = ""
-    else:
-        bar, percent = _progress_bar(used_gb, total_gb)
-        traffic_top = f"📦 ترافیک: {_fmt_gb(used_gb)}/{_fmt_gb(total_gb)} GB"
-        bar_line = f"{bar} {percent}%\n" if bar else ""
-
-    package_days = int(user_data.get('package_days', 0) or 0)
-    expire_str = expire_jalali or "نامشخص"
-    days_left_str = _fmt_num(days_left)
-
-    # متن مینیمال و خوش‌خوان
     caption = (
-        f"{title_text}\n\n"
-        f"🆔 {service_name}\n"
-        f"⏳ {days_left_str} روز | 📅 تا {expire_str}\n\n"
-        f"{traffic_top}\n"
-        f"{bar_line}"
-        "🔗 لینک اشتراک:\n"
-        f"{sub_url}"
+        f"{title}\n\n"
+        f"🆔 {name}\n"
+        f"⏳ {int(hiddify_user_info.get('package_days', 0))} روز | 📅 تا {jalali_exp}\n\n"
+        f"📦 ترافیک: {traffic_str}\n"
+        f"{bar} {percent}%\n\n"
+        f"🔗 لینک اشتراک (با یک لمس کپی می‌شود):\n`{safe_link}`"
     )
     return caption
 
