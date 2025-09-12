@@ -109,7 +109,7 @@ async def send_service_details(
         safe_name = quote_plus(config_name)
 
         base_link = utils.build_subscription_url(service['sub_uuid'])
-        preferred_url = f"{base_link}#{safe_name}" if base_link.endswith('/') else f"{base_link}/#{safe_name}"
+        preferred_url = f"{base_link}#{safe_name}"
 
         caption = utils.create_service_info_caption(info, service_db_record=service, override_sub_url=preferred_url)
         keyboard_rows = [
@@ -195,7 +195,7 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     safe_name = quote_plus(config_name)
 
     base_link = utils.build_subscription_url(user_uuid)
-    base_user_path = _strip_qf_and_sub(base_link)
+    base_user_path = base_link.rsplit('/', 1)[0]
 
     if link_type == "full":
         try:
@@ -217,7 +217,7 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if link_type == "sub":
-        final_link = f"{base_link}#{safe_name}" if base_link.endswith('/') else f"{base_link}/#{safe_name}"
+        final_link = f"{base_link}#{safe_name}"
     else:
         final_link = f"{base_user_path}/{link_type}/?name={safe_name}"
 
@@ -226,9 +226,7 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except BadRequest:
         pass
     
-    lri, pdi = "\u2066", "\u2069"
-    safe_link = f"{lri}{final_link}{pdi}"
-    text = f"🔗 **لینک {_link_label(link_type)}**\n`{safe_link}`\n\n👆 با یک لمس روی لینک بالا، کپی می‌شود."
+    text = f"🔗 **لینک {_link_label(link_type)}**\n`{final_link}`\n\n👆 با یک لمس روی لینک بالا، کپی می‌شود."
     
     kb = markup([nav_row(back_cb=f"more_links_{user_uuid}", home_cb="home_menu")])
     
