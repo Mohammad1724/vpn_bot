@@ -106,24 +106,18 @@ def _to_int(x, default=0) -> int:
 
 
 def normalize_link_type(t: str) -> str:
+    """
+    نوع لینک را دقیقاً طبق انتخاب ادمین برمی‌گرداند.
+    مقادیر مجاز: sub, sub64, singbox, clash, clashmeta, xray
+    هر چیز دیگری → sub
+    """
     lt = (t or "sub").strip().lower().replace("clash-meta", "clashmeta")
-    # نگاشت گزینه‌های پشتیبانی‌نشده به sub
-    if lt in ("auto", "sub64", "xray", "v2ray"):
-        lt = "sub"
-    return lt
+    allowed = {"sub", "sub64", "singbox", "clash", "clashmeta", "xray"}
+    return lt if lt in allowed else "sub"
 
 
 def _clean_path(seg: Optional[str]) -> str:
     return (seg or "").strip().strip("/")
-
-
-def _ensure_https_host(host: str) -> str:
-    h = (host or "").strip()
-    if h.startswith("http://"):
-        h = h[len("http://"):]
-    elif h.startswith("https://"):
-        h = h[len("https://"):]
-    return h.strip("/")
 
 
 def _hostname_only(s: str) -> str:
@@ -157,7 +151,6 @@ def _pick_domains_from_settings(plan_gb: int | None) -> list[str]:
       - در غیر این صورت: sub_domains عمومی
       - در نهایت fallback به config.SUB_DOMAINS یا PANEL_DOMAIN
     """
-    # انتخاب اختصاصی بر اساس نوع پلن
     if plan_gb is not None:
         try:
             g = int(plan_gb)
@@ -172,18 +165,22 @@ def _pick_domains_from_settings(plan_gb: int | None) -> list[str]:
             if raw:
                 return _normalize_subdomains(_parse_domains_csv(raw))
 
-    # عمومی
     gen = db.get_setting("sub_domains")
     if gen:
         return _normalize_subdomains(_parse_domains_csv(gen))
 
-    # fallback
     return _normalize_subdomains(SUB_DOMAINS) or [_hostname_only(PANEL_DOMAIN)]
 
 
 def build_subscription_url(user_uuid: str, link_type: str | None = None, name: str | None = None, plan_gb: int | None = None) -> str:
-    import random
-
+    """
+    لینک اشتراک را مطابق تنظیمات ادمین می‌سازد.
+    - اگر link_type None باشد، از settings: default_sub_link_type خوانده می‌شود.
+    - نوع‌ها: sub, sub64, singbox, clash, clashmeta, xray
+    - اگر PANEL_SECRET_UUID تنظیم شده باشد: https://host/<secret>/<uuid>/<type>/
+      در غیر این‌صورت: https://host/<sub_path>/<uuid>/ (برای sub)، یا .../<uuid>/<type>/ (برای بقیه)
+    - نام (name) برای sub به شکل #name و برای سایرین به شکل ?name= استفاده می‌شود.
+    """
     domains = _pick_domains_from_settings(plan_gb)
     host = _hostname_only(random.choice(domains) if domains else PANEL_DOMAIN)
     client_secret = _clean_path(PANEL_SECRET_UUID)
@@ -191,7 +188,6 @@ def build_subscription_url(user_uuid: str, link_type: str | None = None, name: s
 
     base_user_path = f"https://{host}/{client_secret}/{user_uuid}" if client_secret else f"https://{host}/{sub_path}/{user_uuid}"
 
-    # اگر نوع لینک مشخص نشده، از تنظیمات پیش‌فرض ادمین بخوان
     if link_type is None:
         link_type = db.get_setting("default_sub_link_type") or "sub"
 
@@ -204,6 +200,7 @@ def build_subscription_url(user_uuid: str, link_type: str | None = None, name: s
             final_url += f"#{safe_name}"
         return final_url
     else:
+        # sub64, singbox, clash, clashmeta, xray
         final_url = f"{base_user_path}/{normalized_type}/"
         if safe_name:
             final_url += f"?name={safe_name}"
