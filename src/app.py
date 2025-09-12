@@ -9,6 +9,7 @@ from telegram.ext import (
     CommandHandler, filters, ContextTypes
 )
 from telegram import Update
+    # Note: Some IDEs auto-format import sections. Keep telegram imports grouped.
 from telegram.request import HTTPXRequest
 from telegram.error import NetworkError
 
@@ -113,7 +114,9 @@ def build_application():
     # --------- CHARGE (user) ----------
     charge_conv = ConversationHandler(
         entry_points=[
+            # هر پیامی که ایموجی 💳 داشته باشه → منوی شارژ
             MessageHandler(filters.Regex(r'.*💳.*') & user_filter, check_channel_membership(charge_h.charge_menu_start)),
+            # کال‌بک از هر منو: منوی اصلی/اطلاعات حساب/...
             CallbackQueryHandler(check_channel_membership(charge_h.charge_menu_start), pattern=r'^(user_start_charge|acc_start_charge|acc_charge)$'),
         ],
         states={
@@ -275,12 +278,12 @@ def build_application():
             constants.BROADCAST_TO_USER_ID: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_users.broadcast_to_user_id_received),
                 CallbackQueryHandler(admin_users.broadcast_cancel_cb, pattern=r'^bcast_menu$'),
-                CallbackQueryHandler(admin_c.admin_entry, pattern=r'^admin_panel$'),
+                CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
             ],
             constants.BROADCAST_TO_USER_MESSAGE: [
                 MessageHandler(~filters.COMMAND & admin_filter, admin_users.broadcast_to_user_message_received),
                 CallbackQueryHandler(admin_users.broadcast_cancel_cb, pattern=r'^bcast_menu$'),
-                CallbackQueryHandler(admin_c.admin_entry, pattern=r'^admin_panel$'),
+                CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
             ],
         },
         fallbacks=[CommandHandler('cancel', admin_c.admin_generic_cancel)],
@@ -288,8 +291,10 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # --------- ADMIN ROOT CONVERSATION ----------
+    # --------- ADMIN ROOT CONVERSATION (states dict built step-by-step) ----------
     admin_states = {}
+
+    # ADMIN MENU
     admin_states[constants.ADMIN_MENU] = [
         MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
         MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
@@ -310,6 +315,7 @@ def build_application():
         broadcast_conv,
     ]
 
+    # PLANS MENU
     admin_states[constants.PLAN_MENU] = [
         MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
         MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
@@ -335,6 +341,7 @@ def build_application():
         CallbackQueryHandler(admin_plans.back_to_admin_cb, pattern=r"^admin_panel$"),
     ]
 
+    # USER MANAGEMENT
     admin_states[constants.USER_MANAGEMENT_MENU] = [
         MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
         MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
@@ -360,6 +367,7 @@ def build_application():
         MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_users.manage_user_id_received),
     ]
 
+    # MANAGE USER AMOUNT
     admin_states[constants.MANAGE_USER_AMOUNT] = [
         MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
         MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
@@ -373,6 +381,7 @@ def build_application():
         CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
     ]
 
+    # REPORTS MENU
     admin_states[constants.REPORTS_MENU] = [
         MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
         MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
@@ -389,6 +398,7 @@ def build_application():
         CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
     ]
 
+    # SETTINGS MENU
     admin_states[constants.ADMIN_SETTINGS_MENU] = [
         MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
         MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
@@ -424,10 +434,12 @@ def build_application():
         CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
     ]
 
+    # AWAIT SETTING VALUE
     admin_states[constants.AWAIT_SETTING_VALUE] = [
         MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, await_setting_value_router),
     ]
 
+    # BACKUP MENU
     admin_states[constants.BACKUP_MENU] = [
         MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
         MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
@@ -448,11 +460,13 @@ def build_application():
         CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
     ]
 
+    # RESTORE UPLOAD
     admin_states[constants.RESTORE_UPLOAD] = [
         MessageHandler(filters.Document.ALL & admin_filter, admin_backup.restore_receive_file),
         CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
     ]
 
+    # GIFT CODES MENU
     admin_states[constants.GIFT_CODES_MENU] = [
         MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
         MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
@@ -524,7 +538,7 @@ def build_application():
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern=r"^check_membership$"))
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern=r"^home_menu$"))
 
-    # Usage (به group=2 منتقل شد تا داخل کانورسیشن‌ها گیر نکند)
+    # Usage -> حتماً در group=2 تا توسط کانورسیشن‌ها خورده نشود
     application.add_handler(CallbackQueryHandler(usage_h.show_usage_menu, pattern=r"^acc_usage$"), group=2)
     application.add_handler(CallbackQueryHandler(usage_h.show_usage_menu, pattern=r"^acc_usage_refresh$"), group=2)
 
@@ -547,7 +561,7 @@ def build_application():
     for h in user_services_handlers:
         application.add_handler(h, group=2)
 
-    # ACCOUNT INFO (به group=2 منتقل شد)
+    # ACCOUNT INFO -> به group=2 منتقل شد تا همیشه کار کند
     account_info_handlers = [
         CallbackQueryHandler(check_channel_membership(start_h.show_purchase_history_callback), pattern=r"^acc_purchase_history$"),
         CallbackQueryHandler(check_channel_membership(start_h.show_charge_history_callback), pattern=r"^acc_charge_history$"),
@@ -557,13 +571,13 @@ def build_application():
     for h in account_info_handlers:
         application.add_handler(h, group=2)
 
-    # GUIDES (می‌تونه در group=1 یا 2 باشه؛ 2 امن‌تره)
+    # GUIDES
     guide_handlers = [
         CallbackQueryHandler(check_channel_membership(start_h.show_guide_content), pattern=r"^guide_(connection|charging|buying)$"),
         CallbackQueryHandler(check_channel_membership(start_h.back_to_guide_menu), pattern=r"^guide_back_to_menu$"),
     ]
     for h in guide_handlers:
-        application.add_handler(h, group=2)
+        application.add_handler(h)
 
     # PLANS (User browsing)
     plan_category_handlers = [
@@ -571,7 +585,7 @@ def build_application():
         CallbackQueryHandler(check_channel_membership(buy_h.buy_service_list), pattern=r"^back_to_cats$"),
     ]
     for h in plan_category_handlers:
-        application.add_handler(h, group=1)
+        application.add_handler(h)
 
     # MAIN MENU (user)
     main_menu_handlers = [
@@ -581,6 +595,7 @@ def build_application():
         MessageHandler(filters.Regex(r'^👤 اطلاعات حساب کاربری$'), check_channel_membership(start_h.show_account_info)),
         MessageHandler(filters.Regex(r'^📚 راهنما$'), check_channel_membership(start_h.show_guide)),
         MessageHandler(filters.Regex(r'^🧪 سرویس تست$'), check_channel_membership(trial_get_trial_service)),
+        # توجه: هندلر عمومی 💳 در منوی اصلی حذف شد تا دوبار پاسخ رخ ندهد.
     ]
     for h in main_menu_handlers:
         application.add_handler(h, group=1)
