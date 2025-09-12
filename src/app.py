@@ -79,7 +79,7 @@ def build_application():
             constants.GET_CUSTOM_NAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, buy_h.get_custom_name),
                 CallbackQueryHandler(buy_h.back_to_cats_from_name, pattern=r'^buy_back_to_cats$'),
-                CallbackQueryHandler(buy_h.skip_promo_callback, pattern=r'^buy_skip_name$'),
+                CallbackQueryHandler(buy_h.skip_name_callback, pattern=r'^buy_skip_name$'),
                 CallbackQueryHandler(buy_h.cancel_buy_callback, pattern=r'^buy_cancel$'),
             ],
             constants.PROMO_CODE_ENTRY: [
@@ -101,7 +101,9 @@ def build_application():
             MessageHandler(filters.Regex(r'^🎁 کد هدیه$') & user_filter, check_channel_membership(gift_h.gift_code_entry))
         ],
         states={
-            constants.REDEEM_GIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, gift_h.redeem_gift_code)]
+            constants.REDEEM_GIFT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, gift_h.redeem_gift_code)
+            ],
         },
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
         per_user=True, per_chat=True
@@ -139,7 +141,7 @@ def build_application():
             CallbackQueryHandler(start_h.start, pattern=r"^home_menu$"),
         ],
         per_user=True, per_chat=True,
-        allow_reentry=True  # مهم: اجازه ورود مجدد از مسیرهای مختلف
+        allow_reentry=True  # مهم
     )
 
     # --------- TRANSFER ----------
@@ -192,7 +194,7 @@ def build_application():
             constants.PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_days_received)],
             constants.PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_gb_received)],
             constants.PLAN_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_category_received)],
-        ],
+        },
         fallbacks=[CommandHandler('cancel', admin_plans.cancel_add_plan)],
         map_to_parent={ConversationHandler.END: constants.PLAN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
@@ -281,7 +283,7 @@ def build_application():
                 CallbackQueryHandler(admin_users.broadcast_cancel_cb, pattern=r'^bcast_menu$'),
                 CallbackQueryHandler(admin_c.admin_entry, pattern=r'^admin_panel$'),
             ],
-        ],
+        },
         fallbacks=[CommandHandler('cancel', admin_c.admin_generic_cancel)],
         map_to_parent={ConversationHandler.END: constants.ADMIN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
@@ -412,7 +414,7 @@ def build_application():
         CallbackQueryHandler(admin_settings.service_configs_submenu, pattern=r"^settings_service_configs$"),
         CallbackQueryHandler(admin_settings.subdomains_submenu, pattern=r"^settings_subdomains$"),
         CallbackQueryHandler(admin_settings.reports_and_reminders_submenu, pattern=r"^settings_reports_reminders$"),
-        CallbackQueryHandler(admin_settings.usage_aggregation_submenu, pattern=r"^settings_aggregation$") if hasattr(admin_settings, "usage_aggregation_submenu") else CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^settings_usage_aggregation$"),
+        CallbackQueryHandler(admin_settings.usage_aggregation_submenu, pattern=r"^settings_usage_aggregation$"),
 
         CallbackQueryHandler(admin_settings.toggle_usage_aggregation, pattern=r"^toggle_usage_aggregation$"),
         CallbackQueryHandler(admin_settings.edit_default_link_start, pattern=r"^edit_default_link_type$"),
@@ -494,34 +496,6 @@ def build_application():
         CallbackQueryHandler(admin_settings.edit_setting_start, pattern=r'^admin_edit_setting_'),
 
         CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
-    ]
-
-    # TEXT STATES for Gift/Promo/Referral
-    admin_states[admin_gift.CREATE_GIFT_AMOUNT] = [
-        MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_gift.create_gift_amount_received),
-        CallbackQueryHandler(admin_gift.cancel_create_gift_cb, pattern=r'^gift_create_cancel$'),
-    ]
-    admin_states[constants.PROMO_GET_CODE] = [
-        MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_gift.promo_code_received),
-        CallbackQueryHandler(admin_gift.promo_cancel_cb, pattern=r'^promo_cancel$'),
-    ]
-    admin_states[constants.PROMO_GET_PERCENT] = [
-        MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_gift.promo_percent_received),
-        CallbackQueryHandler(admin_gift.promo_cancel_cb, pattern=r'^promo_cancel$'),
-    ]
-    admin_states[constants.PROMO_GET_MAX_USES] = [
-        MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_gift.promo_max_uses_received),
-        CallbackQueryHandler(admin_gift.promo_cancel_cb, pattern=r'^promo_cancel$'),
-    ]
-    admin_states[constants.PROMO_GET_EXPIRES] = [
-        MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_gift.promo_days_valid_received),
-        CommandHandler('skip', admin_gift.promo_skip_expires_cb),
-        CallbackQueryHandler(admin_gift.promo_skip_expires_cb, pattern=r'^promo_skip_expires$'),
-        CallbackQueryHandler(admin_gift.promo_cancel_cb, pattern=r'^promo_cancel$'),
-    ]
-    admin_states[constants.AWAIT_REFERRAL_BONUS] = [
-        MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_gift.referral_bonus_received),
-        CallbackQueryHandler(admin_gift.referral_cancel_cb, pattern=r'^gift_referral_cancel$'),
     ]
 
     admin_conv = ConversationHandler(
@@ -619,7 +593,7 @@ def build_application():
         MessageHandler(filters.Regex(r'^👤 اطلاعات حساب کاربری$'), check_channel_membership(start_h.show_account_info)),
         MessageHandler(filters.Regex(r'^📚 راهنما$'), check_channel_membership(start_h.show_guide)),
         MessageHandler(filters.Regex(r'^🧪 سرویس تست$'), check_channel_membership(trial_get_trial_service)),
-        # توجه: هندلر اضافی برای 💳 در منوی اصلی حذف شد تا دوباره‌کاری رخ ندهد
+        # توجه: هندلر عمومی 💳 در منوی اصلی حذف شد تا دوبار پاسخ رخ ندهد.
     ]
     for h in main_menu_handlers:
         application.add_handler(h, group=1)
