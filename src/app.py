@@ -1,4 +1,3 @@
-# app.py
 # -*- coding: utf-8 -*-
 
 import logging
@@ -64,7 +63,7 @@ def build_application():
     admin_filter = filters.User(user_id=admin_id_int)
     user_filter = ~admin_filter
 
-    # Route for AWAIT_SETTING_VALUE (settings vs backup target)
+    # Router for AWAIT_SETTING_VALUE (settings vs backup target)
     async def await_setting_value_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if context.user_data.get('awaiting_backup_target'):
             return await admin_backup.backup_target_received(update, context)
@@ -244,7 +243,7 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # --------- ADMIN: TRIAL SETTINGS (nested) ----------
+    # --------- ADMIN: TRIAL SETTINGS (nested conv) ----------
     trial_settings_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(trial_ui.trial_menu, pattern=r"^settings_trial$")],
         states={
@@ -263,10 +262,7 @@ def build_application():
             ],
         },
         fallbacks=[CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^back_to_settings$")],
-        map_to_parent={
-            constants.ADMIN_SETTINGS_MENU: constants.ADMIN_SETTINGS_MENU,
-            ConversationHandler.END: constants.ADMIN_SETTINGS_MENU
-        },
+        map_to_parent={constants.ADMIN_SETTINGS_MENU: constants.ADMIN_SETTINGS_MENU, ConversationHandler.END: constants.ADMIN_SETTINGS_MENU},
         per_user=True, per_chat=True, allow_reentry=True
     )
 
@@ -314,7 +310,7 @@ def build_application():
             CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$")
         ],
         states={
-            # MAIN ADMIN MENU
+            # ADMIN MENU
             constants.ADMIN_MENU: [
                 MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
                 MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
@@ -332,7 +328,7 @@ def build_application():
                 CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^admin_settings$"),
                 CallbackQueryHandler(admin_c.shutdown_bot, pattern=r"^admin_shutdown$"),
 
-                # Nested broadcast conv (inline)
+                # nested broadcast
                 broadcast_conv,
             ],
 
@@ -455,7 +451,7 @@ def build_application():
                 CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
             ],
 
-            # AWAIT SETTING VALUE
+            # AWAIT SETTING VALUE (text inputs)
             constants.AWAIT_SETTING_VALUE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, await_setting_value_router),
             ],
@@ -548,7 +544,8 @@ def build_application():
                 MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_gift.referral_bonus_received),
                 CallbackQueryHandler(admin_gift.referral_cancel_cb, pattern=r'^gift_referral_cancel$'),
             ],
-        },
+        },  # ← مهم: اینجا با } بسته می‌شود (نه ])
+
         fallbacks=[
             MessageHandler(filters.Regex(f'^{constants.BTN_EXIT_ADMIN_PANEL}$') & admin_filter, admin_c.exit_admin_panel),
             CommandHandler('cancel', admin_c.admin_generic_cancel)
