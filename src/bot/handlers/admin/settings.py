@@ -1,4 +1,3 @@
-# filename: bot/handlers/admin/settings.py
 # -*- coding: utf-8 -*-
 
 import logging
@@ -23,7 +22,6 @@ except Exception:
 
 logger = logging.getLogger(__name__)
 
-# --- Helpers ---
 def _get_bool(key: str, default: bool = False) -> bool:
     v = db.get_setting(key)
     return str(v).lower() in ("1", "true", "on", "yes") if v is not None else default
@@ -40,9 +38,7 @@ def _kb(rows): return InlineKeyboardMarkup(rows)
 def _admin_edit_btn(title: str, key: str): return InlineKeyboardButton(title, callback_data=f"admin_edit_setting_{key}")
 def _back_to_settings_btn(): return InlineKeyboardButton("🔙 بازگشت به تنظیمات", callback_data="back_to_settings")
 
-async def _send_or_edit(
-    update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup=None, parse_mode=ParseMode.MARKDOWN
-):
+async def _send_or_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup=None, parse_mode=ParseMode.MARKDOWN):
     q = getattr(update, "callback_query", None)
     if q:
         await q.answer()
@@ -51,8 +47,10 @@ async def _send_or_edit(
         except BadRequest as e:
             emsg = str(e).lower()
             if "can't parse entities" in emsg or "can't find end of the entity" in emsg:
-                try: await q.edit_message_text(text, reply_markup=reply_markup, parse_mode=None)
-                except Exception: pass
+                try:
+                    await q.edit_message_text(text, reply_markup=reply_markup, parse_mode=None)
+                except Exception:
+                    pass
             else:
                 try:
                     await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=reply_markup, parse_mode=parse_mode)
@@ -70,7 +68,6 @@ async def _send_or_edit(
             if "can't parse entities" in emsg or "can't find end of the entity" in emsg:
                 await update.effective_message.reply_text(text, reply_markup=reply_markup, parse_mode=None)
 
-# --- Main Settings Menu ---
 async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "⚙️ **تنظیمات ربات**\n\nلطفاً بخش مورد نظر را انتخاب کنید:"
     keyboard = _kb([
@@ -84,7 +81,6 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _send_or_edit(update, context, text, keyboard, parse_mode=ParseMode.MARKDOWN)
     return ADMIN_SETTINGS_MENU
 
-# --- Submenus ---
 async def maintenance_and_join_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     maint_status = "روشن ✅" if _get_bool("maintenance_enabled") else "خاموش ❌"
     join_status = "فعال ✅" if _get_bool("force_join_enabled") else "غیرفعال ❌"
@@ -97,7 +93,8 @@ async def maintenance_and_join_submenu(update: Update, context: ContextTypes.DEF
         [_admin_edit_btn("✍️ ویرایش کانال عضویت", "force_join_channel")],
         [_back_to_settings_btn()]
     ])
-    await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN); return ADMIN_SETTINGS_MENU
+    await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN)
+    return ADMIN_SETTINGS_MENU
 
 async def payment_and_guides_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "**💳 پرداخت و راهنماها**\n\nاز گزینه‌های زیر برای ویرایش استفاده کنید."
@@ -109,16 +106,20 @@ async def payment_and_guides_submenu(update: Update, context: ContextTypes.DEFAU
         [_admin_edit_btn("✍️ راهنمای شارژ", "guide_charging")],
         [_back_to_settings_btn()]
     ])
-    await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN); return ADMIN_SETTINGS_MENU
+    await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN)
+    return ADMIN_SETTINGS_MENU
 
 async def first_charge_promo_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    code = _get("first_charge_code", "ثبت نشده"); percent = _get("first_charge_bonus_percent", "0")
-    expires_raw = _get("first_charge_expires_at", "ثبت نشده"); expires_at = "همیشگی"
+    code = _get("first_charge_code", "ثبت نشده")
+    percent = _get("first_charge_bonus_percent", "0")
+    expires_raw = _get("first_charge_expires_at", "ثبت نشده")
+    expires_at = "همیشگی"
     if expires_raw and expires_raw != "ثبت نشده":
         try:
-            if dt := utils.parse_date_flexible(expires_raw): expires_at = dt.strftime("%Y-%m-%d %H:%M:%S")
-            else: expires_at = expires_raw
-        except Exception: expires_at = expires_raw
+            dt = utils.parse_date_flexible(expires_raw)
+            expires_at = dt.strftime("%Y-%m-%d %H:%M:%S") if dt else expires_raw
+        except Exception:
+            expires_at = expires_raw
     text = f"🎁 **مدیریت کد شارژ اول**\n\n- کد: `{code}`\n- درصد پاداش: {percent}%\n- تاریخ انقضا: {expires_at}"
     kb = _kb([
         [_admin_edit_btn("✍️ ویرایش کد", "first_charge_code")],
@@ -126,21 +127,28 @@ async def first_charge_promo_submenu(update: Update, context: ContextTypes.DEFAU
         [_admin_edit_btn("✍️ ویرایش تاریخ انقضا", "first_charge_expires_at")],
         [InlineKeyboardButton("🔙 بازگشت", callback_data="settings_payment_guides")]
     ])
-    await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN); return ADMIN_SETTINGS_MENU
+    await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN)
+    return ADMIN_SETTINGS_MENU
 
 async def payment_info_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     instr = _get("payment_instruction_text", "راهنمایی ثبت نشده است.")
     lines = []
     for i in range(1, 4):
         if num := _get(f"payment_card_{i}_number"):
-            name = _get(f"payment_card_{i}_name"); bank = _get(f"payment_card_{i}_bank")
+            name = _get(f"payment_card_{i}_name")
+            bank = _get(f"payment_card_{i}_bank")
             lines.append(f"**کارت {i}:** `{num}` | {name} | {bank or '-'}")
     text = f"**💳 اطلاعات پرداخت**\n\nراهنمای پرداخت:\n{instr}\n\n" + "\n".join(lines)
     rows = [[_admin_edit_btn("✍️ ویرایش راهنمای پرداخت", "payment_instruction_text")]]
     for i in range(1, 4):
-        rows.append([_admin_edit_btn(f"کارت {i}", f"payment_card_{i}_number"), _admin_edit_btn(f"صاحب کارت {i}", f"payment_card_{i}_name"), _admin_edit_btn(f"بانک {i}", f"payment_card_{i}_bank")])
+        rows.append([
+            _admin_edit_btn(f"کارت {i}", f"payment_card_{i}_number"),
+            _admin_edit_btn(f"صاحب کارت {i}", f"payment_card_{i}_name"),
+            _admin_edit_btn(f"بانک {i}", f"payment_card_{i}_bank"),
+        ])
     rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="settings_payment_guides")])
-    await _send_or_edit(update, context, text, _kb(rows), parse_mode=ParseMode.MARKDOWN); return ADMIN_SETTINGS_MENU
+    await _send_or_edit(update, context, text, _kb(rows), parse_mode=ParseMode.MARKDOWN)
+    return ADMIN_SETTINGS_MENU
 
 async def service_configs_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     default_link = _get("default_sub_link_type", "sub")
@@ -151,10 +159,13 @@ async def service_configs_submenu(update: Update, context: ContextTypes.DEFAULT_
         [InlineKeyboardButton("🌐 ویرایش دامنه‌های ساب", callback_data="settings_subdomains")],
         [_back_to_settings_btn()]
     ])
-    await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN); return ADMIN_SETTINGS_MENU
+    await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN)
+    return ADMIN_SETTINGS_MENU
 
 async def subdomains_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    vol = _get("volume_based_sub_domains", "(خالی)"); unlim = _get("unlimited_sub_domains", "(خالی)"); gen = _get("sub_domains", "(خالی)")
+    vol = _get("volume_based_sub_domains", "(خالی)")
+    unlim = _get("unlimited_sub_domains", "(خالی)")
+    gen = _get("sub_domains", "(خالی)")
     text = f"**🌐 دامنه‌های ساب**\n\n- حجمی: `{vol}`\n- نامحدود: `{unlim}`\n- عمومی: `{gen}`"
     kb = _kb([
         [_admin_edit_btn("✍️ ویرایش دامنه‌های حجمی", "volume_based_sub_domains")],
@@ -162,21 +173,26 @@ async def subdomains_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE)
         [_admin_edit_btn("✍️ ویرایش دامنه‌های عمومی", "sub_domains")],
         [InlineKeyboardButton("🔙 بازگشت", callback_data="settings_service_configs")]
     ])
-    await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN); return ADMIN_SETTINGS_MENU
+    await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN)
+    return ADMIN_SETTINGS_MENU
 
 async def reports_and_reminders_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     daily_on = "فعال ✅" if _get_bool("report_daily_enabled") else "غیرفعال ❌"
     weekly_on = "فعال ✅" if _get_bool("report_weekly_enabled") else "غیرفعال ❌"
     expiry_on = "فعال ✅" if _get_bool("expiry_reminder_enabled", True) else "غیرفعال ❌"
-    expiry_days = _get("expiry_reminder_days", "3"); min_gb = _get("expiry_reminder_min_remaining_gb", "0")
+    expiry_days = _get("expiry_reminder_days", "3")
+    min_gb = _get("expiry_reminder_min_remaining_gb", "0")
     text = f"**📊 گزارش‌ها و یادآورها**\n\n- گزارش روزانه: {daily_on}\n- گزارش هفتگی: {weekly_on}\n- یادآور انقضا: {expiry_on} ({expiry_days} روز قبل, حداقل {min_gb}GB)"
     kb = _kb([
-        [InlineKeyboardButton("تغییر گزارش روزانه", callback_data="toggle_report_report_daily_enabled"), InlineKeyboardButton("تغییر گزارش هفتگی", callback_data="toggle_report_report_weekly_enabled")],
+        [InlineKeyboardButton("تغییر گزارش روزانه", callback_data="toggle_report_report_daily_enabled"),
+         InlineKeyboardButton("تغییر گزارش هفتگی", callback_data="toggle_report_report_weekly_enabled")],
         [InlineKeyboardButton("تغییر یادآور انقضا", callback_data="toggle_expiry_reminder")],
-        [_admin_edit_btn("✍️ ویرایش روزهای یادآور", "expiry_reminder_days"), _admin_edit_btn("✍️ ویرایش حداقل حجم یادآور", "expiry_reminder_min_remaining_gb")],
+        [_admin_edit_btn("✍️ ویرایش روزهای یادآور", "expiry_reminder_days"),
+         _admin_edit_btn("✍️ ویرایش حداقل حجم یادآور", "expiry_reminder_min_remaining_gb")],
         [_back_to_settings_btn()]
     ])
-    await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN); return ADMIN_SETTINGS_MENU
+    await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN)
+    return ADMIN_SETTINGS_MENU
 
 async def usage_aggregation_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     usage_agg_on = "فعال ✅" if _get_bool("usage_aggregation_enabled", USAGE_AGGREGATION_ENABLED_CONFIG) else "غیرفعال ❌"
@@ -187,14 +203,13 @@ async def usage_aggregation_submenu(update: Update, context: ContextTypes.DEFAUL
         [_admin_edit_btn("✍️ بازه به‌روزرسانی (دقیقه)", "usage_update_interval_min")],
         [_back_to_settings_btn()]
     ])
-    await _send_or_edit(update, context, text, kb, parse_mode=None); return ADMIN_SETTINGS_MENU
+    await _send_or_edit(update, context, text, kb, parse_mode=None)
+    return ADMIN_SETTINGS_MENU
 
-# --- Global Discount submenu (مدت‌محور) ---
 async def global_discount_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     enabled = "فعال ✅" if _get_bool("global_discount_enabled") else "غیرفعال ❌"
     percent = _get("global_discount_percent", "0")
     days = _get("global_discount_days", "0")
-
     starts_raw = _get("global_discount_starts_at", "")
     expires_raw = _get("global_discount_expires_at", "")
 
@@ -248,10 +263,8 @@ async def toggle_global_discount(update: Update, context: ContextTypes.DEFAULT_T
             db.set_setting("global_discount_expires_at", "")
     else:
         db.set_setting("global_discount_enabled", "0")
-
     return await global_discount_submenu(update, context)
 
-# --- Edit/Save Setting value ---
 def _infer_return_target(key: str) -> str:
     if key.startswith("payment_card_") or key == "payment_instruction_text": return "payment_info"
     if key.startswith("first_charge_"): return "first_charge_promo"
@@ -339,7 +352,6 @@ async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_T
     if dest == "global_discount": return await global_discount_submenu(update, context)
     return await settings_menu(update, context)
 
-# --- Toggles/Back ---
 async def toggle_maintenance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _toggle("maintenance_enabled")
     return await maintenance_and_join_submenu(update, context)
