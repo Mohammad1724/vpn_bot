@@ -55,7 +55,7 @@ def _vol_label(gb: int) -> str:
     return "نامحدود" if g == 0 else f"{utils.to_persian_digits(str(g))} گیگ"
 
 
-def _get_global_discount_params() -> tuple[bool, float, Optional[datetime], Optional[datetime]]:
+def _is_global_discount_active(now: datetime | None = None) -> tuple[bool, float]:
     enabled = str(db.get_setting("global_discount_enabled") or "0").lower() in ("1", "true", "on", "yes")
     try:
         percent = float(db.get_setting("global_discount_percent") or 0)
@@ -63,11 +63,7 @@ def _get_global_discount_params() -> tuple[bool, float, Optional[datetime], Opti
         percent = 0.0
     starts = utils.parse_date_flexible(db.get_setting("global_discount_starts_at")) if db.get_setting("global_discount_starts_at") else None
     expires = utils.parse_date_flexible(db.get_setting("global_discount_expires_at")) if db.get_setting("global_discount_expires_at") else None
-    return enabled, max(percent, 0.0), starts, expires
 
-
-def _is_global_discount_active(now: datetime | None = None) -> tuple[bool, float]:
-    enabled, percent, starts, expires = _get_global_discount_params()
     if not enabled or percent <= 0:
         return False, 0.0
     now = now or datetime.now().astimezone()
@@ -108,18 +104,6 @@ def _calc_promo_discount(user_id: int, plan_price: float, promo_code_in: str | N
     if code_data['first_purchase_only'] and db.get_user_purchase_count(user_id) > 0:
         return 0, "این کد تخفیف فقط برای خرید اول است."
     return int(float(plan_price) * (int(code_data['percent']) / 100.0)), ""
-
-
-def _build_copyable_link_message(link: str, title: str = "لینک اشتراک") -> tuple[str, InlineKeyboardMarkup, str]:
-    """
-    متن و کیبورد برای لینک قابل کپی با یک ضربه می‌سازد.
-    """
-    # LRI/PDI برای ایزوله کردن جهت لینک در متن فارسی
-    lri, pdi = "\u2066", "\u2069"
-    safe_link = f"{lri}{link}{pdi}"
-    text = f"🔗 **{title}**\n`{safe_link}`\n\n👆 با یک لمس روی لینک بالا، کپی می‌شود."
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("🚀 باز کردن لینک", url=link)]])
-    return text, kb, ParseMode.MARKDOWN
 
 
 # ---------------- لیست و دسته‌بندی پلن‌ها ----------------
@@ -244,7 +228,6 @@ async def back_to_cats_from_name(update: Update, context: ContextTypes.DEFAULT_T
         await q.message.edit_text("بازگشت به انتخاب دسته‌بندی‌ها...")
     except Exception:
         pass
-    # بازگشت به لیست دسته‌بندی‌ها
     await buy_service_list(update, context)
     return ConversationHandler.END
 
@@ -477,7 +460,6 @@ async def _send_service_info_to_user(context, user_id, new_uuid, plan):
         await context.bot.send_message(chat_id=user_id, text="❌ خطای داخلی: سرویس ساخته شد اما در دیتابیس یافت نشد.")
         return
 
-    # صبر هوشمند برای آپدیت شدن اطلاعات در پنل
     user_data = None
     expected_days = getattr(hiddify_api, "_compensate_days", lambda x: int(x))(int(plan['days']))
     for attempt in range(5):
@@ -500,16 +482,13 @@ async def _send_service_info_to_user(context, user_id, new_uuid, plan):
             user_data, service_db_record=new_service_record, title="🎉 سرویس شما فعال شد", override_sub_url=final_link
         )
         inline_kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🚀 باز کردن لینک", url=final_link)],
             [InlineKeyboardButton("📚 راهنمای اتصال", callback_data="guide_connection"),
              InlineKeyboardButton("📋 سرویس‌های من", callback_data="back_to_services")]
         ])
         await context.bot.send_photo(
             chat_id=user_id, photo=InputFile(qr_bio), caption=caption, parse_mode=ParseMode.MARKDOWN, reply_markup=inline_kb
         )
-        # ارسال لینک قابل کپی
-        link_text, link_kb, link_pm = _build_copyable_link_message(final_link, "لینک اشتراک شما")
-        await context.bot.send_message(chat_id=user_id, text=link_text, reply_markup=link_kb, parse_mode=link_pm)
-
         await context.bot.send_message(chat_id=user_id, text="منوی اصلی:", reply_markup=get_main_menu_keyboard(user_id))
     else:
         await context.bot.send_message(
