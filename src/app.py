@@ -112,9 +112,10 @@ def build_application():
     # --------- CHARGE (user) ----------
     charge_conv = ConversationHandler(
         entry_points=[
-            # ساده و مقاوم: هر پیامی که شامل ایموجی 💳 باشد
+            # هر پیامی که ایموجی 💳 داشته باشه → منوی شارژ
             MessageHandler(filters.Regex(r'.*💳.*') & user_filter, check_channel_membership(charge_h.charge_menu_start)),
-            CallbackQueryHandler(check_channel_membership(charge_h.charge_menu_start), pattern=r"^user_start_charge$"),
+            # دکمه‌های شیشه‌ای از هر منو (منوی اصلی/اطلاعات حساب/...)
+            CallbackQueryHandler(check_channel_membership(charge_h.charge_menu_start), pattern=r'^(user_start_charge|acc_start_charge|acc_charge)$'),
         ],
         states={
             constants.CHARGE_MENU: [
@@ -201,11 +202,11 @@ def build_application():
             CallbackQueryHandler(admin_plans.add_plan_start, pattern=r'^admin_add_plan$'),
         ],
         states={
-            constants.PLAN_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_name_received)],
-            constants.PLAN_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_price_received)],
-            constants.PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_days_received)],
-            constants.PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_gb_received)],
-            constants.PLAN_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_category_received)],
+            constants.PLAN_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_name_received)],
+            constants.PLAN_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_price_received)],
+            constants.PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_days_received)],
+            constants.PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_gb_received)],
+            constants.PLAN_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_category_received)],
         },
         fallbacks=[CommandHandler('cancel', admin_plans.cancel_add_plan)],
         map_to_parent={ConversationHandler.END: constants.PLAN_MENU},
