@@ -35,12 +35,6 @@ def _inline_back_to_plan_menu() -> InlineKeyboardMarkup:
     ])
 
 
-def _inline_header_for_list() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔙 بازگشت به مدیریت پلن‌ها", callback_data="admin_plans")]
-    ])
-
-
 def _inline_footer_for_list() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🔙 بازگشت به مدیریت پلن‌ها", callback_data="admin_plans")]
@@ -104,7 +98,7 @@ async def _send_or_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, text
 def _get_pl_store(context: ContextTypes.DEFAULT_TYPE):
     store = context.user_data.get('plan_list_store')
     if not store:
-        store = {'chat_id': None, 'msg_ids': [], 'anchor_msg_id': None}
+        store = {'chat_id': None, 'msg_ids': []}
         context.user_data['plan_list_store'] = store
     return store
 
@@ -113,15 +107,6 @@ async def _store_sent_message(context: ContextTypes.DEFAULT_TYPE, msg):
     st = _get_pl_store(context)
     st['chat_id'] = msg.chat_id
     st['msg_ids'].append(msg.message_id)
-
-
-async def _set_anchor_from_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    if not q:
-        return
-    st = _get_pl_store(context)
-    st['chat_id'] = q.message.chat_id
-    st['anchor_msg_id'] = q.message.message_id
 
 
 async def _purge_plan_list_messages(context: ContextTypes.DEFAULT_TYPE):
@@ -143,7 +128,7 @@ async def plan_management_menu(update: Update, context: ContextTypes.DEFAULT_TYP
     """
     بازگشت به منوی مدیریت پلن‌ها:
     - کارت‌های لیست موجود پاک می‌شوند
-    - همان پیام سرتیتر (anchor) ادیت می‌شود (یا اگر نبود، پیام جدید ارسال می‌شود)
+    - همان پیام فعلی ادیت می‌شود (یا اگر Callback نبود، پیام جدید ارسال می‌شود)
     """
     await _purge_plan_list_messages(context)
     await _send_or_edit(update, context, "🧩 بخش مدیریت پلن‌ها", reply_markup=_plan_menu_inline(), parse_mode=None)
@@ -152,36 +137,34 @@ async def plan_management_menu(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def list_plans_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    نمایش لیست پلن‌ها به‌صورت کارت‌های جدا + یک پیام سرتیتر (anchor) و یک فوتر در پایین.
-    - پیام Callback فعلی به سرتیتر تبدیل و ذخیره می‌شود (با دکمه بازگشت).
+    نمایش لیست پلن‌ها به‌صورت کارت‌های جدا + یک فوتر در پایین.
+    - پیام تریگر (Callback) حذف می‌شود تا «سرتیتر» بالای لیست باقی نماند.
     - برای هر پلن یک کارت خوانا با دکمه‌های کنترل ارسال می‌شود.
     - در انتها یک فوتر با دکمه بازگشت ارسال می‌شود تا نیازی به اسکرول نباشد.
-    - هنگام بازگشت به مدیریت پلن‌ها، کارت‌ها و فوتر پاک و سرتیتر ادیت می‌شود.
+    - هنگام بازگشت به مدیریت پلن‌ها، کارت‌ها و فوتر پاک می‌شود و همان پیام فوتر ادیت می‌گردد.
     """
     q = getattr(update, "callback_query", None)
+    chat_id = q.from_user.id if q else update.effective_chat.id
+
     if q:
-        await q.answer()
-        # پیام فعلی را به سرتیتر تبدیل و به‌عنوان anchor ذخیره کن
-        await _set_anchor_from_callback(update, context)
         try:
-            await q.edit_message_text(
-                text="📋 لیست پلن‌ها (برای مدیریت از دکمه‌های کارت هر پلن استفاده کنید):",
-                reply_markup=_inline_header_for_list(),
-                parse_mode=None,
-                disable_web_page_preview=True
-            )
-        except BadRequest:
+            await q.answer()
+        except Exception:
+            pass
+        # پیام فعلی را حذف کن تا بالای لیست پیامی نماند
+        try:
+            await q.message.delete()
+        except Exception:
             pass
 
     # پاکسازی کارت‌ها و فوتر قبلی (اگر بودند)
     await _purge_plan_list_messages(context)
 
     plans = db.list_plans(only_visible=False)
-    chat_id = q.from_user.id if q else update.effective_chat.id
 
     if not plans:
-        # اگر پلنی نبود، همان پیام سرتیتر را ادیت کن
-        await _send_or_edit(update, context, "هیچ پلنی تعریف نشده است.", reply_markup=_inline_back_to_plan_menu(), parse_mode=None)
+        # اگر پلنی نبود، پیام ساده با دکمه بازگشت بفرست
+        await context.bot.send_message(chat_id=chat_id, text="هیچ پلنی تعریف نشده است.", reply_markup=_inline_back_to_plan_menu())
         return PLAN_MENU
 
     # برای هر پلن یک کارت ارسال کن
@@ -465,7 +448,7 @@ async def admin_toggle_plan_visibility_callback(update: Update, context: Context
     return PLAN_MENU
 
 
-# ---------- بازگشت به منوی ادمین (anchor ادیت می‌شود) ----------
+# ---------- بازگشت به منوی ادمین (پاکسازی کارت‌ها) ----------
 
 async def back_to_admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
