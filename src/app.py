@@ -112,11 +112,8 @@ def build_application():
     # --------- CHARGE ----------
     charge_conv = ConversationHandler(
         entry_points=[
-            # الگوی مقاوم برای «شارژ حساب» شامل RLM/LRM/ZWNJ/ZWJ و فاصله‌ها
-            MessageHandler(
-                filters.Regex(r'^[\u200f\u200e\u200c\u200d\s]*💳\s*شار[\u200c\u200d]?\s*حساب[\u200f\u200e\u200c\u200d\s]*$') & user_filter,
-                check_channel_membership(charge_h.charge_menu_start),
-            ),
+            # هر پیامی که شامل ایموجی 💳 باشد را می‌گیریم (مقاوم و ساده)
+            MessageHandler(filters.Regex(r'.*💳.*') & user_filter, check_channel_membership(charge_h.charge_menu_start)),
             CallbackQueryHandler(check_channel_membership(charge_h.charge_menu_start), pattern=r"^user_start_charge$"),
         ],
         states={
@@ -209,7 +206,7 @@ def build_application():
             constants.PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_days_received)],
             constants.PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_gb_received)],
             constants.PLAN_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_category_received)],
-        },
+        ],
         fallbacks=[CommandHandler('cancel', admin_plans.cancel_add_plan)],
         map_to_parent={ConversationHandler.END: constants.PLAN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
@@ -238,7 +235,7 @@ def build_application():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_category_received),
                 CommandHandler('skip', admin_plans.skip_edit_plan_category)
             ],
-        },
+        ],
         fallbacks=[CommandHandler('cancel', admin_plans.cancel_edit_plan)],
         map_to_parent={ConversationHandler.END: constants.PLAN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
@@ -636,11 +633,8 @@ def build_application():
         MessageHandler(filters.Regex(r'^👤 اطلاعات حساب کاربری$'), check_channel_membership(start_h.show_account_info)),
         MessageHandler(filters.Regex(r'^📚 راهنما$'), check_channel_membership(start_h.show_guide)),
         MessageHandler(filters.Regex(r'^🧪 سرویس تست$'), check_channel_membership(trial_get_trial_service)),
-        # هندلر اضافی برای شارژ حساب (اگر ConversationHandler نگرفت)
-        MessageHandler(
-            filters.Regex(r'^[\u200f\u200e\u200c\u200d\s]*💳\s*شار[\u200c\u200d]?\s*حساب[\u200f\u200e\u200c\u200d\s]*$'),
-            check_channel_membership(charge_h.charge_menu_start),
-        ),
+        # هندلر اضافی برای شارژ حساب (اگر به هر دلیل entry_points کانورسیشن نگرفت)
+        MessageHandler(filters.Regex(r'.*💳.*'), check_channel_membership(charge_h.charge_menu_start)),
     ]
     for h in main_menu_handlers:
         application.add_handler(h, group=1)
