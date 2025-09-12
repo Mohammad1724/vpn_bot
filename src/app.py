@@ -516,7 +516,7 @@ def build_application():
     application.add_handler(buy_conv, group=0)
     application.add_handler(gift_conv, group=0)
     application.add_handler(charge_conv, group=0)
-    application.add_handler(transfer_conv, group=0)
+    application.add_handler(transfer_conv, group=2)
     application.add_handler(gift_from_balance_conv, group=0)
     application.add_handler(support_conv, group=0)
     application.add_handler(admin_conv, group=0)
