@@ -8,6 +8,7 @@ from typing import Union, Optional, Tuple
 from datetime import datetime, timedelta, timezone
 import math
 import re
+from urllib.parse import quote_plus
 
 import qrcode
 import database as db
@@ -103,19 +104,36 @@ def _ensure_https_host(host: str) -> str:
     return h.strip("/")
 
 
-def build_subscription_url(user_uuid: str) -> str:
+def build_subscription_url(user_uuid: str, link_type: str | None = None, name: str | None = None) -> str:
     from urllib.parse import urlparse
     import random
     
     domain = (random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN)
     host = _ensure_https_host(domain)
     client_secret = _clean_path(PANEL_SECRET_UUID)
+    sub_path = _clean_path(SUB_PATH) or "sub"
 
-    if client_secret:
-        return f"https://{host}/{client_secret}/{user_uuid}/"
+    base_user_path = f"https://{host}/{client_secret}/{user_uuid}" if client_secret else f"https://{host}/{sub_path}/{user_uuid}"
+    
+    # اگر نوع لینک مشخص نشده، از تنظیمات پیش‌فرض ادمین بخوان
+    if link_type is None:
+        link_type = db.get_setting("default_sub_link_type") or "sub"
+    
+    normalized_type = normalize_link_type(link_type)
+    safe_name = quote_plus(name) if name else ""
+
+    if normalized_type == "sub":
+        # لینک استاندارد sub از # برای نام استفاده می‌کند
+        final_url = f"{base_user_path}/"
+        if safe_name:
+            final_url += f"#{safe_name}"
+        return final_url
     else:
-        sub_path = _clean_path(SUB_PATH) or "sub"
-        return f"https://{host}/{sub_path}/{user_uuid}/"
+        # سایر لینک‌ها از suffix و پارامتر name استفاده می‌کنند
+        final_url = f"{base_user_path}/{normalized_type}/"
+        if safe_name:
+            final_url += f"?name={safe_name}"
+        return final_url
 
 
 def make_qr_bytes(data: str) -> io.BytesIO:
