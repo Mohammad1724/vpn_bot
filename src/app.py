@@ -79,7 +79,7 @@ def build_application():
             constants.GET_CUSTOM_NAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, buy_h.get_custom_name),
                 CallbackQueryHandler(buy_h.back_to_cats_from_name, pattern=r'^buy_back_to_cats$'),
-                CallbackQueryHandler(buy_h.skip_name_callback, pattern=r'^buy_skip_name$'),
+                CallbackQueryHandler(buy_h.skip_promo_callback, pattern=r'^buy_skip_name$'),
                 CallbackQueryHandler(buy_h.cancel_buy_callback, pattern=r'^buy_cancel$'),
             ],
             constants.PROMO_CODE_ENTRY: [
@@ -101,9 +101,7 @@ def build_application():
             MessageHandler(filters.Regex(r'^🎁 کد هدیه$') & user_filter, check_channel_membership(gift_h.gift_code_entry))
         ],
         states={
-            constants.REDEEM_GIFT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, gift_h.redeem_gift_code)
-            ],
+            constants.REDEEM_GIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, gift_h.redeem_gift_code)]
         },
         fallbacks=[CommandHandler('cancel', start_h.user_generic_cancel)],
         per_user=True, per_chat=True
@@ -114,7 +112,7 @@ def build_application():
         entry_points=[
             # هر پیامی که ایموجی 💳 داشته باشه → منوی شارژ
             MessageHandler(filters.Regex(r'.*💳.*') & user_filter, check_channel_membership(charge_h.charge_menu_start)),
-            # دکمه‌های شیشه‌ای از هر منو (منوی اصلی/اطلاعات حساب/...)
+            # کال‌بک از هر منو: منوی اصلی/اطلاعات حساب/...
             CallbackQueryHandler(check_channel_membership(charge_h.charge_menu_start), pattern=r'^(user_start_charge|acc_start_charge|acc_charge)$'),
         ],
         states={
@@ -140,40 +138,27 @@ def build_application():
             CommandHandler('cancel', charge_h.charge_cancel),
             CallbackQueryHandler(start_h.start, pattern=r"^home_menu$"),
         ],
-        per_user=True, per_chat=True
+        per_user=True, per_chat=True,
+        allow_reentry=True  # مهم: اجازه ورود مجدد از مسیرهای مختلف
     )
 
     # --------- TRANSFER ----------
     transfer_conv = ConversationHandler(
-        entry_points=[
-            CallbackQueryHandler(check_channel_membership(acc_act.transfer_start), pattern=r"^acc_transfer_start$")
-        ],
+        entry_points=[CallbackQueryHandler(check_channel_membership(acc_act.transfer_start), pattern=r"^acc_transfer_start$")],
         states={
-            constants.TRANSFER_RECIPIENT_ID: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, acc_act.transfer_recipient_received)
-            ],
-            constants.TRANSFER_AMOUNT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, acc_act.transfer_amount_received)
-            ],
-            constants.TRANSFER_CONFIRM: [
-                CallbackQueryHandler(acc_act.transfer_confirm, pattern=r"^transfer_confirm_")
-            ],
+            constants.TRANSFER_RECIPIENT_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, acc_act.transfer_recipient_received)],
+            constants.TRANSFER_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, acc_act.transfer_amount_received)],
+            constants.TRANSFER_CONFIRM: [CallbackQueryHandler(acc_act.transfer_confirm, pattern=r"^transfer_confirm_")],
         },
         fallbacks=[CommandHandler('cancel', acc_act.transfer_cancel)]
     )
 
     # --------- GIFT FROM BALANCE ----------
     gift_from_balance_conv = ConversationHandler(
-        entry_points=[
-            CallbackQueryHandler(check_channel_membership(acc_act.create_gift_from_balance_start), pattern=r"^acc_gift_from_balance_start$")
-        ],
+        entry_points=[CallbackQueryHandler(check_channel_membership(acc_act.create_gift_from_balance_start), pattern=r"^acc_gift_from_balance_start$")],
         states={
-            constants.GIFT_FROM_BALANCE_AMOUNT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, acc_act.create_gift_amount_received)
-            ],
-            constants.GIFT_FROM_BALANCE_CONFIRM: [
-                CallbackQueryHandler(acc_act.create_gift_confirm, pattern=r"^gift_confirm_")
-            ],
+            constants.GIFT_FROM_BALANCE_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, acc_act.create_gift_amount_received)],
+            constants.GIFT_FROM_BALANCE_CONFIRM: [CallbackQueryHandler(acc_act.create_gift_confirm, pattern=r"^gift_confirm_")],
         },
         fallbacks=[CommandHandler('cancel', acc_act.create_gift_cancel)]
     )
@@ -202,12 +187,12 @@ def build_application():
             CallbackQueryHandler(admin_plans.add_plan_start, pattern=r'^admin_add_plan$'),
         ],
         states={
-            constants.PLAN_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_name_received)],
-            constants.PLAN_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_price_received)],
-            constants.PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_days_received)],
-            constants.PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_gb_received)],
-            constants.PLAN_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_category_received)],
-        },
+            constants.PLAN_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_name_received)],
+            constants.PLAN_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_price_received)],
+            constants.PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_days_received)],
+            constants.PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_gb_received)],
+            constants.PLAN_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_category_received)],
+        ],
         fallbacks=[CommandHandler('cancel', admin_plans.cancel_add_plan)],
         map_to_parent={ConversationHandler.END: constants.PLAN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
@@ -296,7 +281,7 @@ def build_application():
                 CallbackQueryHandler(admin_users.broadcast_cancel_cb, pattern=r'^bcast_menu$'),
                 CallbackQueryHandler(admin_c.admin_entry, pattern=r'^admin_panel$'),
             ],
-        },
+        ],
         fallbacks=[CommandHandler('cancel', admin_c.admin_generic_cancel)],
         map_to_parent={ConversationHandler.END: constants.ADMIN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
@@ -427,7 +412,7 @@ def build_application():
         CallbackQueryHandler(admin_settings.service_configs_submenu, pattern=r"^settings_service_configs$"),
         CallbackQueryHandler(admin_settings.subdomains_submenu, pattern=r"^settings_subdomains$"),
         CallbackQueryHandler(admin_settings.reports_and_reminders_submenu, pattern=r"^settings_reports_reminders$"),
-        CallbackQueryHandler(admin_settings.usage_aggregation_submenu, pattern=r"^settings_usage_aggregation$"),
+        CallbackQueryHandler(admin_settings.usage_aggregation_submenu, pattern=r"^settings_aggregation$") if hasattr(admin_settings, "usage_aggregation_submenu") else CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^settings_usage_aggregation$"),
 
         CallbackQueryHandler(admin_settings.toggle_usage_aggregation, pattern=r"^toggle_usage_aggregation$"),
         CallbackQueryHandler(admin_settings.edit_default_link_start, pattern=r"^edit_default_link_type$"),
@@ -634,8 +619,7 @@ def build_application():
         MessageHandler(filters.Regex(r'^👤 اطلاعات حساب کاربری$'), check_channel_membership(start_h.show_account_info)),
         MessageHandler(filters.Regex(r'^📚 راهنما$'), check_channel_membership(start_h.show_guide)),
         MessageHandler(filters.Regex(r'^🧪 سرویس تست$'), check_channel_membership(trial_get_trial_service)),
-        # هندلر اضافی برای شارژ حساب (اگر به هر دلیل entry_points کانورسیشن نگرفت)
-        MessageHandler(filters.Regex(r'.*💳.*'), check_channel_membership(charge_h.charge_menu_start)),
+        # توجه: هندلر اضافی برای 💳 در منوی اصلی حذف شد تا دوباره‌کاری رخ ندهد
     ]
     for h in main_menu_handlers:
         application.add_handler(h, group=1)
