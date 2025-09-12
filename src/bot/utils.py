@@ -8,7 +8,7 @@ from typing import Union, Optional, Tuple
 from datetime import datetime, timedelta, timezone
 import math
 import re
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 
 import qrcode
 import database as db
@@ -87,8 +87,30 @@ def parse_date_flexible(date_str: Union[str, int, float]) -> Union[datetime, Non
     return None
 
 
+def _to_float(x, default=0.0) -> float:
+    try:
+        if x is None or (isinstance(x, str) and x.strip().lower() in ("", "none", "null", "nan")):
+            return float(default)
+        return float(x)
+    except Exception:
+        return float(default)
+
+
+def _to_int(x, default=0) -> int:
+    try:
+        if x is None or (isinstance(x, str) and x.strip().lower() in ("", "none", "null", "nan")):
+            return int(default)
+        return int(float(x))
+    except Exception:
+        return int(default)
+
+
 def normalize_link_type(t: str) -> str:
-    return (t or "sub").strip().lower().replace("clash-meta", "clashmeta")
+    lt = (t or "sub").strip().lower().replace("clash-meta", "clashmeta")
+    # نگاشت گزینه‌های پشتیبانی‌نشده به sub
+    if lt in ("auto", "sub64", "xray", "v2ray"):
+        lt = "sub"
+    return lt
 
 
 def _clean_path(seg: Optional[str]) -> str:
@@ -104,32 +126,84 @@ def _ensure_https_host(host: str) -> str:
     return h.strip("/")
 
 
-def build_subscription_url(user_uuid: str, link_type: str | None = None, name: str | None = None) -> str:
-    from urllib.parse import urlparse
+def _hostname_only(s: str) -> str:
+    s = (s or "").strip()
+    if not s:
+        return ""
+    if "://" not in s:
+        s = "https://" + s
+    p = urlparse(s)
+    return (p.netloc or "").strip()
+
+
+def _normalize_subdomains(sd):
+    if isinstance(sd, str):
+        parts = [p.strip() for p in sd.split(",") if p.strip()]
+    else:
+        parts = [str(x).strip() for x in (sd or []) if str(x).strip()]
+    return [_hostname_only(p) for p in parts]
+
+
+def _parse_domains_csv(s: str) -> list[str]:
+    return [h.strip() for h in (s or "").split(",") if h.strip()]
+
+
+def _pick_domains_from_settings(plan_gb: int | None) -> list[str]:
+    """
+    انتخاب دامنه‌ها بر اساس تنظیمات دیتابیس:
+      - اگر plan_gb مشخص باشد:
+          - نامحدود (gb<=0): unlimited_sub_domains
+          - حجمی (gb>0): volume_based_sub_domains
+      - در غیر این صورت: sub_domains عمومی
+      - در نهایت fallback به config.SUB_DOMAINS یا PANEL_DOMAIN
+    """
+    # انتخاب اختصاصی بر اساس نوع پلن
+    if plan_gb is not None:
+        try:
+            g = int(plan_gb)
+        except Exception:
+            g = None
+        if g is not None and g <= 0:
+            raw = db.get_setting("unlimited_sub_domains")
+            if raw:
+                return _normalize_subdomains(_parse_domains_csv(raw))
+        elif g is not None and g > 0:
+            raw = db.get_setting("volume_based_sub_domains")
+            if raw:
+                return _normalize_subdomains(_parse_domains_csv(raw))
+
+    # عمومی
+    gen = db.get_setting("sub_domains")
+    if gen:
+        return _normalize_subdomains(_parse_domains_csv(gen))
+
+    # fallback
+    return _normalize_subdomains(SUB_DOMAINS) or [_hostname_only(PANEL_DOMAIN)]
+
+
+def build_subscription_url(user_uuid: str, link_type: str | None = None, name: str | None = None, plan_gb: int | None = None) -> str:
     import random
-    
-    domain = (random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN)
-    host = _ensure_https_host(domain)
+
+    domains = _pick_domains_from_settings(plan_gb)
+    host = _hostname_only(random.choice(domains) if domains else PANEL_DOMAIN)
     client_secret = _clean_path(PANEL_SECRET_UUID)
     sub_path = _clean_path(SUB_PATH) or "sub"
 
     base_user_path = f"https://{host}/{client_secret}/{user_uuid}" if client_secret else f"https://{host}/{sub_path}/{user_uuid}"
-    
+
     # اگر نوع لینک مشخص نشده، از تنظیمات پیش‌فرض ادمین بخوان
     if link_type is None:
         link_type = db.get_setting("default_sub_link_type") or "sub"
-    
+
     normalized_type = normalize_link_type(link_type)
     safe_name = quote_plus(name) if name else ""
 
     if normalized_type == "sub":
-        # لینک استاندارد sub از # برای نام استفاده می‌کند
         final_url = f"{base_user_path}/"
         if safe_name:
             final_url += f"#{safe_name}"
         return final_url
     else:
-        # سایر لینک‌ها از suffix و پارامتر name استفاده می‌کنند
         final_url = f"{base_user_path}/{normalized_type}/"
         if safe_name:
             final_url += f"?name={safe_name}"
@@ -238,13 +312,16 @@ def _format_expiry_and_days(user_data: dict, service_db_record: Optional[dict] =
 
     return expire_jalali, int(days_left_via_expire or 0)
 
+
 def create_progress_bar(used, total, blocks=10):
-    if total <= 0: return "", 0
+    if total <= 0:
+        return "", 0
     ratio = min(1.0, used / total)
     percent = int(ratio * 100)
     filled = int(ratio * blocks)
     bar = "▰" * filled + "▱" * (blocks - filled)
     return bar, percent
+
 
 def create_service_info_caption(
     hiddify_user_info: dict,
@@ -253,25 +330,26 @@ def create_service_info_caption(
     override_sub_url: str | None = None
 ) -> str:
     status, jalali_exp, is_expired = get_service_status(hiddify_user_info)
-    
-    usage_limit = float(hiddify_user_info.get('usage_limit_GB', 0))
-    current_usage = float(hiddify_user_info.get('current_usage_GB', 0))
-    
+
+    usage_limit = _to_float(hiddify_user_info.get('usage_limit_GB'), 0.0)
+    current_usage = _to_float(hiddify_user_info.get('current_usage_GB'), 0.0)
+
     bar, percent = create_progress_bar(current_usage, usage_limit)
-    
+
     name = service_db_record.get('name') or hiddify_user_info.get('name') or "سرویس"
 
     link = override_sub_url or service_db_record.get('sub_link')
-    
+    safe_link_md = f"`{str(link).replace('`','\\`')}`" if link else "—"
+
     traffic_str = "نامحدود" if usage_limit <= 0 or usage_limit > UNLIMITED_DISPLAY_THRESHOLD_GB else f"{current_usage:.2f}/{int(usage_limit)} GB"
 
     caption = (
         f"{title}\n\n"
         f"🆔 {name}\n"
-        f"⏳ {int(hiddify_user_info.get('package_days', 0))} روز | 📅 تا {jalali_exp}\n\n"
+        f"⏳ {int(_to_int(hiddify_user_info.get('package_days'), 0))} روز | 📅 تا {jalali_exp}\n\n"
         f"📦 ترافیک: {traffic_str}\n"
         f"{bar} {percent}%\n\n"
-        f"🔗 لینک اشتراک (با یک لمس کپی می‌شود):\n`{link}`"
+        f"🔗 لینک اشتراک (با یک لمس کپی می‌شود):\n{safe_link_md}"
     )
     return caption
 
@@ -279,11 +357,12 @@ def create_service_info_caption(
 def get_service_status(hiddify_info: dict) -> Tuple[str, str, bool]:
     expire_jalali, days_left = _format_expiry_and_days(hiddify_info, None)
     is_expired = days_left <= 0
-    if hiddify_info.get('status') in ('disabled', 'limited'):
+    status_field = str(hiddify_info.get('status') or '').lower()
+    if status_field in ('disabled', 'limited'):
         is_expired = True
 
-    usage_limit = float(hiddify_info.get('usage_limit_GB', 0) or 0)
-    current_usage = float(hiddify_info.get('current_usage_GB', 0) or 0)
+    usage_limit = _to_float(hiddify_info.get('usage_limit_GB'), 0.0)
+    current_usage = _to_float(hiddify_info.get('current_usage_GB'), 0.0)
     if usage_limit > 0 and current_usage >= usage_limit:
         is_expired = True
 
