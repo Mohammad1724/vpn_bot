@@ -1,4 +1,3 @@
-# filename: bot/handlers/buy.py
 # -*- coding: utf-8 -*-
 
 import asyncio
