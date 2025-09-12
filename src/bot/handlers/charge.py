@@ -36,16 +36,38 @@ def _get_payment_info_text() -> str:
 
 # --- Handlers ---
 async def charge_menu_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    منوی اصلی شارژ. فقط اگر ورودی از دکمه «اطلاعات حساب کاربری» بوده باشد،
+    ردیف «🔙 بازگشت» به همان صفحه نشان داده می‌شود.
+    """
     q = getattr(update, "callback_query", None)
     if q:
         await q.answer()
+        data = q.data or ""
+        # تشخیص ورودی از اطلاعات حساب کاربری vs منوی اصلی
+        if data in ("acc_start_charge", "acc_charge"):
+            context.user_data['charge_from_acc'] = True
+        elif data in ("user_start_charge",):
+            context.user_data['charge_from_acc'] = False
+        elif data == "charge_menu_main":
+            # بازگشت داخلی به منوی شارژ: فلگ را دست‌نخورده بگذار
+            pass
+    else:
+        # ورودی متنی با ایموجی 💳 از منوی اصلی
+        context.user_data['charge_from_acc'] = False
+
+    from_acc = bool(context.user_data.get('charge_from_acc', False))
 
     keyboard = [
         [btn("💰 شارژ رایگان (معرفی دوستان)", "acc_referral")],
         [btn("💳 شارژ حساب (واریز)", "charge_start_payment")],
-        # تغییر این ردیف: اضافه شدن دکمه «بازگشت» به اطلاعات حساب کاربری
-        nav_row(back_cb="acc_back_to_main", home_cb="home_menu")
     ]
+
+    # اگر از اطلاعات حساب وارد شده است → ردیف بازگشت به همان صفحه اضافه کن
+    if from_acc:
+        keyboard.append(nav_row(back_cb="acc_back_to_main", home_cb="home_menu"))
+    else:
+        keyboard.append(nav_row(home_cb="home_menu"))
 
     text = "**💳 شارژ حساب**\n\nلطفاً یکی از گزینه‌های زیر را انتخاب کنید:"
 
@@ -107,7 +129,6 @@ async def ask_custom_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await q.answer()
 
     kb = [nav_row(back_cb="charge_start_payment_back", home_cb="home_menu")]
-    # اصلاح غلط‌تایپی «لطفاً»
     text = "لطفاً مبلغ دلخواه خود را (به تومان) وارد نمایید:"
 
     await q.edit_message_text(text, reply_markup=markup(kb))
