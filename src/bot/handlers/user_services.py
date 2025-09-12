@@ -90,6 +90,19 @@ async def send_service_details(
         else:
             await context.bot.send_message(chat_id=chat_id, text=text)
         return
+
+    # چک مالکیت
+    if service['user_id'] != chat_id:
+        text = "❌ این سرویس متعلق به شما نیست."
+        if original_message:
+            try:
+                await original_message.edit_text(text)
+            except BadRequest:
+                pass
+        else:
+            await context.bot.send_message(chat_id=chat_id, text=text)
+        return
+
     try:
         info = await hiddify_api.get_user_info(service['sub_uuid'])
         if not info or (isinstance(info, dict) and info.get('_not_found')):
@@ -106,18 +119,20 @@ async def send_service_details(
             return
 
         config_name = (info.get('name', 'config') if isinstance(info, dict) else 'config') or 'config'
-        
-        # ساخت لینک بر اساس تنظیمات ادمین
-        preferred_url = utils.build_subscription_url(service['sub_uuid'], name=config_name)
 
-        caption = utils.create_service_info_caption(info, service_db_record=service, override_sub_url=preferred_url)
+        # انتخاب نوع دامنه بر اساس تنظیمات ادمین و نوع پلن
+        plan = db.get_plan(service['plan_id']) if service.get('plan_id') else None
+        plan_gb = int(plan['gb']) if plan and 'gb' in plan else None
+        preferred_url = utils.build_subscription_url(service['sub_uuid'], name=config_name, plan_gb=plan_gb)
+
+        caption = utils.create_service_info_caption(info, service_db_record=service, title="اطلاعات سرویس شما", override_sub_url=preferred_url)
         keyboard_rows = [
             [
                 btn("🔄 به‌روزرسانی اطلاعات", f"refresh_{service['service_id']}"),
                 btn("🔗 لینک‌های بیشتر", f"more_links_{service['sub_uuid']}"),
             ],
         ]
-        if plan := (db.get_plan(service['plan_id']) if service.get('plan_id') else None):
+        if plan:
             keyboard_rows.append([btn(f"⏳ تمدید سرویس ({int(plan['price']):,} تومان)", f"renew_{service['service_id']}")])
         keyboard_rows.append([btn("🗑️ حذف سرویس", f"delete_service_{service['service_id']}")])
         if is_from_menu:
@@ -151,8 +166,8 @@ async def more_links_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     await q.answer()
     uuid = q.data.split('_')[-1]
     service = db.get_service_by_uuid(uuid)
-    if not service:
-        await q.edit_message_text("سرویس یافت نشد.")
+    if not service or service['user_id'] != q.from_user.id:
+        await q.edit_message_text("❌ سرویس یافت نشد یا متعلق به شما نیست.")
         return
     await show_link_options_menu(q.message, uuid, service['service_id'], is_edit=True, context=context)
 
@@ -185,24 +200,31 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parts = q.data.split('_')
     link_type, user_uuid = parts[1], parts[2]
     service = db.get_service_by_uuid(user_uuid)
-    if not service:
-        await q.edit_message_text("❌ سرویس یافت نشد.")
+    if not service or service['user_id'] != q.from_user.id:
+        await q.edit_message_text("❌ سرویس یافت نشد یا متعلق به شما نیست.")
         return
 
     info = await hiddify_api.get_user_info(user_uuid)
     config_name = (info.get('name', 'config') if isinstance(info, dict) else 'config') or 'config'
 
-    base_link = utils.build_subscription_url(user_uuid)
-    base_user_path = base_link.rsplit('/', 1)[0] if '/' in base_link else base_link
-
+    # برای فایل all.txt باید مسیر پایه uuid بدون suffix نوع لینک باشد
     if link_type == "full":
         try:
             await q.edit_message_text("در حال دریافت کانفیگ‌های تکی... ⏳")
+            base_user_path = _strip_qf_and_sub(service['sub_link'])  # از لینک ذخیره‌شده در DB استفاده می‌کنیم
             full_url = f"{base_user_path}/all.txt"
-            async with httpx.AsyncClient(timeout=20, verify=HIDDIFY_API_VERIFY_SSL, follow_redirects=True) as c:
+
+            verify_ssl = HIDDIFY_API_VERIFY_SSL
+            if not isinstance(verify_ssl, bool):
+                verify_ssl = str(verify_ssl).strip().lower() in ("1", "true", "yes", "on")
+
+            async with httpx.AsyncClient(timeout=20, verify=verify_ssl, follow_redirects=True) as c:
                 resp = await c.get(full_url)
                 resp.raise_for_status()
-            await q.message.delete()
+            try:
+                await q.message.delete()
+            except BadRequest:
+                pass
             await context.bot.send_document(
                 chat_id=q.from_user.id,
                 document=InputFile(io.BytesIO(resp.content), filename=f"{quote_plus(config_name)}_configs.txt"),
@@ -214,20 +236,23 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text("❌ دریافت کانفیگ‌های تکی با خطا مواجه شد.")
         return
 
-    # ساخت لینک مشخص با نوع انتخاب‌شده
-    final_link = utils.build_subscription_url(user_uuid, link_type=link_type, name=config_name)
+    # سایر انواع لینک: بر اساس تنظیمات ادمین + نوع پلن
+    plan = db.get_plan(service['plan_id']) if service.get('plan_id') else None
+    plan_gb = int(plan['gb']) if plan and 'gb' in plan else None
+    final_link = utils.build_subscription_url(user_uuid, link_type=link_type, name=config_name, plan_gb=plan_gb)
 
     try:
         await q.message.delete()
     except BadRequest:
         pass
-    
-    text = f"🔗 **لینک {_link_label(link_type)}**\n`{final_link}`\n\n👆 با یک لمس روی لینک بالا، کپی می‌شود."
-    
+
+    safe_link = str(final_link).replace('`', '\\`')  # جلوگیری از شکست Markdown
+    text = f"🔗 *لینک {_link_label(link_type)}*\n`{safe_link}`\n\n👆 با یک لمس روی لینک بالا، کپی می‌شود."
+
     kb = markup([nav_row(back_cb=f"more_links_{user_uuid}", home_cb="home_menu")])
-    
+
     await context.bot.send_message(
-        chat_id=q.message.chat_id, text=text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN
+        chat_id=q.from_user.id, text=text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN
     )
 
 
@@ -324,8 +349,8 @@ async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TY
     service_id = int(q.data.split('_')[1])
     user_id = q.from_user.id
     service = db.get_service(service_id)
-    if not service:
-        await context.bot.send_message(chat_id=user_id, text="❌ سرویس نامعتبر است.")
+    if not service or service['user_id'] != user_id:
+        await context.bot.send_message(chat_id=user_id, text="❌ سرویس نامعتبر است یا متعلق به شما نیست.")
         return
     plan = db.get_plan(service['plan_id']) if service.get('plan_id') else None
     if not plan:
@@ -340,8 +365,8 @@ async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TY
         await context.bot.send_message(chat_id=user_id, text="❌ دریافت اطلاعات از پنل ممکن نیست.")
         return
 
-    usage_limit = float(info.get('usage_limit_GB', 0))
-    current_usage = float(info.get('current_usage_GB', 0))
+    usage_limit = float(info.get('usage_limit_GB') or 0)
+    current_usage = float(info.get('current_usage_GB') or 0)
     remaining_gb = max(usage_limit - current_usage, 0.0)
     _, jalali_exp, _ = utils.get_service_status(info)
     context.user_data['renewal_service_id'] = service_id
