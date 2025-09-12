@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 
 import logging
-import os
 from datetime import datetime
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -81,42 +80,6 @@ async def admin_conv_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_account_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    
-    # ========== دیباگ شروع ==========
-    logger.info(f"DEBUG show_account_info - user_id: {user_id}, type: {type(user_id)}")
-    
-    # بررسی مسیر دیتابیس
-    db_path = os.path.abspath(db.DB_NAME)
-    logger.info(f"DEBUG - DB path: {db_path}")
-    logger.info(f"DEBUG - DB exists: {os.path.exists(db_path)}")
-    
-    # شمارش رکوردها
-    try:
-        conn = db._connect_db()
-        total_users = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-        total_services = conn.execute("SELECT COUNT(*) FROM active_services").fetchone()[0]
-        logger.info(f"DEBUG - Total users in DB: {total_users}, Total services: {total_services}")
-        
-        # لیست 5 کاربر اول
-        sample_users = conn.execute("SELECT user_id, balance FROM users LIMIT 5").fetchall()
-        for u in sample_users:
-            logger.info(f"DEBUG - Sample user: id={u['user_id']}, balance={u['balance']}")
-        
-        # چک کاربر فعلی
-        user_row = conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
-        if user_row:
-            logger.info(f"DEBUG - User {user_id} found: balance={user_row['balance']}, join_date={user_row['join_date']}")
-        else:
-            logger.info(f"DEBUG - User {user_id} NOT FOUND in database!")
-            
-        # چک سرویس‌های کاربر
-        user_services = conn.execute("SELECT * FROM active_services WHERE user_id = ?", (user_id,)).fetchall()
-        logger.info(f"DEBUG - User {user_id} has {len(user_services)} services")
-        
-    except Exception as e:
-        logger.error(f"DEBUG - Database error: {e}")
-    # ========== دیباگ پایان ==========
-    
     user = db.get_or_create_user(user_id)
     services_count = len(db.get_user_services(user_id))
     referral_count = db.get_user_referral_count(user_id)
@@ -166,18 +129,17 @@ async def show_account_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_purchase_history_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    
-    # ========== دیباگ ==========
-    logger.info(f"DEBUG purchase_history - Called! user_id: {q.from_user.id}")
-    # ========== دیباگ پایان ==========
-    
     await q.answer()
     history = db.get_user_sales_history(q.from_user.id)
-    
-    logger.info(f"DEBUG - Purchase history count: {len(history)}")
-    
+
+    # همیشه پیام کامل با دکمه بازگشت نشان بده (حتی اگر خالی باشد)
     if not history:
-        await q.answer("شما تاکنون خریدی نداشته‌اید.", show_alert=True)
+        msg = "🛍️ **سوابق خرید شما:**\n\n⛔️ سابقه‌ای یافت نشد."
+        kb = [nav_row(back_cb="acc_back_to_main", home_cb="home_menu")]
+        try:
+            await q.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+        except BadRequest:
+            await context.bot.send_message(chat_id=q.from_user.id, text=msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
         return
 
     msg = "🛍️ **سوابق خرید شما:**\n\n"
@@ -186,30 +148,31 @@ async def show_purchase_history_callback(update: Update, context: ContextTypes.D
             sale_date = datetime.strptime(sale['sale_date'], '%Y-%m-%d %H:%M:%S').strftime('%Y/%m/%d')
         except (ValueError, TypeError):
             sale_date = sale['sale_date']
-
-        msg += f"🔹 {sale['plan_name'] or 'پلن حذف شده'} | {sale['price']:.0f} تومان | {sale_date}\n"
+        price_val = sale.get('price', 0)
+        try:
+            price_val = int(float(price_val or 0))
+        except Exception:
+            price_val = 0
+        msg += f"🔹 {sale['plan_name'] or 'پلن حذف شده'} | {price_val:.0f} تومان | {sale_date}\n"
 
     kb = [nav_row(back_cb="acc_back_to_main", home_cb="home_menu")]
-    await q.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+    try:
+        await q.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+    except BadRequest:
+        await context.bot.send_message(chat_id=q.from_user.id, text=msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
 
 async def show_charge_history_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    
-    # ========== دیباگ ==========
-    logger.info(f"DEBUG charge_history - Called! user_id: {q.from_user.id}")
-    # ========== دیباگ پایان ==========
-    
     await q.answer()
     history = db.get_user_charge_history(q.from_user.id)
-    
-    logger.info(f"DEBUG - Charge history count: {len(history)}")
-    
     if not history:
-        # به جای پاپ‌آپ، یک پیام کامل با دکمه بازگشت
         msg = "💸 **سوابق شارژ موفق شما:**\n\nشما تاکنون سابقه شارژ موفقی نداشته‌اید."
         kb = [nav_row(back_cb="acc_back_to_main", home_cb="home_menu")]
-        await q.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+        try:
+            await q.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+        except BadRequest:
+            await context.bot.send_message(chat_id=q.from_user.id, text=msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
         return
 
     msg = "💸 **سوابق شارژ موفق شما:**\n\n"
@@ -218,24 +181,29 @@ async def show_charge_history_callback(update: Update, context: ContextTypes.DEF
             charge_date = datetime.strptime(ch['created_at'], '%Y-%m-%d %H:%M:%S').strftime('%Y/%m/%d')
         except (ValueError, TypeError):
             charge_date = ch['created_at']
-
-        msg += f"🔹 {ch['amount']:.0f} تومان | {charge_date}\n"
+        amount_val = ch.get('amount', 0)
+        try:
+            amount_val = int(float(amount_val or 0))
+        except Exception:
+            amount_val = 0
+        msg += f"🔹 {amount_val:.0f} تومان | {charge_date}\n"
 
     kb = [nav_row(back_cb="acc_back_to_main", home_cb="home_menu")]
-    await q.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+    try:
+        await q.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+    except BadRequest:
+        await context.bot.send_message(chat_id=q.from_user.id, text=msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
 
 async def show_charging_guide_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    
-    # ========== دیباگ ==========
-    logger.info(f"DEBUG charging_guide - Called! user_id: {q.from_user.id}")
-    # ========== دیباگ پایان ==========
-    
     await q.answer()
     guide = _get_payment_info_text()
     kb = [nav_row(back_cb="acc_back_to_main", home_cb="home_menu")]
-    await q.edit_message_text(guide, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+    try:
+        await q.edit_message_text(guide, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+    except BadRequest:
+        await context.bot.send_message(chat_id=q.from_user.id, text=guide, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
 
 async def show_guide(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -302,7 +270,7 @@ async def back_to_guide_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     buttons = [
         btn("📱 راهنمای اتصال", "guide_connection"),
         btn("💳 راهنمای شارژ حساب", "guide_charging"),
-       btn("🛍️ راهنمای خرید از ربات", "guide_buying"),
+        btn("🛍️ راهنمای خرید از ربات", "guide_buying"),
     ]
     rows = chunk(buttons, cols=2)
     rows.append(nav_row(home_cb="home_menu"))
