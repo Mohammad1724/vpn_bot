@@ -139,7 +139,8 @@ async def payment_info_submenu(update: Update, context: ContextTypes.DEFAULT_TYP
     rows = [[_admin_edit_btn("✍️ ویرایش راهنمای پرداخت", "payment_instruction_text")]]
     for i in range(1, 4):
         rows.append([_admin_edit_btn(f"کارت {i}", f"payment_card_{i}_number"), _admin_edit_btn(f"صاحب کارت {i}", f"payment_card_{i}_name"), _admin_edit_btn(f"بانک {i}", f"payment_card_{i}_bank")])
-    rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="payment_info_submenu")])
+    # اصلاح: بازگشت به منوی «پرداخت و راهنماها»
+    rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="settings_payment_guides")])
     await _send_or_edit(update, context, text, _kb(rows), parse_mode=ParseMode.MARKDOWN); return ADMIN_SETTINGS_MENU
 
 async def service_configs_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -359,6 +360,7 @@ async def edit_default_link_start(update: Update, context: ContextTypes.DEFAULT_
         [InlineKeyboardButton("🔙 بازگشت", callback_data="settings_service_configs")]
     ])
     await _send_or_edit(update, context, text, kb, parse_mode=None)
+    return ADMIN_SETTINGS_MENU  # افزودن بازگشت state برای پایداری کانورسیشن
 
 async def set_default_link_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = getattr(update, "callback_query", None)
@@ -382,4 +384,4 @@ async def back_to_admin_menu_cb(update: Update, context: ContextTypes.DEFAULT_TY
         await context.bot.send_message(chat_id=q.from_user.id, text="🔙 بازگشت به منوی مدیریت", reply_markup=get_admin_menu_keyboard())
     else:
         await update.effective_message.reply_text("🔙 بازگشت به منوی مدیریت", reply_markup=get_admin_menu_keyboard())
-    return ConversationHandler.END
+    return ADMIN_MENU  # اصلاح: کانورسیشن باز بماند، دکمه‌ها فعال بمانند
