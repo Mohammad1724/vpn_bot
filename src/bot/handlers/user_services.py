@@ -191,10 +191,9 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     info = await hiddify_api.get_user_info(user_uuid)
     config_name = (info.get('name', 'config') if isinstance(info, dict) else 'config') or 'config'
-    safe_name = quote_plus(config_name)
 
     base_link = utils.build_subscription_url(user_uuid)
-    base_user_path = base_link.rsplit('/', 1)[0]
+    base_user_path = base_link.rsplit('/', 1)[0] if '/' in base_link else base_link
 
     if link_type == "full":
         try:
@@ -206,7 +205,7 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.message.delete()
             await context.bot.send_document(
                 chat_id=q.from_user.id,
-                document=InputFile(io.BytesIO(resp.content), filename=f"{safe_name}_configs.txt"),
+                document=InputFile(io.BytesIO(resp.content), filename=f"{quote_plus(config_name)}_configs.txt"),
                 caption="📄 کانفیگ‌های تکی شما به صورت فایل ارسال شد.",
                 reply_markup=markup([nav_row(back_cb=f"more_links_{user_uuid}", home_cb="home_menu")])
             )
@@ -216,7 +215,7 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # ساخت لینک مشخص با نوع انتخاب‌شده
-    final_link = utils.build_subscription_url(user_uuid, link_type=link_type, name=safe_name)
+    final_link = utils.build_subscription_url(user_uuid, link_type=link_type, name=config_name)
 
     try:
         await q.message.delete()
@@ -230,6 +229,7 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(
         chat_id=q.message.chat_id, text=text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN
     )
+
 
 async def refresh_service_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
