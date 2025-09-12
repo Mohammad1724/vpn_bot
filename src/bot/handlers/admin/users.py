@@ -1,4 +1,3 @@
-# filename: bot/handlers/admin/users.py
 # -*- coding: utf-8 -*-
 
 import re
@@ -73,14 +72,12 @@ def _action_kb(target_id: int, is_banned: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 def _amount_prompt_kb(target_id: int) -> InlineKeyboardMarkup:
-    # خروج از state مبلغ و بازگشت به پنل (بدون رفرش DB در صورت وجود کش)
     return InlineKeyboardMarkup([[
         InlineKeyboardButton("🔙 بازگشت به پنل کاربر", callback_data=f"admin_user_amount_cancel_{target_id}"),
         InlineKeyboardButton("❌ انصراف", callback_data=f"admin_user_amount_cancel_{target_id}")
     ]])
 
 def _back_to_user_panel_kb(target_id: int) -> InlineKeyboardMarkup:
-    # بازگشت سبک (از کش) به پنل
     return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت به پنل کاربر", callback_data=f"admin_user_back_{target_id}")]])
 
 async def _send_new(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, kb: InlineKeyboardMarkup | None = None, pm: str | None = None):
@@ -100,7 +97,6 @@ def _sanitize_for_code(s: str) -> str:
 
 # -------------- Panel Cache --------------
 def _cache_panel(context: ContextTypes.DEFAULT_TYPE, target_id: int, text: str, ban_state: bool):
-    # ذخیره متن و وضعیت لازم برای ساخت کیبورد، جهت بازگشت سبک
     context.user_data[f"panel_cache_{target_id}"] = {"text": text, "ban_state": 1 if ban_state else 0}
 
 def _get_cached_panel(context: ContextTypes.DEFAULT_TYPE, target_id: int):
@@ -170,7 +166,157 @@ def _update_balance(user_id: int, delta: int) -> bool:
     return False
 
 # -------------------------------
-# Entry Point (Inline UI)
+# Broadcast (Inline)
+# -------------------------------
+
+def _broadcast_root_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📣 ارسال به همه کاربران", callback_data="bcast_all")],
+        [InlineKeyboardButton("👤 ارسال به کاربر خاص", callback_data="bcast_user")],
+        [InlineKeyboardButton("🏠 منوی ادمین", callback_data="admin_panel")]
+    ])
+
+def _bcast_cancel_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="bcast_menu")],
+        [InlineKeyboardButton("🏠 منوی ادمین", callback_data="admin_panel")]
+    ])
+
+async def broadcast_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = "📩 بخش ارسال پیام\n\nیکی از گزینه‌های زیر را انتخاب کنید:"
+    await _send_new(update, context, text, _broadcast_root_kb())
+    return BROADCAST_MENU
+
+async def broadcast_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return await broadcast_menu(update, context)
+
+async def broadcast_to_all_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
+    context.user_data["broadcast_mode"] = "all"
+    text = "📝 متن/رسانه پیام همگانی را ارسال کنید."
+    await _send_new(update, context, text, _bcast_cancel_kb())
+    return BROADCAST_MESSAGE
+
+async def broadcast_to_all_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['broadcast_message'] = update.effective_message
+    total_users = db.get_all_user_ids()
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ تایید ارسال", callback_data="broadcast_confirm_yes"),
+        InlineKeyboardButton("❌ انصراف", callback_data="broadcast_confirm_no")
+    ]])
+    await update.effective_message.reply_text(
+        f"پیش‌نمایش ثبت شد.\nارسال به {len(total_users)} کاربر انجام شود؟",
+        reply_markup=keyboard
+    )
+    return BROADCAST_CONFIRM
+
+async def broadcast_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if q.data.endswith("no"):
+        try:
+            await q.edit_message_text("❌ ارسال همگانی لغو شد.")
+        except Exception:
+            pass
+        context.user_data.clear()
+        await broadcast_menu(update, context)
+        return BROADCAST_MENU
+
+    msg = context.user_data.get("broadcast_message")
+    if not msg:
+        try:
+            await q.edit_message_text("❌ خطا: پیامی برای ارسال یافت نشد.")
+        except Exception:
+            pass
+        context.user_data.clear()
+        await broadcast_menu(update, context)
+        return BROADCAST_MENU
+
+    user_ids = db.get_all_user_ids()
+    ok = fail = 0
+    try:
+        await q.edit_message_text(f"در حال ارسال به {len(user_ids)} کاربر... ⏳")
+    except Exception:
+        pass
+
+    for uid in user_ids:
+        try:
+            await context.bot.copy_message(chat_id=uid, from_chat_id=msg.chat.id, message_id=msg.message_id)
+            ok += 1
+        except RetryAfter as e:
+            await asyncio.sleep(getattr(e, "retry_after", 1) + 1)
+            try:
+                await context.bot.copy_message(chat_id=uid, from_chat_id=msg.chat.id, message_id=msg.message_id)
+                ok += 1
+            except Exception:
+                fail += 1
+        except (Forbidden, BadRequest, TimedOut, NetworkError):
+            fail += 1
+        except Exception as e:
+            logger.warning("Broadcast send failed to %s: %s", uid, e)
+            fail += 1
+        await asyncio.sleep(0.05)
+
+    summary = f"✅ ارسال همگانی تمام شد.\nموفق: {ok}\nناموفق: {fail}\nکل: {len(user_ids)}"
+    try:
+        await q.edit_message_text(summary)
+    except Exception:
+        await q.from_user.send_message(summary)
+    context.user_data.clear()
+    await broadcast_menu(update, context)
+    return BROADCAST_MENU
+
+async def broadcast_to_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
+    context.user_data["broadcast_mode"] = "single"
+    await _send_new(update, context, "🔎 آیدی کاربر (یوزرنیم مثل @username) یا شناسه عددی را ارسال کنید:", _bcast_cancel_kb())
+    return BROADCAST_TO_USER_ID
+
+async def broadcast_to_user_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    raw = update.effective_message.text or ""
+    num = normalize_id_input(raw)
+    uid = None
+    if num:
+        try:
+            uid = int(num)
+        except Exception:
+            uid = None
+    if uid is None:
+        uname = normalize_username_input(raw)
+        rec = db.get_user_by_username(uname) if uname else None
+        if not rec:
+            await update.effective_message.reply_text("❌ شناسه/آیدی معتبر نیست یا کاربر در دیتابیس نیست.", reply_markup=_bcast_cancel_kb())
+            return BROADCAST_TO_USER_ID
+        uid = int(rec["user_id"])
+
+    context.user_data["target_user_id"] = uid
+    await update.effective_message.reply_text("📝 متن/رسانه پیام را ارسال کنید:", reply_markup=_bcast_cancel_kb())
+    return BROADCAST_TO_USER_MESSAGE
+
+async def broadcast_to_user_message_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = context.user_data.get("target_user_id")
+    if not uid:
+        await update.effective_message.reply_text("❌ شناسه کاربر مشخص نیست.", reply_markup=_broadcast_root_kb())
+        context.user_data.clear()
+        return BROADCAST_MENU
+
+    msg = update.effective_message
+    try:
+        await context.bot.copy_message(chat_id=uid, from_chat_id=msg.chat.id, message_id=msg.message_id)
+        await update.effective_message.reply_text("✅ پیام برای کاربر ارسال شد.", reply_markup=_broadcast_root_kb())
+    except Exception:
+        await update.effective_message.reply_text("❌ ارسال ناموفق بود. احتمالاً کاربر بات را مسدود کرده یا آیدی اشتباه است.", reply_markup=_broadcast_root_kb())
+    context.user_data.clear()
+    return BROADCAST_MENU
+
+async def broadcast_cancel_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    context.user_data.clear()
+    return await broadcast_menu(update, context)
+
+# -------------------------------
+# User Management (unchanged)
 # -------------------------------
 
 async def user_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -186,14 +332,10 @@ async def ask_user_id_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer("✅ منتظر ارسال آیدی یا شناسه عددی کاربر هستم...", show_alert=False)
     return USER_MANAGEMENT_MENU
 
-# -------------------------------
-# User Panel (send + cache)
-# -------------------------------
-
 async def _send_user_panel(update: Update, context: ContextTypes.DEFAULT_TYPE, target_id: int):
     q = getattr(update, "callback_query", None)
     text, ban_state = await _render_user_panel_text(target_id)
-    _cache_panel(context, target_id, text, ban_state)  # کش کردن پنل برای بازگشت سبک
+    _cache_panel(context, target_id, text, ban_state)
     kb = _action_kb(target_id, ban_state)
     if q:
         try:
@@ -202,10 +344,6 @@ async def _send_user_panel(update: Update, context: ContextTypes.DEFAULT_TYPE, t
             await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
     else:
         await update.effective_message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
-
-# -------------------------------
-# Back to panel (light, from cache)
-# -------------------------------
 
 async def admin_user_back_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -217,7 +355,6 @@ async def admin_user_back_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     cached = _get_cached_panel(context, target_id)
     if not cached:
-        # اگر کش نبود، به صورت ایمن رفرش کن
         return await admin_user_refresh_cb(update, context)
 
     text = cached.get("text") or "پنل کاربر"
@@ -228,10 +365,6 @@ async def admin_user_back_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except Exception:
         await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
     return USER_MANAGEMENT_MENU
-
-# -------------------------------
-# Receiving user id/username input
-# -------------------------------
 
 async def manage_user_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     em = update.effective_message
@@ -272,10 +405,6 @@ async def manage_user_id_received(update: Update, context: ContextTypes.DEFAULT_
     await _send_user_panel(update, context, target_id)
     return USER_MANAGEMENT_MENU
 
-# -------------------------------
-# User Actions (Callbacks)
-# -------------------------------
-
 async def admin_user_refresh_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -305,7 +434,6 @@ async def admin_user_services_cb(update: Update, context: ContextTypes.DEFAULT_T
             await q.from_user.send_message(txt, reply_markup=kb)
         return
 
-    # فقط یک پیام: خلاصه سرویس‌ها + دکمه‌های حذف، و دکمه بازگشت (بدون ارسال پیام‌های جداگانه)
     lines = []
     kb_rows = []
     MAX_ITEMS = 40
@@ -406,7 +534,6 @@ async def admin_user_subbal_cb(update: Update, context: ContextTypes.DEFAULT_TYP
     return MANAGE_USER_AMOUNT
 
 async def admin_user_amount_cancel_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # خروج از state و بازگشت سبک (از کش) اگر موجود باشد
     q = update.callback_query
     await q.answer()
     try:
@@ -527,142 +654,7 @@ async def admin_delete_service(update: Update, context: ContextTypes.DEFAULT_TYP
             pass
 
 # -------------------------------
-# Broadcast (unchanged)
-# -------------------------------
-def _broadcast_menu_keyboard() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup([["ارسال به همه کاربران", "ارسال به کاربر خاص"], [BTN_BACK_TO_ADMIN_MENU]], resize_keyboard=True)
-
-async def broadcast_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    em = update.effective_message
-    await em.reply_text("بخش ارسال پیام", reply_markup=_broadcast_menu_keyboard())
-    return BROADCAST_MENU
-
-async def broadcast_to_all_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.clear()
-    context.user_data["broadcast_mode"] = "all"
-    await update.effective_message.reply_text(
-        "متن/رسانه پیام همگانی را بفرستید:",
-        reply_markup=ReplyKeyboardMarkup([[BTN_BACK_TO_ADMIN_MENU]], resize_keyboard=True)
-    )
-    return BROADCAST_MESSAGE
-
-async def broadcast_to_all_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['broadcast_message'] = update.effective_message
-    total_users = db.get_all_user_ids()
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ تایید ارسال", callback_data="broadcast_confirm_yes"),
-        InlineKeyboardButton("❌ انصراف", callback_data="broadcast_confirm_no")
-    ]])
-    await update.effective_message.reply_text(
-        f"پیش‌نمایش ثبت شد. ارسال به {len(total_users)} کاربر انجام شود؟",
-        reply_markup=keyboard
-    )
-    return BROADCAST_CONFIRM
-
-async def broadcast_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    if q.data.endswith("no"):
-        try:
-            await q.edit_message_text("ارسال همگانی لغو شد.", reply_markup=None)
-        except Exception:
-            pass
-        context.user_data.clear()
-        return ConversationHandler.END
-
-    msg = context.user_data.get("broadcast_message")
-    if not msg:
-        try:
-            await q.edit_message_text("خطا: پیامی برای ارسال یافت نشد.", reply_markup=None)
-        except Exception:
-            pass
-        context.user_data.clear()
-        return ConversationHandler.END
-
-    user_ids = db.get_all_user_ids()
-    ok = fail = 0
-    try:
-        await q.edit_message_text(f"در حال ارسال به {len(user_ids)} کاربر... ⏳", reply_markup=None)
-    except Exception:
-        pass
-
-    for uid in user_ids:
-        try:
-            await context.bot.copy_message(chat_id=uid, from_chat_id=msg.chat.id, message_id=msg.message_id)
-            ok += 1
-        except RetryAfter as e:
-            await asyncio.sleep(getattr(e, "retry_after", 1) + 1)
-            try:
-                await context.bot.copy_message(chat_id=uid, from_chat_id=msg.chat.id, message_id=msg.message_id)
-                ok += 1
-            except Exception:
-                fail += 1
-        except (Forbidden, BadRequest, TimedOut, NetworkError):
-            fail += 1
-        except Exception as e:
-            logger.warning("Broadcast send failed to %s: %s", uid, e)
-            fail += 1
-        await asyncio.sleep(0.05)
-
-    summary = f"ارسال همگانی تمام شد.\nموفق: {ok}\nناموفق: {fail}\nکل: {len(user_ids)}"
-    try:
-        await q.edit_message_text(summary, reply_markup=None)
-    except Exception:
-        await q.from_user.send_message(summary)
-    context.user_data.clear()
-    return ConversationHandler.END
-
-async def broadcast_to_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.clear()
-    context.user_data["broadcast_mode"] = "single"
-    await update.effective_message.reply_text(
-        "آیدی کاربر (یوزرنیم مثل @username) یا شناسه عددی را بفرستید:",
-        reply_markup=ReplyKeyboardMarkup([[BTN_BACK_TO_ADMIN_MENU]], resize_keyboard=True)
-    )
-    return BROADCAST_TO_USER_ID
-
-async def broadcast_to_user_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    raw = update.effective_message.text or ""
-    num = normalize_id_input(raw)
-    uid = None
-    if num:
-        try:
-            uid = int(num)
-        except Exception:
-            uid = None
-    if uid is None:
-        uname = normalize_username_input(raw)
-        rec = db.get_user_by_username(uname) if uname else None
-        if not rec:
-            await update.effective_message.reply_text("شناسه/آیدی معتبر نیست یا کاربر در دیتابیس نیست.")
-            return BROADCAST_TO_USER_ID
-        uid = int(rec["user_id"])
-
-    context.user_data["target_user_id"] = uid
-    await update.effective_message.reply_text(
-        "متن/رسانه پیام را بفرستید:",
-        reply_markup=ReplyKeyboardMarkup([[BTN_BACK_TO_ADMIN_MENU]], resize_keyboard=True)
-    )
-    return BROADCAST_TO_USER_MESSAGE
-
-async def broadcast_to_user_message_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = context.user_data.get("target_user_id")
-    if not uid:
-        await update.effective_message.reply_text("شناسه کاربر مشخص نیست.")
-        context.user_data.clear()
-        return ConversationHandler.END
-
-    msg = update.effective_message
-    try:
-        await context.bot.copy_message(chat_id=uid, from_chat_id=msg.chat.id, message_id=msg.message_id)
-        await update.effective_message.reply_text("✅ پیام برای کاربر ارسال شد.")
-    except Exception:
-        await update.effective_message.reply_text("❌ ارسال ناموفق بود. احتمالاً کاربر بات را مسدود کرده یا آیدی اشتباه است.")
-    context.user_data.clear()
-    return ConversationHandler.END
-
-# -------------------------------
-# Confirm/Reject Charge
+# Broadcast (confirm/reject charge remain unchanged)
 # -------------------------------
 
 async def admin_confirm_charge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
