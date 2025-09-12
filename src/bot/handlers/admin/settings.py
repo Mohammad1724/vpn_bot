@@ -76,7 +76,7 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("⚙️ تنظیمات سرویس", callback_data="settings_service_configs")],
         [InlineKeyboardButton("📊 گزارش‌ها و یادآورها", callback_data="settings_reports_reminders")],
         [InlineKeyboardButton("💡 مصرف کاربران", callback_data="settings_usage_aggregation")],
-        [nav_row(back_cb="admin_back_to_menu", home_cb="home_menu")[0]]
+        [nav_row(back_cb="admin_back_to_menu", home_cb="home_menu")[0]],
     ])
     await _send_or_edit(update, context, text, keyboard, parse_mode=ParseMode.MARKDOWN)
     return ADMIN_SETTINGS_MENU
@@ -91,7 +91,7 @@ async def maintenance_and_join_submenu(update: Update, context: ContextTypes.DEF
         [_admin_edit_btn("✍️ ویرایش پیام نگهداری", "maintenance_message")],
         [InlineKeyboardButton("تغییر وضعیت عضویت", callback_data="toggle_force_join")],
         [_admin_edit_btn("✍️ ویرایش کانال عضویت", "force_join_channel")],
-        [_back_to_settings_btn()]
+        [_back_to_settings_btn()],
     ])
     await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN)
     return ADMIN_SETTINGS_MENU
@@ -104,7 +104,7 @@ async def payment_and_guides_submenu(update: Update, context: ContextTypes.DEFAU
         [_admin_edit_btn("✍️ راهنمای اتصال", "guide_connection")],
         [_admin_edit_btn("✍️ راهنمای خرید", "guide_buying")],
         [_admin_edit_btn("✍️ راهنمای شارژ", "guide_charging")],
-        [_back_to_settings_btn()]
+        [_back_to_settings_btn()],
     ])
     await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN)
     return ADMIN_SETTINGS_MENU
@@ -125,7 +125,7 @@ async def first_charge_promo_submenu(update: Update, context: ContextTypes.DEFAU
         [_admin_edit_btn("✍️ ویرایش کد", "first_charge_code")],
         [_admin_edit_btn("✍️ ویرایش درصد", "first_charge_bonus_percent")],
         [_admin_edit_btn("✍️ ویرایش تاریخ انقضا", "first_charge_expires_at")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="settings_payment_guides")]
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="settings_payment_guides")],
     ])
     await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN)
     return ADMIN_SETTINGS_MENU
@@ -157,7 +157,7 @@ async def service_configs_submenu(update: Update, context: ContextTypes.DEFAULT_
         [InlineKeyboardButton("🔗 ویرایش نوع لینک پیش‌فرض", callback_data="edit_default_link_type")],
         [InlineKeyboardButton("🧪 ویرایش تنظیمات سرویس تست", callback_data="settings_trial")],
         [InlineKeyboardButton("🌐 ویرایش دامنه‌های ساب", callback_data="settings_subdomains")],
-        [_back_to_settings_btn()]
+        [_back_to_settings_btn()],
     ])
     await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN)
     return ADMIN_SETTINGS_MENU
@@ -171,7 +171,7 @@ async def subdomains_submenu(update: Update, context: ContextTypes.DEFAULT_TYPE)
         [_admin_edit_btn("✍️ ویرایش دامنه‌های حجمی", "volume_based_sub_domains")],
         [_admin_edit_btn("✍️ ویرایش دامنه‌های نامحدود", "unlimited_sub_domains")],
         [_admin_edit_btn("✍️ ویرایش دامنه‌های عمومی", "sub_domains")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="settings_service_configs")]
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="settings_service_configs")],
     ])
     await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN)
     return ADMIN_SETTINGS_MENU
@@ -189,7 +189,7 @@ async def reports_and_reminders_submenu(update: Update, context: ContextTypes.DE
         [InlineKeyboardButton("تغییر یادآور انقضا", callback_data="toggle_expiry_reminder")],
         [_admin_edit_btn("✍️ ویرایش روزهای یادآور", "expiry_reminder_days"),
          _admin_edit_btn("✍️ ویرایش حداقل حجم یادآور", "expiry_reminder_min_remaining_gb")],
-        [_back_to_settings_btn()]
+        [_back_to_settings_btn()],
     ])
     await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN)
     return ADMIN_SETTINGS_MENU
@@ -201,7 +201,7 @@ async def usage_aggregation_submenu(update: Update, context: ContextTypes.DEFAUL
     kb = _kb([
         [InlineKeyboardButton("تغییر وضعیت تجمیع مصرف", callback_data="toggle_usage_aggregation")],
         [_admin_edit_btn("✍️ بازه به‌روزرسانی (دقیقه)", "usage_update_interval_min")],
-        [_back_to_settings_btn()]
+        [_back_to_settings_btn()],
     ])
     await _send_or_edit(update, context, text, kb, parse_mode=None)
     return ADMIN_SETTINGS_MENU
@@ -240,7 +240,7 @@ async def global_discount_submenu(update: Update, context: ContextTypes.DEFAULT_
         [InlineKeyboardButton("تغییر وضعیت تخفیف همگانی", callback_data="toggle_global_discount")],
         [_admin_edit_btn("✍️ درصد تخفیف", "global_discount_percent")],
         [_admin_edit_btn("✍️ مدت (روز)", "global_discount_days")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_gift")]
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_gift")],
     ])
     await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN)
     return GIFT_CODES_MENU
@@ -378,7 +378,7 @@ async def edit_default_link_start(update: Update, context: ContextTypes.DEFAULT_
         [btn("Base64 (sub64)", "set_default_link_sub64"), btn("SingBox", "set_default_link_singbox")],
         [btn("Xray", "set_default_link_xray"), btn("Clash", "set_default_link_clash")],
         [btn("Clash Meta", "set_default_link_clashmeta")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="settings_service_configs")]
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="settings_service_configs")],
     ])
     await _send_or_edit(update, context, text, kb, parse_mode=None)
     return ADMIN_SETTINGS_MENU
