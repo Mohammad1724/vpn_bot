@@ -114,7 +114,7 @@ async def send_service_details(
         caption = utils.create_service_info_caption(info, service_db_record=service, override_sub_url=preferred_url)
         keyboard_rows = [
             [
-                btn("🚀 باز کردن لینک", url=preferred_url),
+                InlineKeyboardButton("🚀 باز کردن لینک", url=preferred_url),
                 btn("🔄 به‌روزرسانی اطلاعات", f"refresh_{service['service_id']}"),
                 btn("🔗 لینک‌های بیشتر", f"more_links_{service['sub_uuid']}"),
             ],
@@ -232,14 +232,13 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = f"🔗 **لینک {_link_label(link_type)}**\n`{safe_link}`\n\n👆 با یک لمس روی لینک بالا، کپی می‌شود."
     
     kb = markup([
-        [btn("🚀 باز کردن لینک", url=final_link)],
+        [InlineKeyboardButton("🚀 باز کردن لینک", url=final_link)],
         nav_row(back_cb=f"more_links_{user_uuid}", home_cb="home_menu")
     ])
     
     await context.bot.send_message(
         chat_id=q.message.chat_id, text=text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN
     )
-
 
 async def refresh_service_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
