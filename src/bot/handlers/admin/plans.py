@@ -41,18 +41,26 @@ def _inline_header_for_list() -> InlineKeyboardMarkup:
     ])
 
 
+def _inline_footer_for_list() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔙 بازگشت به مدیریت پلن‌ها", callback_data="admin_plans")]
+    ])
+
+
 def _plan_card_keyboard(plan_id: int, is_visible: bool) -> InlineKeyboardMarkup:
     vis_label = "👁️ مخفی‌کردن" if is_visible else "👁️‍🗨️ نمایش‌دادن"
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("✏️ ویرایش", callback_data=f"admin_edit_plan_{plan_id}"),
-        InlineKeyboardButton(vis_label, callback_data=f"admin_toggle_plan_{plan_id}"),
-        InlineKeyboardButton("🗑️ حذف", callback_data=f"admin_delete_plan_{plan_id}")
-    ]])
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✏️ ویرایش", callback_data=f"admin_edit_plan_{plan_id}"),
+            InlineKeyboardButton(vis_label, callback_data=f"admin_toggle_plan_{plan_id}"),
+            InlineKeyboardButton("🗑️ حذف", callback_data=f"admin_delete_plan_{plan_id}")
+        ]
+    ])
 
 
 def _format_plan_card_text(p: dict) -> str:
     """
-    متن کارت پلن خوانا و ساده (بدون Markdown پیچیده برای جلوگیری از خطای رندرینگ).
+    متن کارت پلن خوانا و ساده (بدون Markdown پیچیده).
     """
     pid = p.get("plan_id", "-")
     name = p.get("name") or "-"
@@ -121,7 +129,7 @@ async def _purge_plan_list_messages(context: ContextTypes.DEFAULT_TYPE):
     if not st or not st.get('msg_ids'):
         return
     chat_id = st.get('chat_id')
-    for mid in st['msg_ids']:
+    for mid in list(st['msg_ids']):
         try:
             await context.bot.delete_message(chat_id=chat_id, message_id=mid)
         except Exception:
@@ -144,10 +152,11 @@ async def plan_management_menu(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def list_plans_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    نمایش لیست پلن‌ها به‌صورت کارت‌های جدا+یک پیام سرتیتر (anchor).
-    - پیام Callback فعلی به سرتیتر تبدیل می‌شود و فقط دکمه بازگشت دارد.
+    نمایش لیست پلن‌ها به‌صورت کارت‌های جدا + یک پیام سرتیتر (anchor) و یک فوتر در پایین.
+    - پیام Callback فعلی به سرتیتر تبدیل و ذخیره می‌شود (با دکمه بازگشت).
     - برای هر پلن یک کارت خوانا با دکمه‌های کنترل ارسال می‌شود.
-    - هنگام بازگشت به مدیریت پلن‌ها، فقط کارت‌ها پاک و سرتیتر ادیت می‌شود.
+    - در انتها یک فوتر با دکمه بازگشت ارسال می‌شود تا نیازی به اسکرول نباشد.
+    - هنگام بازگشت به مدیریت پلن‌ها، کارت‌ها و فوتر پاک و سرتیتر ادیت می‌شود.
     """
     q = getattr(update, "callback_query", None)
     if q:
@@ -164,12 +173,14 @@ async def list_plans_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except BadRequest:
             pass
 
-    # پاکسازی کارت‌های قبلی (اگر بودند)
+    # پاکسازی کارت‌ها و فوتر قبلی (اگر بودند)
     await _purge_plan_list_messages(context)
 
     plans = db.list_plans(only_visible=False)
+    chat_id = q.from_user.id if q else update.effective_chat.id
+
     if not plans:
-        # اگر پلنی نبود، همان پیام سرتیتر را به «هیچ پلنی ندارد» ادیت کن
+        # اگر پلنی نبود، همان پیام سرتیتر را ادیت کن
         await _send_or_edit(update, context, "هیچ پلنی تعریف نشده است.", reply_markup=_inline_back_to_plan_menu(), parse_mode=None)
         return PLAN_MENU
 
@@ -177,8 +188,13 @@ async def list_plans_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for p in plans:
         text = _format_plan_card_text(p)
         kb = _plan_card_keyboard(p["plan_id"], bool(p.get("is_visible", 1)))
-        msg = await context.bot.send_message(chat_id=q.from_user.id if q else update.effective_chat.id, text=text, reply_markup=kb, parse_mode=None)
+        msg = await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=kb, parse_mode=None, disable_web_page_preview=True)
         await _store_sent_message(context, msg)
+
+    # فوتر پایین لیست: دکمه بازگشت تا بدون اسکرول هم برگردی
+    footer_text = "🔽 پایان لیست. برای بازگشت از دکمه زیر استفاده کنید."
+    footer_msg = await context.bot.send_message(chat_id=chat_id, text=footer_text, reply_markup=_inline_footer_for_list())
+    await _store_sent_message(context, footer_msg)
 
     return PLAN_MENU
 
@@ -439,7 +455,7 @@ async def admin_toggle_plan_visibility_callback(update: Update, context: Context
     try:
         await q.edit_message_text(text=text, reply_markup=kb, parse_mode=None, disable_web_page_preview=True)
     except BadRequest:
-        # اگر ادیت نشد، پیام جدید بفرست و قدیمی را پاک کن
+        # اگر ادیت نشد، پیام جدید بفرست و قدیمی را پاک کن و در Store ثبت کن
         try:
             new_msg = await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=kb, parse_mode=None, disable_web_page_preview=True)
             await q.message.delete()
@@ -458,6 +474,5 @@ async def back_to_admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     await _purge_plan_list_messages(context)
-    # ادیت پیام فعلی به منوی ادمین در common.admin_entry انجام می‌شود
     from bot.handlers.admin.common import admin_entry
     return await admin_entry(update, context)
