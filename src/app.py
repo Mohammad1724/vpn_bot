@@ -8,10 +8,9 @@ from telegram.ext import (
     ApplicationBuilder, ConversationHandler, MessageHandler, CallbackQueryHandler,
     CommandHandler, filters, ContextTypes
 )
-from telegram import Update
-    # Note: Some IDEs auto-format import sections. Keep telegram imports grouped.
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.request import HTTPXRequest
-from telegram.error import NetworkError
+from telegram.error import NetworkError, BadRequest
 
 from bot import jobs, constants
 from bot.handlers import (
@@ -29,6 +28,10 @@ import bot.handlers.admin.trial_settings_ui as trial_ui
 from bot.handlers.trial import get_trial_service as trial_get_trial_service
 from bot.handlers.admin.trial_settings import set_trial_days, set_trial_gb
 from config import BOT_TOKEN, ADMIN_ID
+
+# اضافه‌ها برای هندلرهای امن تاریخچه
+import database as db
+from bot import utils
 
 warnings.filterwarnings("ignore", category=PTBUserWarning)
 logger = logging.getLogger(__name__)
@@ -70,6 +73,88 @@ def build_application():
         if context.user_data.get('awaiting_backup_target'):
             return await admin_backup.backup_target_received(update, context)
         return await admin_settings.setting_value_received(update, context)
+
+    # ----------------- هندلرهای امن تاریخچه و راهنمای شارژ -----------------
+    async def _safe_send_or_edit(q, context, text, kb=None, markdown=False):
+        try:
+            if q and q.message:
+                await q.edit_message_text(text=text, reply_markup=kb, parse_mode=("Markdown" if markdown else None))
+            else:
+                await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=kb)
+        except BadRequest:
+            # fallback بدون Markdown
+            try:
+                if q and q.message:
+                    await q.edit_message_text(text=text, reply_markup=kb, parse_mode=None)
+                else:
+                    await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=kb)
+            except Exception:
+                pass
+
+    def _kb_back():
+        return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="acc_back_to_main")]])
+
+    async def acc_purchase_history_safe(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        q = update.callback_query
+        try:
+            await q.answer()
+        except Exception:
+            pass
+        user_id = q.from_user.id
+        rows = db.get_user_sales_history(user_id)
+        if not rows:
+            await _safe_send_or_edit(q, context, "⛔️ سابقه‌ای یافت نشد.", _kb_back())
+            return
+        lines = []
+        for r in rows:
+            ds = r.get("sale_date") or ""
+            dt = utils.parse_date_flexible(ds)
+            dt_s = dt.strftime("%Y-%m-%d %H:%M") if dt else ds
+            name = r.get("plan_name") or "پلن حذف‌شده"
+            try:
+                amount = int(float(r.get("price") or 0))
+            except Exception:
+                amount = 0
+            lines.append(f"• {dt_s} | {name} | {amount:,} تومان")
+        text = "🧾 سوابق خرید/تمدید شما:\n\n" + "\n".join(lines)
+        await _safe_send_or_edit(q, context, text, _kb_back())
+
+    async def acc_charge_history_safe(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        q = update.callback_query
+        try:
+            await q.answer()
+        except Exception:
+            pass
+        user_id = q.from_user.id
+        rows = db.get_user_charge_history(user_id)
+        if not rows:
+            await _safe_send_or_edit(q, context, "⛔️ سابقه شارژی یافت نشد.", _kb_back())
+            return
+        lines = []
+        for r in rows:
+            ds = r.get("created_at") or ""
+            dt = utils.parse_date_flexible(ds)
+            dt_s = dt.strftime("%Y-%m-%d %H:%M") if dt else ds
+            try:
+                amount = int(float(r.get("amount") or 0))
+            except Exception:
+                amount = 0
+            typ = r.get("type") or "-"
+            lines.append(f"• {dt_s} | {typ} | {amount:,} تومان")
+        text = "💳 سوابق شارژ شما:\n\n" + "\n".join(lines)
+        await _safe_send_or_edit(q, context, text, _kb_back())
+
+    async def acc_charging_guide_safe(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        from bot.handlers.charge import _get_payment_info_text
+        q = update.callback_query
+        try:
+            await q.answer()
+        except Exception:
+            pass
+        guide = _get_payment_info_text()
+        await _safe_send_or_edit(q, context, guide, _kb_back(), markdown=True)
+
+    # ----------------------------------------------------------------------
 
     # --------- BUY FLOW ----------
     buy_conv = ConversationHandler(
@@ -114,9 +199,7 @@ def build_application():
     # --------- CHARGE (user) ----------
     charge_conv = ConversationHandler(
         entry_points=[
-            # هر پیامی که ایموجی 💳 داشته باشه → منوی شارژ
             MessageHandler(filters.Regex(r'.*💳.*') & user_filter, check_channel_membership(charge_h.charge_menu_start)),
-            # کال‌بک از هر منو: منوی اصلی/اطلاعات حساب/...
             CallbackQueryHandler(check_channel_membership(charge_h.charge_menu_start), pattern=r'^(user_start_charge|acc_start_charge|acc_charge)$'),
         ],
         states={
@@ -167,7 +250,7 @@ def build_application():
         fallbacks=[CommandHandler('cancel', acc_act.create_gift_cancel)]
     )
 
-    # --------- SUPPORT (user inline) ----------
+    # --------- SUPPORT ----------
     support_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(r'^📞 پشتیبانی$') & user_filter, check_channel_membership(support_h.support_ticket_start))
@@ -184,7 +267,7 @@ def build_application():
         per_user=True, per_chat=True
     )
 
-    # --------- ADMIN: ADD/EDIT PLAN ----------
+    # --------- ADMIN convo ها (بدون تغییر نسبت به قبل) ----------
     add_plan_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(r'^➕ افزودن پلن جدید$') & admin_filter, admin_plans.add_plan_start),
@@ -196,7 +279,7 @@ def build_application():
             constants.PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_days_received)],
             constants.PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_gb_received)],
             constants.PLAN_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_category_received)],
-        },
+        ],
         fallbacks=[CommandHandler('cancel', admin_plans.cancel_add_plan)],
         map_to_parent={ConversationHandler.END: constants.PLAN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
@@ -225,13 +308,12 @@ def build_application():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_category_received),
                 CommandHandler('skip', admin_plans.skip_edit_plan_category)
             ],
-        },
+        ],
         fallbacks=[CommandHandler('cancel', admin_plans.cancel_edit_plan)],
         map_to_parent={ConversationHandler.END: constants.PLAN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # --------- ADMIN: TRIAL SETTINGS (nested conv) ----------
     trial_settings_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(trial_ui.trial_menu, pattern=r"^settings_trial$")],
         states={
@@ -254,7 +336,6 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # --------- ADMIN: BROADCAST (Inline) ----------
     broadcast_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(r'^📩 ارسال پیام$') & admin_filter, admin_users.broadcast_menu),
@@ -291,7 +372,7 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # --------- ADMIN ROOT CONVERSATION (states dict built step-by-step) ----------
+    # --------- ADMIN ROOT CONVERSATION (states dict) ----------
     admin_states = {}
 
     # ADMIN MENU
@@ -538,7 +619,7 @@ def build_application():
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern=r"^check_membership$"))
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern=r"^home_menu$"))
 
-    # Usage -> حتماً در group=2 تا توسط کانورسیشن‌ها خورده نشود
+    # Usage
     application.add_handler(CallbackQueryHandler(usage_h.show_usage_menu, pattern=r"^acc_usage$"), group=2)
     application.add_handler(CallbackQueryHandler(usage_h.show_usage_menu, pattern=r"^acc_usage_refresh$"), group=2)
 
@@ -561,15 +642,11 @@ def build_application():
     for h in user_services_handlers:
         application.add_handler(h, group=2)
 
-    # ACCOUNT INFO -> به group=2 منتقل شد تا همیشه کار کند
-    account_info_handlers = [
-        CallbackQueryHandler(check_channel_membership(start_h.show_purchase_history_callback), pattern=r"^acc_purchase_history$"),
-        CallbackQueryHandler(check_channel_membership(start_h.show_charge_history_callback), pattern=r"^acc_charge_history$"),
-        CallbackQueryHandler(check_channel_membership(start_h.show_charging_guide_callback), pattern=r"^acc_charging_guide$"),
-        CallbackQueryHandler(check_channel_membership(start_h.show_account_info), pattern=r"^acc_back_to_main$"),
-    ]
-    for h in account_info_handlers:
-        application.add_handler(h, group=2)
+    # ACCOUNT INFO -> هندلرهای امن جایگزین
+    application.add_handler(CallbackQueryHandler(acc_purchase_history_safe, pattern=r"^acc_purchase_history$"), group=2)
+    application.add_handler(CallbackQueryHandler(acc_charge_history_safe, pattern=r"^acc_charge_history$"), group=2)
+    application.add_handler(CallbackQueryHandler(acc_charging_guide_safe, pattern=r"^acc_charging_guide$"), group=2)
+    application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.show_account_info), pattern=r"^acc_back_to_main$"), group=2)
 
     # GUIDES
     guide_handlers = [
@@ -595,7 +672,6 @@ def build_application():
         MessageHandler(filters.Regex(r'^👤 اطلاعات حساب کاربری$'), check_channel_membership(start_h.show_account_info)),
         MessageHandler(filters.Regex(r'^📚 راهنما$'), check_channel_membership(start_h.show_guide)),
         MessageHandler(filters.Regex(r'^🧪 سرویس تست$'), check_channel_membership(trial_get_trial_service)),
-        # توجه: هندلر عمومی 💳 در منوی اصلی حذف شد تا دوبار پاسخ رخ ندهد.
     ]
     for h in main_menu_handlers:
         application.add_handler(h, group=1)
