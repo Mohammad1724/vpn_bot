@@ -9,7 +9,7 @@ from typing import List, Optional
 from urllib.parse import quote_plus, urlsplit, urlunsplit
 
 from telegram.ext import ContextTypes
-from telegram import Update, Message, InputFile
+from telegram import Update, Message, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest
 from telegram.constants import ParseMode
 
@@ -26,7 +26,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# --- Helpers ---
+
 def _link_label(link_type: str) -> str:
     lt = utils.normalize_link_type(link_type)
     return {
@@ -47,14 +47,6 @@ def _strip_qf_and_sub(url: str) -> str:
     return urlunsplit((pr.scheme, pr.netloc, path.rstrip('/'), '', ''))
 
 
-def _build_copyable_link_message(link: str, title: str = "لینک اشتراک") -> tuple[str, markup, str]:
-    lri, pdi = "\u2066", "\u2069"
-    safe_link = f"{lri}{link}{pdi}"
-    text = f"🔗 **{title}**\n`{safe_link}`\n\n👆 با یک لمس روی لینک بالا، کپی می‌شود."
-    kb = markup([[btn("🚀 باز کردن لینک", url=link)]])
-    return text, kb, ParseMode.MARKDOWN
-
-# --- Handlers ---
 async def list_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     services = db.get_user_services(user_id)
@@ -122,6 +114,7 @@ async def send_service_details(
         caption = utils.create_service_info_caption(info, service_db_record=service, override_sub_url=preferred_url)
         keyboard_rows = [
             [
+                btn("🚀 باز کردن لینک", url=preferred_url),
                 btn("🔄 به‌روزرسانی اطلاعات", f"refresh_{service['service_id']}"),
                 btn("🔗 لینک‌های بیشتر", f"more_links_{service['sub_uuid']}"),
             ],
@@ -233,11 +226,19 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.message.delete()
     except BadRequest:
         pass
-    text, kb, pm = _build_copyable_link_message(final_link, f"لینک {_link_label(link_type)}")
-    await context.bot.send_message(chat_id=q.message.chat_id, text=text, reply_markup=kb, parse_mode=pm)
-
-    # بازگشت به منوی لینک‌ها
-    await show_link_options_menu(q.message, user_uuid, service['service_id'], is_edit=False, context=context)
+    
+    lri, pdi = "\u2066", "\u2069"
+    safe_link = f"{lri}{final_link}{pdi}"
+    text = f"🔗 **لینک {_link_label(link_type)}**\n`{safe_link}`\n\n👆 با یک لمس روی لینک بالا، کپی می‌شود."
+    
+    kb = markup([
+        [btn("🚀 باز کردن لینک", url=final_link)],
+        nav_row(back_cb=f"more_links_{user_uuid}", home_cb="home_menu")
+    ])
+    
+    await context.bot.send_message(
+        chat_id=q.message.chat_id, text=text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN
+    )
 
 
 async def refresh_service_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -255,17 +256,6 @@ async def refresh_service_details(update: Update, context: ContextTypes.DEFAULT_
     except BadRequest:
         pass
     msg = await context.bot.send_message(chat_id=q.from_user.id, text="در حال به‌روزرسانی اطلاعات...")
-    if q.from_user.id == ADMIN_ID:
-        try:
-            info = await hiddify_api.get_user_info(service['sub_uuid'])
-            if info:
-                await context.bot.send_message(
-                    chat_id=q.from_user.id,
-                    text=f"-- DEBUG INFO --\n<pre>{json.dumps(info, indent=2, ensure_ascii=False)}</pre>",
-                    parse_mode=ParseMode.HTML
-                )
-        except Exception as e:
-            await context.bot.send_message(chat_id=q.from_user.id, text=f"Debug error: {e}")
     await send_service_details(context, q.from_user.id, service_id, original_message=msg, is_from_menu=True)
 
 
