@@ -112,8 +112,9 @@ def build_application():
     # --------- CHARGE ----------
     charge_conv = ConversationHandler(
         entry_points=[
+            # الگوی مقاوم برای «شارژ حساب» شامل RLM/LRM/ZWNJ/ZWJ و فاصله‌ها
             MessageHandler(
-                filters.Regex(r'^[\u200f\u200e\s]*💳\s*شار.? ?حساب[\u200f\u200e\s]*$'),
+                filters.Regex(r'^[\u200f\u200e\u200c\u200d\s]*💳\s*شار[\u200c\u200d]?\s*حساب[\u200f\u200e\u200c\u200d\s]*$') & user_filter,
                 check_channel_membership(charge_h.charge_menu_start),
             ),
             CallbackQueryHandler(check_channel_membership(charge_h.charge_menu_start), pattern=r"^user_start_charge$"),
@@ -303,7 +304,7 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # --------- ADMIN ROOT CONVERSATION ----------
+    # --------- ADMIN ROOT CONVERSATION (states dict) ----------
     admin_states = {
         # ADMIN MENU
         constants.ADMIN_MENU: [
@@ -635,6 +636,11 @@ def build_application():
         MessageHandler(filters.Regex(r'^👤 اطلاعات حساب کاربری$'), check_channel_membership(start_h.show_account_info)),
         MessageHandler(filters.Regex(r'^📚 راهنما$'), check_channel_membership(start_h.show_guide)),
         MessageHandler(filters.Regex(r'^🧪 سرویس تست$'), check_channel_membership(trial_get_trial_service)),
+        # هندلر اضافی برای شارژ حساب (اگر ConversationHandler نگرفت)
+        MessageHandler(
+            filters.Regex(r'^[\u200f\u200e\u200c\u200d\s]*💳\s*شار[\u200c\u200d]?\s*حساب[\u200f\u200e\u200c\u200d\s]*$'),
+            check_channel_membership(charge_h.charge_menu_start),
+        ),
     ]
     for h in main_menu_handlers:
         application.add_handler(h, group=1)
