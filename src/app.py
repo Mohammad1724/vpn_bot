@@ -9,6 +9,7 @@ from telegram.ext import (
     CommandHandler, filters, ContextTypes
 )
 from telegram import Update
+    # Ensure we keep req
 from telegram.request import HTTPXRequest
 from telegram.error import NetworkError
 
@@ -38,9 +39,9 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     if isinstance(err, NetworkError) and any(s in str(err) for s in ["ReadError", "Server disconnected", "Timeout"]):
         logging.getLogger("telegram.network").warning("Transient network error ignored: %s", err)
         return
-    logger.error("خطا در هنگام پردازش آپدیت:", exc_info=err)
+    logger.exception("خطا در هنگام پردازش آپدیت")
     if isinstance(update, Update):
-        logger.error(f"آپدیت مربوطه: {update}")
+        logger.error("آپدیت مربوطه: %s", update)
 
 
 def build_application():
@@ -226,9 +227,7 @@ def build_application():
                 CallbackQueryHandler(trial_ui.ask_gb, pattern=r"^trial_set_gb$"),
                 CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^back_to_settings$"),
             ],
-            # اضافه کردن ناوبری منوی ادمین در stateهای انتظار مقدار
             trial_ui.WAIT_DAYS: [
-                # ناوبری با Reply Keyboard منوی ادمین
                 MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
                 MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
                 MessageHandler(filters.Regex(r'^💾 پشتیبان‌گیری$') & admin_filter, admin_backup.backup_restore_menu),
@@ -238,10 +237,9 @@ def build_application():
                 MessageHandler(filters.Regex(r'^🛑 خاموش کردن ربات$') & admin_filter, admin_c.shutdown_bot),
 
                 MessageHandler(filters.TEXT & ~filters.COMMAND, trial_ui.days_received),
-                CommandHandler('cancel', trial_ui.cancel)
+                CommandHandler('cancel', trial_ui.cancel),
             ],
             trial_ui.WAIT_GB: [
-                # ناوبری با Reply Keyboard منوی ادمین
                 MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
                 MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
                 MessageHandler(filters.Regex(r'^💾 پشتیبان‌گیری$') & admin_filter, admin_backup.backup_restore_menu),
@@ -251,7 +249,7 @@ def build_application():
                 MessageHandler(filters.Regex(r'^🛑 خاموش کردن ربات$') & admin_filter, admin_c.shutdown_bot),
 
                 MessageHandler(filters.TEXT & ~filters.COMMAND, trial_ui.gb_received),
-                CommandHandler('cancel', trial_ui.cancel)
+                CommandHandler('cancel', trial_ui.cancel),
             ],
         },
         fallbacks=[CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^back_to_settings$")],
@@ -346,7 +344,6 @@ def build_application():
 
             # USER MANAGEMENT
             constants.USER_MANAGEMENT_MENU: [
-                # Allow reply-menu navigation in this state
                 MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
                 MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
                 MessageHandler(filters.Regex(r'^💾 پشتیبان‌گیری$') & admin_filter, admin_backup.backup_restore_menu),
@@ -355,7 +352,6 @@ def build_application():
                 MessageHandler(filters.Regex(r'^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
                 MessageHandler(filters.Regex(r'^🛑 خاموش کردن ربات$') & admin_filter, admin_c.shutdown_bot),
 
-                # Inline nav and actions
                 CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
                 CallbackQueryHandler(admin_users.ask_user_id_cb, pattern=r"^admin_users_ask_id$"),
                 CallbackQueryHandler(admin_users.user_management_menu_cb, pattern=r"^admin_users$"),
@@ -370,13 +366,11 @@ def build_application():
                 CallbackQueryHandler(admin_users.admin_delete_service, pattern=r'^admin_delete_service_\d+(_\d+)?$'),
                 CallbackQueryHandler(admin_users.admin_user_amount_cancel_cb, pattern=r'^admin_user_amount_cancel_\d+$'),
 
-                # Catch-all text as ID/username
                 MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_users.manage_user_id_received),
             ],
 
-            # MANAGE USER AMOUNT (sub-state)
+            # MANAGE USER AMOUNT
             constants.MANAGE_USER_AMOUNT: [
-                # اجازه ناوبری با Reply Keyboard
                 MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
                 MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
                 MessageHandler(filters.Regex(r'^💾 پشتیبان‌گیری$') & admin_filter, admin_backup.backup_restore_menu),
@@ -390,9 +384,8 @@ def build_application():
                 CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
             ],
 
-            # REPORTS MENU (inline/glass)
+            # REPORTS MENU
             constants.REPORTS_MENU: [
-                # ناوبری با Reply Keyboard
                 MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
                 MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
                 MessageHandler(filters.Regex(r'^💾 پشتیبان‌گیری$') & admin_filter, admin_backup.backup_restore_menu),
@@ -409,9 +402,8 @@ def build_application():
                 CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
             ],
 
-            # SETTINGS MENU (inline/glass, FIXED)
+            # SETTINGS MENU
             constants.ADMIN_SETTINGS_MENU: [
-                # ناوبری با Reply Keyboard
                 MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
                 MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
                 MessageHandler(filters.Regex(r'^💾 پشتیبان‌گیری$') & admin_filter, admin_backup.backup_restore_menu),
@@ -420,11 +412,9 @@ def build_application():
                 MessageHandler(filters.Regex(r'^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
                 MessageHandler(filters.Regex(r'^🛑 خاموش کردن ربات$') & admin_filter, admin_c.shutdown_bot),
 
-                # Root (can be called from main menu or back)
                 CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^admin_settings$"),
                 CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^back_to_settings$"),
 
-                # Submenus
                 CallbackQueryHandler(admin_settings.maintenance_and_join_submenu, pattern=r"^settings_maint_join$"),
                 CallbackQueryHandler(admin_settings.payment_and_guides_submenu, pattern=r"^settings_payment_guides$"),
                 CallbackQueryHandler(admin_settings.payment_info_submenu, pattern=r"^payment_info_submenu$"),
@@ -433,7 +423,6 @@ def build_application():
                 CallbackQueryHandler(admin_settings.reports_and_reminders_submenu, pattern=r"^settings_reports_reminders$"),
                 CallbackQueryHandler(admin_settings.usage_aggregation_submenu, pattern=r"^settings_usage_aggregation$"),
 
-                # Actions/toggles
                 CallbackQueryHandler(admin_settings.toggle_usage_aggregation, pattern=r"^toggle_usage_aggregation$"),
                 CallbackQueryHandler(admin_settings.edit_default_link_start, pattern=r"^edit_default_link_type$"),
                 CallbackQueryHandler(admin_settings.set_default_link_type, pattern=r"^set_default_link_"),
@@ -442,7 +431,7 @@ def build_application():
                 CallbackQueryHandler(admin_settings.toggle_expiry_reminder, pattern=r"^toggle_expiry_reminder$"),
                 CallbackQueryHandler(admin_settings.toggle_report_setting, pattern=r"^toggle_report_"),
 
-                # Trial nested conversation
+                # Trial nested
                 trial_settings_conv,
 
                 # Edit setting
@@ -455,7 +444,6 @@ def build_application():
 
             # AWAIT SETTING VALUE
             constants.AWAIT_SETTING_VALUE: [
-                # اجازه ناوبری با Reply Keyboard هنگام انتظار مقدار
                 MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
                 MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
                 MessageHandler(filters.Regex(r'^💾 پشتیبان‌گیری$') & admin_filter, admin_backup.backup_restore_menu),
@@ -464,12 +452,11 @@ def build_application():
                 MessageHandler(filters.Regex(r'^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
                 MessageHandler(filters.Regex(r'^🛑 خاموش کردن ربات$') & admin_filter, admin_c.shutdown_bot),
 
-                MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_settings.setting_value_received)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_settings.setting_value_received),
             ],
 
             # BACKUP MENU
             constants.BACKUP_MENU: [
-                # ناوبری با Reply Keyboard
                 MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
                 MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
                 MessageHandler(filters.Regex(r'^💾 پشتیبان‌گیری$') & admin_filter, admin_backup.backup_restore_menu),
@@ -492,7 +479,6 @@ def build_application():
             ],
 
             constants.RESTORE_UPLOAD: [
-                # ناوبری با Reply Keyboard
                 MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
                 MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
                 MessageHandler(filters.Regex(r'^💾 پشتیبان‌گیری$') & admin_filter, admin_backup.backup_restore_menu),
@@ -507,7 +493,6 @@ def build_application():
 
             # GIFT CODES MENU
             constants.GIFT_CODES_MENU: [
-                # ناوبری با Reply Keyboard
                 MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
                 MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
                 MessageHandler(filters.Regex(r'^💾 پشتیبان‌گیری$') & admin_filter, admin_backup.backup_restore_menu),
@@ -569,7 +554,7 @@ def build_application():
     application.add_handler(CallbackQueryHandler(admin_users.admin_confirm_charge_callback, pattern=r'^admin_confirm_charge_'), group=1)
     application.add_handler(CallbackQueryHandler(admin_users.admin_reject_charge_callback, pattern=r'^admin_reject_charge_'), group=1)
 
-    # Global back for user panel (if you added in users.py)
+    # Global back for user panel
     application.add_handler(CallbackQueryHandler(admin_users.admin_user_back_cb, pattern=r'^admin_user_back_\d+$'), group=1)
     application.add_handler(CallbackQueryHandler(admin_users.admin_user_refresh_cb, pattern=r'^admin_user_refresh_\d+$'), group=1)
     application.add_handler(CallbackQueryHandler(admin_users.admin_user_amount_cancel_cb, pattern=r'^admin_user_amount_cancel_\d+$'), group=1)
