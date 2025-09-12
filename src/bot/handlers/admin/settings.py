@@ -139,7 +139,6 @@ async def payment_info_submenu(update: Update, context: ContextTypes.DEFAULT_TYP
     rows = [[_admin_edit_btn("✍️ ویرایش راهنمای پرداخت", "payment_instruction_text")]]
     for i in range(1, 4):
         rows.append([_admin_edit_btn(f"کارت {i}", f"payment_card_{i}_number"), _admin_edit_btn(f"صاحب کارت {i}", f"payment_card_{i}_name"), _admin_edit_btn(f"بانک {i}", f"payment_card_{i}_bank")])
-    # اصلاح: بازگشت به منوی «پرداخت و راهنماها»
     rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="settings_payment_guides")])
     await _send_or_edit(update, context, text, _kb(rows), parse_mode=ParseMode.MARKDOWN); return ADMIN_SETTINGS_MENU
 
@@ -196,7 +195,6 @@ async def global_discount_submenu(update: Update, context: ContextTypes.DEFAULT_
     percent = _get("global_discount_percent", "0")
     days = _get("global_discount_days", "0")
 
-    # اطلاعات محاسبه‌شده (فقط نمایش؛ نیاز به ورود تاریخ نیست)
     starts_raw = _get("global_discount_starts_at", "")
     expires_raw = _get("global_discount_expires_at", "")
 
@@ -237,7 +235,6 @@ async def toggle_global_discount(update: Update, context: ContextTypes.DEFAULT_T
     await q.answer()
     currently_on = _get_bool("global_discount_enabled")
     if not currently_on:
-        # روشن کردن: از همین لحظه به مدت (روز) فعال شود
         db.set_setting("global_discount_enabled", "1")
         try:
             days = int(float(_get("global_discount_days", "0") or 0))
@@ -250,9 +247,7 @@ async def toggle_global_discount(update: Update, context: ContextTypes.DEFAULT_T
         else:
             db.set_setting("global_discount_expires_at", "")
     else:
-        # خاموش کردن
         db.set_setting("global_discount_enabled", "0")
-        # تاریخ‌ها را نگه می‌داریم (برای اطلاع)
 
     return await global_discount_submenu(update, context)
 
@@ -287,27 +282,37 @@ async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     key = context.user_data.get('editing_setting_key')
-    if not key: await update.message.reply_text("❌ کلید نامشخص است."); return ConversationHandler.END
+    if not key:
+        await update.message.reply_text("❌ کلید نامشخص است.")
+        return ConversationHandler.END
+
     val = (update.message.text or "").strip()
-    if val == "-": val = ""
+    if val == "-":
+        val = ""
+
     if key == "usage_update_interval_min":
         try:
             intval = int(float(val)); assert intval > 0; val = str(intval)
-        except Exception: await update.message.reply_text("❌ عدد صحیح مثبت وارد کنید."); return AWAIT_SETTING_VALUE
+        except Exception:
+            await update.message.reply_text("❌ عدد صحیح مثبت وارد کنید.")
+            return AWAIT_SETTING_VALUE
+
     if key == "global_discount_percent":
         try:
             p = float(val); assert p >= 0; val = str(int(p))
         except Exception:
-            await update.message.reply_text("❌ درصد نامعتبر است."); return AWAIT_SETTING_VALUE
+            await update.message.reply_text("❌ درصد نامعتبر است.")
+            return AWAIT_SETTING_VALUE
+
     if key == "global_discount_days":
         try:
             d = int(float(val)); assert d >= 0; val = str(int(d))
         except Exception:
-            await update.message.reply_text("❌ تعداد روز نامعتبر است."); return AWAIT_SETTING_VALUE
+            await update.message.reply_text("❌ تعداد روز نامعتبر است.")
+            return AWAIT_SETTING_VALUE
 
     db.set_setting(key, val)
 
-    # اگر مدت را تغییر داد و الان تخفیف روشن است → تاریخ پایان را با شروع موجود به‌روز کن
     if key == "global_discount_days" and _get_bool("global_discount_enabled"):
         try:
             d = int(_get("global_discount_days", "0") or 0)
@@ -323,6 +328,7 @@ async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_T
     await update.message.reply_text(f"✅ مقدار «{key}» ذخیره شد.")
     dest = context.user_data.pop('settings_return_to', None) or _infer_return_target(key)
     context.user_data.pop('editing_setting_key', None)
+
     if dest == "first_charge_promo": return await first_charge_promo_submenu(update, context)
     if dest == "payment_info": return await payment_info_submenu(update, context)
     if dest == "payment_guides": return await payment_and_guides_submenu(update, context)
@@ -335,13 +341,16 @@ async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_T
 
 # --- Toggles/Back ---
 async def toggle_maintenance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    _toggle("maintenance_enabled"); return await maintenance_and_join_submenu(update, context)
+    _toggle("maintenance_enabled")
+    return await maintenance_and_join_submenu(update, context)
 
 async def toggle_force_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    _toggle("force_join_enabled"); return await maintenance_and_join_submenu(update, context)
+    _toggle("force_join_enabled")
+    return await maintenance_and_join_submenu(update, context)
 
 async def toggle_expiry_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    _toggle("expiry_reminder_enabled", True); return await reports_and_reminders_submenu(update, context)
+    _toggle("expiry_reminder_enabled", True)
+    return await reports_and_reminders_submenu(update, context)
 
 async def toggle_report_setting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = getattr(update, "callback_query", None)
@@ -360,15 +369,17 @@ async def edit_default_link_start(update: Update, context: ContextTypes.DEFAULT_
         [InlineKeyboardButton("🔙 بازگشت", callback_data="settings_service_configs")]
     ])
     await _send_or_edit(update, context, text, kb, parse_mode=None)
-    return ADMIN_SETTINGS_MENU  # افزودن بازگشت state برای پایداری کانورسیشن
+    return ADMIN_SETTINGS_MENU
 
 async def set_default_link_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = getattr(update, "callback_query", None)
     link_type = (q.data if q else "").replace("set_default_link_", "").strip()
     if link_type:
         db.set_setting("default_sub_link_type", link_type)
-        if q: await q.answer(f"✅ نوع پیش‌فرض روی «{link_type}» تنظیم شد.", show_alert=True)
-        else: await update.effective_message.reply_text(f"✅ نوع پیش‌فرض روی «{link_type}» تنظیم شد.")
+        if q:
+            await q.answer(f"✅ نوع پیش‌فرض روی «{link_type}» تنظیم شد.", show_alert=True)
+        else:
+            await update.effective_message.reply_text(f"✅ نوع پیش‌فرض روی «{link_type}» تنظیم شد.")
     return await service_configs_submenu(update, context)
 
 async def toggle_usage_aggregation(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -379,9 +390,11 @@ async def back_to_admin_menu_cb(update: Update, context: ContextTypes.DEFAULT_TY
     q = getattr(update, "callback_query", None)
     if q:
         await q.answer()
-        try: await q.message.delete()
-        except Exception: pass
+        try:
+            await q.message.delete()
+        except Exception:
+            pass
         await context.bot.send_message(chat_id=q.from_user.id, text="🔙 بازگشت به منوی مدیریت", reply_markup=get_admin_menu_keyboard())
     else:
         await update.effective_message.reply_text("🔙 بازگشت به منوی مدیریت", reply_markup=get_admin_menu_keyboard())
-    return ADMIN_MENU  # اصلاح: کانورسیشن باز بماند، دکمه‌ها فعال بمانند
+    return ADMIN_MENU
