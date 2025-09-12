@@ -475,7 +475,7 @@ async def _send_service_info_to_user(context, user_id, new_uuid, plan):
         safe_name = quote_plus(config_name)
 
         base_main = new_service_record.get('sub_link') or utils.build_subscription_url(new_uuid)
-        final_link = f"{base_main}#{safe_name}" if base_main.endswith('/') else f"{base_main}/#{safe_name}"
+        final_link = f"{base_main}#{safe_name}"
 
         qr_bio = utils.make_qr_bytes(final_link)
         caption = utils.create_service_info_caption(
