@@ -108,8 +108,7 @@ def _to_int(x, default=0) -> int:
 def normalize_link_type(t: str) -> str:
     """
     نوع لینک را دقیقاً طبق انتخاب ادمین برمی‌گرداند.
-    مقادیر مجاز: sub, sub64, singbox, clash, clashmeta, xray
-    هر چیز دیگری → sub
+    مجاز: sub, sub64, singbox, clash, clashmeta, xray
     """
     lt = (t or "sub").strip().lower().replace("clash-meta", "clashmeta")
     allowed = {"sub", "sub64", "singbox", "clash", "clashmeta", "xray"}
@@ -149,7 +148,7 @@ def _pick_domains_from_settings(plan_gb: int | None) -> list[str]:
           - نامحدود (gb<=0): unlimited_sub_domains
           - حجمی (gb>0): volume_based_sub_domains
       - در غیر این صورت: sub_domains عمومی
-      - در نهایت fallback به config.SUB_DOMAINS یا PANEL_DOMAIN
+      - در نهایت fallback به config
     """
     if plan_gb is not None:
         try:
@@ -172,39 +171,62 @@ def _pick_domains_from_settings(plan_gb: int | None) -> list[str]:
     return _normalize_subdomains(SUB_DOMAINS) or [_hostname_only(PANEL_DOMAIN)]
 
 
-def build_subscription_url(user_uuid: str, link_type: str | None = None, name: str | None = None, plan_gb: int | None = None) -> str:
+def build_subscription_url(
+    user_uuid: str,
+    link_type: str | None = None,
+    name: str | None = None,
+    plan_gb: int | None = None
+) -> str:
     """
-    لینک اشتراک را مطابق تنظیمات ادمین می‌سازد.
-    - اگر link_type None باشد، از settings: default_sub_link_type خوانده می‌شود.
-    - نوع‌ها: sub, sub64, singbox, clash, clashmeta, xray
-    - اگر PANEL_SECRET_UUID تنظیم شده باشد: https://host/<secret>/<uuid>/<type>/
-      در غیر این‌صورت: https://host/<sub_path>/<uuid>/ (برای sub)، یا .../<uuid>/<type>/ (برای بقیه)
-    - نام (name) برای sub به شکل #name و برای سایرین به شکل ?name= استفاده می‌شود.
+    ساخت لینک اشتراک مطابق تنظیمات ادمین (نوع و دامنه):
+    - link_type=None → از DB کلید default_sub_link_type خوانده می‌شود.
+    - مسیرها:
+      - با PANEL_SECRET_UUID:
+         sub  → https://host/<secret>/<uuid>/sub/
+         دیگر → https://host/<secret>/<uuid>/<type>/
+      - بدون PANEL_SECRET_UUID:
+         sub  → https://host/sub/<uuid>/
+         دیگر → https://host/<type>/<uuid>/
+    - name: برای sub به‌صورت #name، برای سایرین ?name=name
     """
+    # دامنه مطابق تنظیمات
     domains = _pick_domains_from_settings(plan_gb)
     host = _hostname_only(random.choice(domains) if domains else PANEL_DOMAIN)
+
+    # نوع لینک
+    if link_type is None:
+        link_type = (db.get_setting("default_sub_link_type") or "sub").strip().lower()
+    lt = normalize_link_type(link_type)
+
+    # پایه مسیر
     client_secret = _clean_path(PANEL_SECRET_UUID)
     sub_path = _clean_path(SUB_PATH) or "sub"
 
-    base_user_path = f"https://{host}/{client_secret}/{user_uuid}" if client_secret else f"https://{host}/{sub_path}/{user_uuid}"
-
-    if link_type is None:
-        link_type = db.get_setting("default_sub_link_type") or "sub"
-
-    normalized_type = normalize_link_type(link_type)
-    safe_name = quote_plus(name) if name else ""
-
-    if normalized_type == "sub":
-        final_url = f"{base_user_path}/"
-        if safe_name:
-            final_url += f"#{safe_name}"
-        return final_url
+    if client_secret:
+        # https://host/<secret>/<uuid>/...
+        base = f"https://{host}/{client_secret}/{user_uuid}"
+        if lt == "sub":
+            final_url = f"{base}/sub/"
+        else:
+            final_url = f"{base}/{lt}/"
     else:
-        # sub64, singbox, clash, clashmeta, xray
-        final_url = f"{base_user_path}/{normalized_type}/"
-        if safe_name:
-            final_url += f"?name={safe_name}"
-        return final_url
+        # https://host/[sub|type]/<uuid>/
+        if lt == "sub":
+            final_url = f"https://{host}/{sub_path}/{user_uuid}/"
+        else:
+            final_url = f"https://{host}/{lt}/{user_uuid}/"
+
+    # افزودن نام
+    if name:
+        safe_name = quote_plus(name)
+        if lt == "sub":
+            final_url += f"#{safe_name}"
+        else:
+            # اگر ?name قبلاً اضافه نشده
+            sep = "&" if "?" in final_url else "?"
+            final_url += f"{sep}name={safe_name}"
+
+    return final_url
 
 
 def make_qr_bytes(data: str) -> io.BytesIO:
