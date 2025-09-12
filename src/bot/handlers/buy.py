@@ -482,7 +482,6 @@ async def _send_service_info_to_user(context, user_id, new_uuid, plan):
             user_data, service_db_record=new_service_record, title="🎉 سرویس شما فعال شد", override_sub_url=final_link
         )
         inline_kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🚀 باز کردن لینک", url=final_link)],
             [InlineKeyboardButton("📚 راهنمای اتصال", callback_data="guide_connection"),
              InlineKeyboardButton("📋 سرویس‌های من", callback_data="back_to_services")]
         ])
