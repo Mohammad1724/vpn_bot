@@ -1,4 +1,4 @@
-#settings.py
+# settings.py
 # -*- coding: utf-8 -*-
 
 import logging
