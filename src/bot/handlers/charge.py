@@ -43,7 +43,8 @@ async def charge_menu_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     keyboard = [
         [btn("💰 شارژ رایگان (معرفی دوستان)", "acc_referral")],
         [btn("💳 شارژ حساب (واریز)", "charge_start_payment")],
-        nav_row(home_cb="home_menu")
+        # تغییر این ردیف: اضافه شدن دکمه «بازگشت» به اطلاعات حساب کاربری
+        nav_row(back_cb="acc_back_to_main", home_cb="home_menu")
     ]
 
     text = "**💳 شارژ حساب**\n\nلطفاً یکی از گزینه‌های زیر را انتخاب کنید:"
