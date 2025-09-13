@@ -110,7 +110,7 @@ async def show_account_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     keyboard = [
-        [btn("📊 مصرف من", "acc_usage"), btn("💳 شارژ حساب", "user_start_charge")],
+        [btn("📊 مصرف من", "acc_usage"), btn("💳 شارژ حساب", "acc_start_charge")],  # اینجا اصلاح شد
         [btn("📜 سوابق خرید", "acc_purchase_history"), btn("💸 سوابق شارژ", "acc_charge_history")],
         [btn("🤝 انتقال موجودی", "acc_transfer_start"), btn("🎁 ساخت کد هدیه", "acc_gift_from_balance_start")],
         [btn("📚 منوی راهنما", "guide_back_to_menu")],
@@ -153,7 +153,7 @@ async def show_purchase_history_callback(update: Update, context: ContextTypes.D
             price_val = int(float(price_val or 0))
         except Exception:
             price_val = 0
-        msg += f"🔹 {sale['plan_name'] or 'پلن حذف شده'} | {price_val:.0f} تومان | {sale_date}\n"
+        msg += f"🔹 {sale['plan_name'] یا 'پلن حذف شده'} | {price_val:.0f} تومان | {sale_date}\n"
 
     kb = [nav_row(back_cb="acc_back_to_main", home_cb="home_menu")]
     try:
