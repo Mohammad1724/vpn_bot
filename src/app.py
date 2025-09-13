@@ -110,60 +110,52 @@ def build_application():
         per_user=True, per_chat=True
     )
 
-        # --------- CHARGE (user) ----------
-charge_conv = ConversationHandler(
-    entry_points=[
-        # هر پیامی که ایموجی 💳 داشته باشه → منوی شارژ
-        MessageHandler(filters.Regex(r'.*💳.*') & user_filter, check_channel_membership(charge_h.charge_menu_start)),
-        # کال‌بک از هر منو: منوی اصلی/اطلاعات حساب/...
-        CallbackQueryHandler(check_channel_membership(charge_h.charge_menu_start), pattern=r'^(user_start_charge|acc_start_charge|acc_charge)$'),
-    ],
-    states={
-        constants.CHARGE_MENU: [
-            CallbackQueryHandler(charge_h.show_referral_info_inline, pattern=r"^acc_referral$"),
-            CallbackQueryHandler(charge_h.charge_start_payment, pattern=r"^charge_start_payment$"),
-            CallbackQueryHandler(charge_h.charge_menu_start, pattern=r"^charge_menu_main$"),
+    # --------- CHARGE (user) ----------
+    charge_conv = ConversationHandler(
+        entry_points=[
+            # هر پیامی که ایموجی 💳 داشته باشه → منوی شارژ
+            MessageHandler(filters.Regex(r'.*💳.*') & user_filter, check_channel_membership(charge_h.charge_menu_start)),
+            # کال‌بک از هر منو: منوی اصلی/اطلاعات حساب/...
+            CallbackQueryHandler(check_channel_membership(charge_h.charge_menu_start), pattern=r'^(user_start_charge|acc_start_charge|acc_charge)$'),
         ],
-        constants.CHARGE_AMOUNT: [
-            CallbackQueryHandler(charge_h.charge_amount_confirm_cb, pattern=r"^charge_amount_\d+$"),
-            CallbackQueryHandler(charge_h.ask_custom_amount, pattern=r"^charge_custom_amount$"),
-            CallbackQueryHandler(charge_h.charge_menu_start, pattern=r"^charge_menu_main$"),
+        states={
+            constants.CHARGE_MENU: [
+                CallbackQueryHandler(charge_h.show_referral_info_inline, pattern=r"^acc_referral$"),
+                CallbackQueryHandler(charge_h.charge_start_payment, pattern=r"^charge_start_payment$"),
+                CallbackQueryHandler(charge_h.charge_menu_start, pattern=r"^charge_menu_main$"),
+            ],
+            constants.CHARGE_AMOUNT: [
+                CallbackQueryHandler(charge_h.charge_amount_confirm_cb, pattern=r"^charge_amount_\d+$"),
+                CallbackQueryHandler(charge_h.ask_custom_amount, pattern=r"^charge_custom_amount$"),
+                CallbackQueryHandler(charge_h.charge_menu_start, pattern=r"^charge_menu_main$"),
+            ],
+            constants.AWAIT_CUSTOM_AMOUNT: [
+                # فقط ورودی عددی (فارسی/انگلیسی، با فاصله/کاما) پذیرفته می‌شود
+                MessageHandler(filters.Regex(r'^\s*[\d۰-۹ ,]+\s*$'), charge_h.charge_amount_received),
+                CallbackQueryHandler(charge_h.charge_start_payment, pattern=r"^charge_start_payment_back$"),
+            ],
+            constants.CHARGE_RECEIPT: [
+                MessageHandler(filters.PHOTO, charge_h.charge_receipt_received),
+            ],
+        },
+        fallbacks=[
+            CommandHandler('cancel', charge_h.charge_cancel),
+            CallbackQueryHandler(start_h.start, pattern=r"^home_menu$"),
         ],
-        constants.AWAIT_CUSTOM_AMOUNT: [
-            # فقط ورودی عددی (فارسی/انگلیسی، با فاصله/کاما) پذیرفته می‌شود
-            MessageHandler(filters.Regex(r'^\s*[\d۰-۹ ,]+\s*$'), charge_h.charge_amount_received),
-            CallbackQueryHandler(charge_h.charge_start_payment, pattern=r"^charge_start_payment_back$"),
-        ],
-        constants.CHARGE_RECEIPT: [
-            MessageHandler(filters.PHOTO, charge_h.charge_receipt_received),
-        ],
-    },  # ← دیکشنری states با } بسته می‌شود
-    fallbacks=[
-        CommandHandler('cancel', charge_h.charge_cancel),
-        CallbackQueryHandler(start_h.start, pattern=r"^home_menu$"),
-    ],
-    per_user=True, per_chat=True,
-    allow_reentry=True
-)
+        per_user=True, per_chat=True,
+        allow_reentry=True  # مهم
+    )
 
-# --------- TRANSFER ----------
-transfer_conv = ConversationHandler(
-    entry_points=[
-        CallbackQueryHandler(check_channel_membership(acc_act.transfer_start), pattern=r"^acc_transfer_start$")
-    ],
-    states={
-        constants.TRANSFER_RECIPIENT_ID: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, acc_act.transfer_recipient_received)
-        ],
-        constants.TRANSFER_AMOUNT: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, acc_act.transfer_amount_received)
-        ],
-        constants.TRANSFER_CONFIRM: [
-            CallbackQueryHandler(acc_act.transfer_confirm, pattern=r"^transfer_confirm_")
-        ],
-    },
-    fallbacks=[CommandHandler('cancel', acc_act.transfer_cancel)]
-)
+    # --------- TRANSFER ----------
+    transfer_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(check_channel_membership(acc_act.transfer_start), pattern=r"^acc_transfer_start$")],
+        states={
+            constants.TRANSFER_RECIPIENT_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, acc_act.transfer_recipient_received)],
+            constants.TRANSFER_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, acc_act.transfer_amount_received)],
+            constants.TRANSFER_CONFIRM: [CallbackQueryHandler(acc_act.transfer_confirm, pattern=r"^transfer_confirm_")],
+        },
+        fallbacks=[CommandHandler('cancel', acc_act.transfer_cancel)]
+    )
 
     # --------- GIFT FROM BALANCE ----------
     gift_from_balance_conv = ConversationHandler(
@@ -286,14 +278,14 @@ transfer_conv = ConversationHandler(
             constants.BROADCAST_TO_USER_ID: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_users.broadcast_to_user_id_received),
                 CallbackQueryHandler(admin_users.broadcast_cancel_cb, pattern=r'^bcast_menu$'),
-                CallbackQueryHandler(admin_c.admin_entry, pattern=r'^admin_panel$'),
+                CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
             ],
             constants.BROADCAST_TO_USER_MESSAGE: [
                 MessageHandler(~filters.COMMAND & admin_filter, admin_users.broadcast_to_user_message_received),
                 CallbackQueryHandler(admin_users.broadcast_cancel_cb, pattern=r'^bcast_menu$'),
                 CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
             ],
-        },
+        ],
         fallbacks=[CommandHandler('cancel', admin_c.admin_generic_cancel)],
         map_to_parent={ConversationHandler.END: constants.ADMIN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
