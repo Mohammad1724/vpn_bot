@@ -38,7 +38,7 @@ def _get_payment_info_text() -> str:
 async def charge_menu_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     منوی اصلی شارژ. فقط اگر ورودی از «اطلاعات حساب کاربری» بوده باشد،
-    ردیف «↩️ بازگشت» به همان صفحه نشان داده می‌شود.
+    ردیف «🔙 بازگشت» به همان صفحه نشان داده می‌شود.
     """
     q = getattr(update, "callback_query", None)
     if q:
@@ -46,7 +46,8 @@ async def charge_menu_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         data = q.data or ""
         # تشخیص منبع ورود
         if data == "charge_menu_main":
-            pass  # بازگشت داخلی به منوی شارژ -> فلگ قبلی را حفظ کن
+            # بازگشت داخلی به منوی شارژ -> فلگ قبلی را حفظ کن
+            pass
         elif data.startswith("acc_"):  # acc_start_charge یا acc_charge
             context.user_data['charge_from_acc'] = True
         elif data.startswith("user_"):  # user_start_charge
@@ -225,10 +226,16 @@ async def charge_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         except Exception:
             pass
 
-    await context.bot.send_message(
-        chat_id=update.effective_chat.id,
-        text="عملیات شارژ لغو شد.",
-        reply_markup=get_main_menu_keyboard(update.effective_user.id)
-    )
-    context.user_data.clear()
+    # اگر خروج برای بازگشت به منوی حساب نباشد، پیام لغو بفرست
+    if not context.user_data.get('charge_is_exiting_to_acc', False):
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="عملیات شارژ لغو شد.",
+            reply_markup=get_main_menu_keyboard(update.effective_user.id)
+        )
+
+    # پاکسازی user_data
+    for k in ('charge_from_acc', 'charge_amount', 'charge_is_exiting_to_acc'):
+        context.user_data.pop(k, None)
+
     return ConversationHandler.END
