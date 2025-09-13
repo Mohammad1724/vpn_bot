@@ -3,7 +3,7 @@
 
 import logging
 from telegram.ext import ContextTypes, ConversationHandler
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 
 import database as db
@@ -38,7 +38,7 @@ def _get_payment_info_text() -> str:
 async def charge_menu_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     منوی اصلی شارژ. فقط اگر ورودی از «اطلاعات حساب کاربری» بوده باشد،
-    ردیف «🔙 بازگشت» به همان صفحه نشان داده می‌شود.
+    ردیف «↩️ بازگشت» به همان صفحه نشان داده می‌شود.
     """
     q = getattr(update, "callback_query", None)
     if q:
@@ -46,8 +46,7 @@ async def charge_menu_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         data = q.data or ""
         # تشخیص منبع ورود
         if data == "charge_menu_main":
-            # بازگشت داخلی به منوی شارژ -> فلگ قبلی را حفظ کن
-            pass
+            pass  # بازگشت داخلی به منوی شارژ -> فلگ قبلی را حفظ کن
         elif data.startswith("acc_"):  # acc_start_charge یا acc_charge
             context.user_data['charge_from_acc'] = True
         elif data.startswith("user_"):  # user_start_charge
@@ -58,30 +57,26 @@ async def charge_menu_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     from_acc = bool(context.user_data.get('charge_from_acc', False))
 
-    # ساخت کیبورد
     keyboard = [
         [btn("💰 شارژ رایگان (معرفی دوستان)", "acc_referral")],
         [btn("💳 شارژ حساب (واریز)", "charge_start_payment")],
     ]
 
-    # ردیف ناوبری: فقط اگر از اطلاعات حساب آمده باشد، «بازگشت» به همان صفحه را نشان بده
+    # ناوبری یکدست از ui.nav_row
     if from_acc:
-        keyboard.append([
-            InlineKeyboardButton("🔙 بازگشت", callback_data="acc_back_to_main"),
-            InlineKeyboardButton("🏠 منو", callback_data="home_menu"),
-        ])
+        keyboard.append(nav_row(back_cb="acc_back_to_main", home_cb="home_menu"))
     else:
-        keyboard.append([InlineKeyboardButton("🏠 منو", callback_data="home_menu")])
+        keyboard.append(nav_row(home_cb="home_menu"))
 
     text = "**💳 شارژ حساب**\n\nلطفاً یکی از گزینه‌های زیر را انتخاب کنید:"
 
     if q:
         try:
-            await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+            await q.edit_message_text(text, reply_markup=markup(keyboard), parse_mode=ParseMode.MARKDOWN)
         except Exception:
-            await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+            await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=markup(keyboard), parse_mode=ParseMode.MARKDOWN)
     else:
-        await update.effective_message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+        await update.effective_message.reply_text(text, reply_markup=markup(keyboard), parse_mode=ParseMode.MARKDOWN)
 
     return CHARGE_MENU
 
