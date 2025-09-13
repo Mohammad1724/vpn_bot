@@ -130,7 +130,8 @@ def build_application():
                 CallbackQueryHandler(charge_h.charge_menu_start, pattern=r"^charge_menu_main$"),
             ],
             constants.AWAIT_CUSTOM_AMOUNT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, charge_h.charge_amount_received),
+                # فقط ورودی عددی (فارسی/انگلیسی، با فاصله/کاما) پذیرفته می‌شود
+                MessageHandler(filters.Regex(r'^\s*[\d۰-۹ ,]+\s*$'), charge_h.charge_amount_received),
                 CallbackQueryHandler(charge_h.charge_start_payment, pattern=r"^charge_start_payment_back$"),
             ],
             constants.CHARGE_RECEIPT: [
@@ -142,7 +143,7 @@ def build_application():
             CallbackQueryHandler(start_h.start, pattern=r"^home_menu$"),
         ],
         per_user=True, per_chat=True,
-        allow_reentry=True
+        allow_reentry=True  # مهم
     )
 
     # --------- TRANSFER ----------
@@ -195,7 +196,7 @@ def build_application():
             constants.PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_days_received)],
             constants.PLAN_GB: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_gb_received)],
             constants.PLAN_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.plan_category_received)],
-        },
+        ],
         fallbacks=[CommandHandler('cancel', admin_plans.cancel_add_plan)],
         map_to_parent={ConversationHandler.END: constants.PLAN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
@@ -224,7 +225,7 @@ def build_application():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_category_received),
                 CommandHandler('skip', admin_plans.skip_edit_plan_category)
             ],
-        },
+        ],
         fallbacks=[CommandHandler('cancel', admin_plans.cancel_edit_plan)],
         map_to_parent={ConversationHandler.END: constants.PLAN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
@@ -282,7 +283,7 @@ def build_application():
             constants.BROADCAST_TO_USER_MESSAGE: [
                 MessageHandler(~filters.COMMAND & admin_filter, admin_users.broadcast_to_user_message_received),
                 CallbackQueryHandler(admin_users.broadcast_cancel_cb, pattern=r'^bcast_menu$'),
-                CallbackQueryHandler(admin_c.admin_entry, pattern=r'^admin_panel$'),
+                CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
             ],
         },
         fallbacks=[CommandHandler('cancel', admin_c.admin_generic_cancel)],
@@ -301,7 +302,6 @@ def build_application():
         MessageHandler(filters.Regex(r'^👥 مدیریت کاربران$') & admin_filter, admin_users.user_management_menu),
         MessageHandler(filters.Regex(r'^🎁 مدیریت کد هدیه$') & admin_filter, admin_gift.gift_code_management_menu),
         MessageHandler(filters.Regex(r'^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
-        MessageHandler(filters.Regex(r'^🛑 خاموش کردن ربات$') & admin_filter, admin_c.shutdown_bot),
 
         CallbackQueryHandler(admin_plans.plan_management_menu, pattern=r"^admin_plans$"),
         CallbackQueryHandler(admin_reports.reports_menu, pattern=r"^admin_reports$"),
@@ -309,6 +309,7 @@ def build_application():
         CallbackQueryHandler(admin_users.user_management_menu, pattern=r"^admin_users$"),
         CallbackQueryHandler(admin_gift.gift_code_management_menu, pattern=r"^admin_gift$"),
         CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^admin_settings$"),
+
         CallbackQueryHandler(admin_c.shutdown_bot, pattern=r"^admin_shutdown$"),
 
         broadcast_conv,
@@ -516,7 +517,7 @@ def build_application():
     application.add_handler(buy_conv, group=0)
     application.add_handler(gift_conv, group=0)
     application.add_handler(charge_conv, group=0)
-    application.add_handler(transfer_conv, group=2)
+    application.add_handler(transfer_conv, group=0)
     application.add_handler(gift_from_balance_conv, group=0)
     application.add_handler(support_conv, group=0)
     application.add_handler(admin_conv, group=0)
@@ -538,8 +539,8 @@ def build_application():
     application.add_handler(CallbackQueryHandler(check_channel_membership(start_h.start), pattern=r"^home_menu$"))
 
     # Usage
-    application.add_handler(CallbackQueryHandler(usage_h.show_usage_menu, pattern=r"^acc_usage$"), group=2)
-    application.add_handler(CallbackQueryHandler(usage_h.show_usage_menu, pattern=r"^acc_usage_refresh$"), group=2)
+    application.add_handler(CallbackQueryHandler(usage_h.show_usage_menu, pattern=r"^acc_usage$"))
+    application.add_handler(CallbackQueryHandler(usage_h.show_usage_menu, pattern=r"^acc_usage_refresh$"))
 
     # Admin charge decision
     application.add_handler(CallbackQueryHandler(admin_users.admin_confirm_charge_callback, pattern=r'^admin_confirm_charge_'), group=1)
@@ -560,7 +561,7 @@ def build_application():
     for h in user_services_handlers:
         application.add_handler(h, group=2)
 
-    # ACCOUNT INFO (User side) -> moved to group=2
+    # ACCOUNT INFO
     account_info_handlers = [
         CallbackQueryHandler(check_channel_membership(start_h.show_purchase_history_callback), pattern=r"^acc_purchase_history$"),
         CallbackQueryHandler(check_channel_membership(start_h.show_charge_history_callback), pattern=r"^acc_charge_history$"),
@@ -568,7 +569,7 @@ def build_application():
         CallbackQueryHandler(check_channel_membership(start_h.show_account_info), pattern=r"^acc_back_to_main$"),
     ]
     for h in account_info_handlers:
-        application.add_handler(h, group=2)
+        application.add_handler(h)
 
     # GUIDES
     guide_handlers = [
