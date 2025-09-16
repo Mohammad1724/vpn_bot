@@ -1013,3 +1013,76 @@ def list_all_endpoints_with_user() -> list:
         ORDER BY se.id ASC
     """)
     return [dict(r) for r in cur.fetchall()]
+
+# ========== توابع جدید برای لیست کاربران و بخش‌بندی ==========
+
+def get_users_with_no_orders() -> list[int]:
+    """
+    لیست user_id کاربرانی که هیچ خرید موفقی نداشته‌اند را برمی‌گرداند.
+    """
+    conn = _connect_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT u.user_id FROM users u
+        LEFT JOIN sales_log s ON u.user_id = s.user_id
+        WHERE s.sale_id IS NULL
+    """)
+    return [row['user_id'] for row in cur.fetchall()]
+
+def get_expired_user_ids(min_weeks_ago: int = 0) -> list[int]:
+    """
+    لیست user_id کاربرانی که *تمام* سرویس‌هایشان منقضی شده را برمی‌گرداند.
+    """
+    conn = _connect_db()
+    cur = conn.cursor()
+    query = """
+        SELECT
+            s.user_id
+        FROM active_services s
+        JOIN plans p ON s.plan_id = p.plan_id
+        GROUP BY s.user_id
+        HAVING MAX(STRFTIME('%s', s.created_at) + (p.days * 86400)) < STRFTIME('%s', 'now', ?)
+    """
+    offset_str = f'-{min_weeks_ago * 7} days'
+    cur.execute(query, (offset_str,))
+    return [row['user_id'] for row in cur.fetchall()]
+
+def get_users_with_no_orders_count() -> int:
+    return len(get_users_with_no_orders())
+
+def get_expired_users_count(min_weeks_ago: int = 0) -> int:
+    return len(get_expired_user_ids(min_weeks_ago))
+
+def get_total_users_count() -> int:
+    conn = _connect_db()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(user_id) FROM users")
+    count = cur.fetchone()[0]
+    return count or 0
+
+def get_all_users_paginated(page: int = 1, page_size: int = 15) -> list[dict]:
+    """
+    لیست کاربران را به‌صورت صفحه‌بندی شده برمی‌گرداند.
+    """
+    conn = _connect_db()
+    cur = conn.cursor()
+    offset = (page - 1) * page_size
+    cur.execute("SELECT * FROM users ORDER BY user_id DESC LIMIT ? OFFSET ?", (page_size, offset))
+    return [dict(row) for row in cur.fetchall()]
+
+def is_user_active(user_id: int) -> bool:
+    """
+    بررسی می‌کند آیا کاربر حداقل یک سرویس فعال (منقضی نشده) دارد یا خیر.
+    """
+    conn = _connect_db()
+    cur = conn.cursor()
+    query = """
+        SELECT 1
+        FROM active_services s
+        JOIN plans p ON s.plan_id = p.plan_id
+        WHERE s.user_id = ?
+        AND STRFTIME('%s', s.created_at) + (p.days * 86400) > STRFTIME('%s', 'now')
+        LIMIT 1
+    """
+    cur.execute(query, (user_id,))
+    return cur.fetchone() is not None
