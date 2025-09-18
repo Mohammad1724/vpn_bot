@@ -27,6 +27,76 @@ except Exception:
 
 logger = logging.getLogger(__name__)
 
+# --------------------- Helpers for reminder job ---------------------
+_PERSIAN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
+
+
+def _normalize_digits(s: str) -> str:
+    try:
+        return str(s).translate(_PERSIAN_DIGITS)
+    except Exception:
+        return str(s)
+
+
+def _compute_days_left_from_jalali(expiry_jalali: str) -> int | None:
+    """
+    expiry_jalali مثل 1403/06/30 یا 1403-06-30
+    خروجی: تعداد روز باقیمانده تا انقضا یا None در صورت عدم امکان محاسبه
+    """
+    if not expiry_jalali or expiry_jalali == "N/A":
+        return None
+    try:
+        import jdatetime
+    except Exception:
+        return None
+
+    try:
+        s = _normalize_digits(expiry_jalali).replace("-", "/").strip()
+        parts = [int(p) for p in s.split("/")[:3]]
+        if len(parts) != 3:
+            return None
+        y, m, d = parts
+        jdate = jdatetime.date(y, m, d)
+        gdate = jdate.togregorian()  # datetime.date
+        days_left = (gdate - datetime.now().date()).days
+        return days_left
+    except Exception:
+        return None
+
+
+def _extract_usage_gb(payload: dict) -> float | None:
+    if not isinstance(payload, dict):
+        return None
+    for k in ("current_usage_GB", "usage_GB", "used_GB"):
+        if k in payload:
+            try:
+                return float(payload[k])
+            except Exception:
+                return None
+    return None
+
+
+def _get_first_number_setting(keys: list[str], cast=float):
+    """
+    اولین کلید موجود در settings که مقدار عددی معتبر داشته باشد را برمی‌گرداند.
+    اگر هیچ‌کدام نبود، None.
+    """
+    for k in keys:
+        try:
+            v = db.get_setting(k)
+            if v is None or str(v).strip() == "":
+                continue
+            num = cast(float(v)) if cast is int else cast(v)
+            # اگر مقدار منفی/صفر بود، به‌عنوان غیرفعال در نظر بگیریم
+            if float(num) <= 0:
+                continue
+            return num
+        except Exception:
+            continue
+    return None
+# --------------------------------------------------------------------
+
+
 # ========== Auto-backup (send DB file to admin) ==========
 async def auto_backup_job(context: ContextTypes.DEFAULT_TYPE):
     """پشتیبان‌گیری خودکار دیتابیس و ارسال به مقصد تنظیم‌شده"""
@@ -56,8 +126,10 @@ async def auto_backup_job(context: ContextTypes.DEFAULT_TYPE):
             # VACUUM INTO در SQLite 3.27+
             version = sqlite3.sqlite_version_info
             if version >= (3, 27, 0):
+                # safer: escape single quotes
+                path_escaped = backup_path.replace("'", "''")
                 with sqlite3.connect(db.DB_NAME) as conn:
-                    conn.execute("VACUUM INTO ?", (backup_path,))
+                    conn.execute(f"VACUUM INTO '{path_escaped}'")
                 logger.info("Auto-backup: VACUUM INTO succeeded")
             else:
                 # روش backup() برای نسخه‌های قدیمی‌تر
@@ -66,7 +138,21 @@ async def auto_backup_job(context: ContextTypes.DEFAULT_TYPE):
                 logger.info("Auto-backup: backup() API succeeded")
         except Exception as e:
             logger.error("SQLite backup methods failed (%s). Falling back to file copy.", e, exc_info=True)
+            try:
+                # تلاش برای هماهنگ‌سازی WAL قبل از کپی ساده
+                with sqlite3.connect(db.DB_NAME) as conn:
+                    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except Exception:
+                pass
             shutil.copy2(db.DB_NAME, backup_path)
+            # اگر -wal و -shm وجود داشتند هم کپی کنیم
+            for ext in ("-wal", "-shm"):
+                src_path = db.DB_NAME + ext
+                if os.path.exists(src_path):
+                    try:
+                        shutil.copy2(src_path, backup_path + ext)
+                    except Exception:
+                        pass
             logger.info("Auto-backup: file copy succeeded")
 
         # ارسال فایل
@@ -114,41 +200,53 @@ async def check_low_usage(context: ContextTypes.DEFAULT_TYPE):
     logger.info("Job: checking low-usage services... (not implemented)")
 
 
-# Helper: extract usage GB from user info payload
-def _extract_usage_gb(payload: dict) -> float | None:
-    if not isinstance(payload, dict):
-        return None
-    for k in ("current_usage_GB", "usage_GB", "used_GB"):
-        if k in payload:
-            try:
-                return float(payload[k])
-            except Exception:
-                return None
-    return None
-
-
 # ========== Expiry reminder (settings-driven) ==========
 async def expiry_reminder_job(context: ContextTypes.DEFAULT_TYPE):
     """
-    ارسال یادآوری انقضا بر اساس تنظیمات.
+    ارسال یادآوری انقضا:
+      - بر اساس روزهای باقی‌مانده (expiry_reminder_days)
+      - بر اساس حجم باقیمانده (expiry_reminder_gb و کلیدهای مشابه)
     """
     try:
         enabled = db.get_setting("expiry_reminder_enabled")
         if str(enabled).lower() in ("0", "false", "off"):
             return
 
+        # آستانه روزها
         try:
             days_threshold = int(float(db.get_setting("expiry_reminder_days") or 3))
+            if days_threshold <= 0:
+                days_threshold = None
         except Exception:
             days_threshold = 3
 
-        template = db.get_setting("expiry_reminder_message") or (
+        # آستانه GB (اولین کلید معتبر)
+        gb_threshold = _get_first_number_setting(
+            keys=[
+                "expiry_reminder_gb",
+                "expiry_gb_threshold",
+                "expiry_low_gb",
+                "low_usage_threshold_gb",
+                "usage_reminder_gb",
+                "reminder_gb_threshold",
+            ],
+            cast=float
+        )
+
+        # پیام‌ها
+        template_days = db.get_setting("expiry_reminder_message") or (
             "⏰ سرویس «{service_name}» شما {days} روز دیگر منقضی می‌شود.\n"
             "برای جلوگیری از قطع، از «📋 سرویس‌های من» تمدید کنید."
         )
+        template_gb = db.get_setting("expiry_reminder_gb_message") or (
+            "⚠️ حجم باقیمانده سرویس «{service_name}» کمتر از {gb} گیگابایت است "
+            "(باقی‌مانده: {gb_left} گیگابایت).\n"
+            "برای جلوگیری از قطع، لطفاً شارژ یا تمدید کنید."
+        )
 
         services = db.get_all_active_services()
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        # ثبت روز جاری برای جلوگیری از ارسال تکراری
+        today = datetime.now().strftime("%Y-%m-%d")
 
         for svc in services:
             try:
@@ -160,36 +258,72 @@ async def expiry_reminder_job(context: ContextTypes.DEFAULT_TYPE):
                     continue
 
                 status, expiry_jalali, is_expired = get_service_status(info)
-                if is_expired or not expiry_jalali or expiry_jalali == "N/A":
+                if is_expired:
                     continue
 
-                try:
-                    import jdatetime  # optional
-                    y, m, d = map(int, expiry_jalali.split("/"))
-                    jalali_date = jdatetime.date(y, m, d)
-                    gregorian_expiry = jalali_date.togregorian()
-                    days_left = (gregorian_expiry - datetime.now().date()).days
-                except Exception:
-                    continue
+                name = svc.get("name") or "سرویس"
+                sent_this_service = False
 
-                if days_left <= 0 or days_left > days_threshold:
-                    continue
+                # 1) یادآوری بر اساس روزهای باقیمانده
+                if days_threshold:
+                    days_left = _compute_days_left_from_jalali(expiry_jalali)
+                    if days_left is not None and 0 < days_left <= int(days_threshold):
+                        # بررسی تکراری نبودن در امروز (سازگاری با type قدیمی 'expiry')
+                        already_sent = db.was_reminder_sent(svc["service_id"], "expiry_days", today) or \
+                                       db.was_reminder_sent(svc["service_id"], "expiry", today)
+                        if not already_sent:
+                            text = template_days.format(days=days_left, service_name=name)
+                            try:
+                                await context.bot.send_message(chat_id=svc["user_id"], text=text)
+                                db.mark_reminder_sent(svc["service_id"], "expiry_days", today)
+                                # برای سازگاری با گذشته
+                                db.mark_reminder_sent(svc["service_id"], "expiry", today)
+                                sent_this_service = True
+                            except RetryAfter as e:
+                                await asyncio.sleep(getattr(e, "retry_after", 1) + 1)
+                                await context.bot.send_message(chat_id=svc["user_id"], text=text)
+                                db.mark_reminder_sent(svc["service_id"], "expiry_days", today)
+                                db.mark_reminder_sent(svc["service_id"], "expiry", today)
+                                sent_this_service = True
+                            except (Forbidden, BadRequest, TimedOut, NetworkError):
+                                pass
 
-                if db.was_reminder_sent(svc["service_id"], "expiry", today):
-                    continue
+                # 2) یادآوری بر اساس حجم باقیمانده (اگر قبلاً پیام نفرستادیم)
+                if (gb_threshold is not None) and (not sent_this_service):
+                    # اگر سرویس نامحدود نیست (usage_limit_GB > 0)
+                    u_limit_raw = info.get("usage_limit_GB", None)
+                    try:
+                        u_limit = float(u_limit_raw) if u_limit_raw is not None else None
+                    except Exception:
+                        u_limit = None
 
-                text = template.format(days=days_left, service_name=(svc.get("name") or "سرویس"))
-                try:
-                    await context.bot.send_message(chat_id=svc["user_id"], text=text)
-                    db.mark_reminder_sent(svc["service_id"], "expiry", today)
-                except RetryAfter as e:
-                    await asyncio.sleep(getattr(e, "retry_after", 1) + 1)
-                    await context.bot.send_message(chat_id=svc["user_id"], text=text)
-                    db.mark_reminder_sent(svc["service_id"], "expiry", today)
-                except (Forbidden, BadRequest, TimedOut, NetworkError):
-                    pass
+                    if (u_limit is not None) and (u_limit > 0):
+                        used = _extract_usage_gb(info)
+                        if used is not None:
+                            remaining = max(0.0, u_limit - float(used))
+                            if remaining <= float(gb_threshold):
+                                if not db.was_reminder_sent(svc["service_id"], "expiry_gb", today):
+                                    try:
+                                        # gb_left را خوشگل کنیم
+                                        gb_left_str = f"{remaining:.2f}".rstrip("0").rstrip(".")
+                                        text = template_gb.format(
+                                            service_name=name,
+                                            gb=float(gb_threshold),
+                                            gb_left=gb_left_str
+                                        )
+                                        await context.bot.send_message(chat_id=svc["user_id"], text=text)
+                                        db.mark_reminder_sent(svc["service_id"], "expiry_gb", today)
+                                        sent_this_service = True
+                                    except RetryAfter as e:
+                                        await asyncio.sleep(getattr(e, "retry_after", 1) + 1)
+                                        await context.bot.send_message(chat_id=svc["user_id"], text=text)
+                                        db.mark_reminder_sent(svc["service_id"], "expiry_gb", today)
+                                        sent_this_service = True
+                                    except (Forbidden, BadRequest, TimedOut, NetworkError):
+                                        pass
 
                 await asyncio.sleep(0.2)
+
             except Exception as e:
                 logger.debug("expiry check for service %s failed: %s", svc.get("service_id"), e)
 
