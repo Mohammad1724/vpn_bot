@@ -1,3 +1,4 @@
+# filename: bot/handlers/users.py
 # -*- coding: utf-8 -*-
 
 import re
@@ -39,6 +40,15 @@ def normalize_username_input(text: str) -> str:
     s = re.sub(r'[^A-Za-z0-9_]', '', s)
     return s
 
+def _normalize_amount_text(t: str) -> str:
+    """
+    نرمال‌سازی مبلغ: تبدیل ارقام فارسی به انگلیسی و حذف جداکننده‌ها/حروف
+    """
+    s = (t or "").strip().translate(_P2E)
+    s = s.replace(",", "").replace("٬", "").replace("،", "").replace(" ", "")
+    s = re.sub(r"[^\d.]", "", s)
+    return s
+
 # -------------------------------
 # Helpers (Inline UI)
 # -------------------------------
@@ -78,7 +88,8 @@ def _amount_prompt_kb(target_id: int) -> InlineKeyboardMarkup:
     ]])
 
 def _back_to_user_panel_kb(target_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت به پنل کاربر", callback_data=f"admin_user_back_{target_id}")]])
+    # تغییر به admin_user_refresh_* تا نیازی به اضافه کردن هندلر جدید در app.py نباشد
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت به پنل کاربر", callback_data=f"admin_user_refresh_{target_id}")]])
 
 async def _send_new(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, kb: InlineKeyboardMarkup | None = None, pm: str | None = None):
     q = getattr(update, "callback_query", None)
@@ -316,7 +327,7 @@ async def broadcast_cancel_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
     return await broadcast_menu(update, context)
 
 # -------------------------------
-# User Management (unchanged)
+# User Management
 # -------------------------------
 
 async def user_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -346,6 +357,7 @@ async def _send_user_panel(update: Update, context: ContextTypes.DEFAULT_TYPE, t
         await update.effective_message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
 
 async def admin_user_back_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # باقی گذاشته شده؛ در صورت نیاز می‌توان در app.py رجیستر کرد.
     q = update.callback_query
     await q.answer()
     try:
@@ -449,7 +461,8 @@ async def admin_user_services_cb(update: Update, context: ContextTypes.DEFAULT_T
     if over_limit:
         lines.append(f"\n… و {len(services) - MAX_ITEMS} سرویس دیگر")
 
-    kb_rows.append([InlineKeyboardButton("🔙 بازگشت به پنل کاربر", callback_data=f"admin_user_back_{target_id}")])
+    # اصلاح: استفاده از refresh به‌جای back
+    kb_rows.append([InlineKeyboardButton("🔙 بازگشت به پنل کاربر", callback_data=f"admin_user_refresh_{target_id}")])
     kb = InlineKeyboardMarkup(kb_rows)
 
     text = "📋 سرویس‌های فعال کاربر:\n\n" + "\n".join(lines)
@@ -558,7 +571,7 @@ async def admin_user_amount_cancel_cb(update: Update, context: ContextTypes.DEFA
 
 async def manage_user_amount_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     em = update.effective_message
-    txt = (em.text or "").strip().replace(",", "").replace("٬", "")
+    txt = _normalize_amount_text(em.text or "")
     target_id = context.user_data.get("muid")
 
     try:
