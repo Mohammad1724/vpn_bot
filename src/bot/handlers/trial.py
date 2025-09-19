@@ -1,3 +1,4 @@
+# filename: bot/handlers/trial.py
 # -*- coding: utf-8 -*-
 
 import logging
@@ -19,6 +20,8 @@ except Exception:
     DEFAULT_SERVER_NAME = None
 
 logger = logging.getLogger(__name__)
+
+_PERSIAN_TO_EN = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
 
 
 def _maint_on() -> bool:
@@ -74,8 +77,9 @@ async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await em.reply_text("🧪 شما قبلاً از سرویس تست استفاده کرده‌اید.")
         return
 
-    raw_days = str(db.get_setting("trial_days") or "1").strip().replace(",", ".")
-    raw_gb = str(db.get_setting("trial_gb") or "1").strip().replace(",", ".")
+    # Parse trial days/gb with Persian digits support
+    raw_days = str(db.get_setting("trial_days") or "1").strip().translate(_PERSIAN_TO_EN).replace("،", ".").replace(",", ".")
+    raw_gb = str(db.get_setting("trial_gb") or "1").strip().translate(_PERSIAN_TO_EN).replace("،", ".").replace(",", ".")
     try:
         trial_days = max(1, int(float(raw_days)))
     except Exception:
@@ -122,8 +126,13 @@ async def get_trial_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         user_data = await hiddify_api.get_user_info(new_uuid, server_name=server_name)
         if user_data:
-            # لینک اشتراک: ترجیح sub_link ذخیره‌شده، وگرنه ساخت از روی سرور
-            sub_url = (new_service_record or {}).get('sub_link') or utils.build_subscription_url(new_uuid, server_name=server_name)
+            # لینک اشتراک: ترجیح sub_link ذخیره‌شده، وگرنه ساخت بر اساس نوع پلن تست (حجمی)
+            sub_url = (new_service_record or {}).get('sub_link')
+            if not sub_url:
+                config_name = (user_data.get('name') or 'config') or 'config'
+                # توجه: build_subscription_url پارامتر server_name ندارد؛ از plan_gb برای انتخاب دامنه مناسب استفاده می‌کنیم.
+                sub_url = utils.build_subscription_url(new_uuid, name=config_name, plan_gb=int(round(trial_gb)))
+
             qr_bio = utils.make_qr_bytes(sub_url)
             caption = utils.create_service_info_caption(
                 user_data,
