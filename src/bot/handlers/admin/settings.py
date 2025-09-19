@@ -1,4 +1,4 @@
-# settings.py
+# filename: bot/handlers/admin/settings.py
 # -*- coding: utf-8 -*-
 
 import logging
@@ -40,6 +40,13 @@ def _kb(rows): return InlineKeyboardMarkup(rows)
 def _admin_edit_btn(title: str, key: str): return InlineKeyboardButton(title, callback_data=f"admin_edit_setting_{key}")
 def _back_to_settings_btn(): return InlineKeyboardButton("🔙 بازگشت به تنظیمات", callback_data="back_to_settings")
 
+def _get_first_nonempty(*keys: str, default: str = "") -> str:
+    for k in keys:
+        v = _get(k, "").strip()
+        if v != "":
+            return v
+    return default
+
 async def _send_or_edit(
     update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup=None, parse_mode=ParseMode.MARKDOWN
 ):
@@ -51,8 +58,10 @@ async def _send_or_edit(
         except BadRequest as e:
             emsg = str(e).lower()
             if "can't parse entities" in emsg or "can't find end of the entity" in emsg:
-                try: await q.edit_message_text(text, reply_markup=reply_markup, parse_mode=None)
-                except Exception: pass
+                try:
+                    await q.edit_message_text(text, reply_markup=reply_markup, parse_mode=None)
+                except Exception:
+                    pass
             else:
                 try:
                     await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=reply_markup, parse_mode=parse_mode)
@@ -168,12 +177,14 @@ async def reports_and_reminders_submenu(update: Update, context: ContextTypes.DE
     daily_on = "فعال ✅" if _get_bool("report_daily_enabled") else "غیرفعال ❌"
     weekly_on = "فعال ✅" if _get_bool("report_weekly_enabled") else "غیرفعال ❌"
     expiry_on = "فعال ✅" if _get_bool("expiry_reminder_enabled", True) else "غیرفعال ❌"
-    expiry_days = _get("expiry_reminder_days", "3"); min_gb = _get("expiry_reminder_min_remaining_gb", "0")
+    expiry_days = _get("expiry_reminder_days", "3")
+    # نمایش آستانه GB سازگار با جاب
+    min_gb = _get_first_nonempty("expiry_reminder_gb", "expiry_reminder_min_remaining_gb", default="0")
     text = f"**📊 گزارش‌ها و یادآورها**\n\n- گزارش روزانه: {daily_on}\n- گزارش هفتگی: {weekly_on}\n- یادآور انقضا: {expiry_on} ({expiry_days} روز قبل, حداقل {min_gb}GB)"
     kb = _kb([
         [InlineKeyboardButton("تغییر گزارش روزانه", callback_data="toggle_report_report_daily_enabled"), InlineKeyboardButton("تغییر گزارش هفتگی", callback_data="toggle_report_report_weekly_enabled")],
         [InlineKeyboardButton("تغییر یادآور انقضا", callback_data="toggle_expiry_reminder")],
-        [_admin_edit_btn("✍️ ویرایش روزهای یادآور", "expiry_reminder_days"), _admin_edit_btn("✍️ ویرایش حداقل حجم یادآور", "expiry_reminder_min_remaining_gb")],
+        [_admin_edit_btn("✍️ ویرایش روزهای یادآور", "expiry_reminder_days"), _admin_edit_btn("✍️ ویرایش حداقل حجم یادآور (GB)", "expiry_reminder_min_remaining_gb")],
         [_back_to_settings_btn()]
     ])
     await _send_or_edit(update, context, text, kb, parse_mode=ParseMode.MARKDOWN); return ADMIN_SETTINGS_MENU
@@ -195,7 +206,6 @@ async def global_discount_submenu(update: Update, context: ContextTypes.DEFAULT_
     percent = _get("global_discount_percent", "0")
     days = _get("global_discount_days", "0")
 
-    # اطلاعات محاسبه‌شده (فقط نمایش؛ نیاز به ورود تاریخ نیست)
     starts_raw = _get("global_discount_starts_at", "")
     expires_raw = _get("global_discount_expires_at", "")
 
@@ -236,7 +246,6 @@ async def toggle_global_discount(update: Update, context: ContextTypes.DEFAULT_T
     await q.answer()
     currently_on = _get_bool("global_discount_enabled")
     if not currently_on:
-        # روشن کردن: از همین لحظه به مدت (روز) فعال شود
         db.set_setting("global_discount_enabled", "1")
         try:
             days = int(float(_get("global_discount_days", "0") or 0))
@@ -249,10 +258,7 @@ async def toggle_global_discount(update: Update, context: ContextTypes.DEFAULT_T
         else:
             db.set_setting("global_discount_expires_at", "")
     else:
-        # خاموش کردن
         db.set_setting("global_discount_enabled", "0")
-        # تاریخ‌ها را نگه می‌داریم (برای اطلاع)
-
     return await global_discount_submenu(update, context)
 
 # --- Edit/Save Setting value ---
@@ -280,33 +286,75 @@ async def edit_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     elif key == "usage_update_interval_min": tip = "\n(عدد صحیح مثبت)"
     elif key == "global_discount_percent": tip = "\n(عدد درصد؛ مثال: 10)"
     elif key == "global_discount_days": tip = "\n(تعداد روز؛ مثال: 5. اگر 0 بزنید، نامحدود می‌شود.)"
+    elif key in ("expiry_reminder_min_remaining_gb", "expiry_reminder_gb"): tip = "\n(آستانه حجم (GB)؛ مثال: 1 یا 0.5)"
+    elif key == "expiry_reminder_days": tip = "\n(تعداد روز؛ مثال: 3)"
     text = f"✍️ مقدار جدید برای **{key}** را ارسال کنید.{tip}\n/cancel برای انصراف\n\n**مقدار فعلی:**\n`{cur}`"
     await _send_or_edit(update, context, text, reply_markup=None, parse_mode=ParseMode.MARKDOWN)
     return AWAIT_SETTING_VALUE
 
 async def setting_value_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     key = context.user_data.get('editing_setting_key')
-    if not key: await update.message.reply_text("❌ کلید نامشخص است."); return ConversationHandler.END
+    if not key:
+        await update.message.reply_text("❌ کلید نامشخص است.")
+        return ConversationHandler.END
+
     val = (update.message.text or "").strip()
-    if val == "-": val = ""
+    if val == "-":
+        val = ""
+
+    # اعتبارسنجی و نرمال‌سازی
     if key == "usage_update_interval_min":
         try:
-            intval = int(float(val)); assert intval > 0; val = str(intval)
-        except Exception: await update.message.reply_text("❌ عدد صحیح مثبت وارد کنید."); return AWAIT_SETTING_VALUE
-    if key == "global_discount_percent":
-        try:
-            p = float(val); assert p >= 0; val = str(int(p))
+            intval = int(float(val)); assert intval > 0
+            val = str(intval)
         except Exception:
-            await update.message.reply_text("❌ درصد نامعتبر است."); return AWAIT_SETTING_VALUE
-    if key == "global_discount_days":
-        try:
-            d = int(float(val)); assert d >= 0; val = str(int(d))
-        except Exception:
-            await update.message.reply_text("❌ تعداد روز نامعتبر است."); return AWAIT_SETTING_VALUE
+            await update.message.reply_text("❌ عدد صحیح مثبت وارد کنید.")
+            return AWAIT_SETTING_VALUE
 
+    elif key == "global_discount_percent":
+        try:
+            p = float(val); assert p >= 0
+            val = str(int(p))
+        except Exception:
+            await update.message.reply_text("❌ درصد نامعتبر است.")
+            return AWAIT_SETTING_VALUE
+
+    elif key == "global_discount_days":
+        try:
+            d = int(float(val)); assert d >= 0
+            val = str(int(d))
+        except Exception:
+            await update.message.reply_text("❌ تعداد روز نامعتبر است.")
+            return AWAIT_SETTING_VALUE
+
+    elif key == "expiry_reminder_days":
+        try:
+            d = int(float(val)); assert d >= 0
+            val = str(int(d))
+        except Exception:
+            await update.message.reply_text("❌ تعداد روز نامعتبر است.")
+            return AWAIT_SETTING_VALUE
+
+    elif key in ("expiry_reminder_min_remaining_gb", "expiry_reminder_gb"):
+        try:
+            g = float(val); assert g >= 0
+            # ذخیره همزمان در هر دو کلید برای سازگاری با jobs.py
+            db.set_setting("expiry_reminder_gb", str(g))
+            db.set_setting("expiry_reminder_min_remaining_gb", str(g))
+            await update.message.reply_text(f"✅ مقدار «expiry_reminder_gb» و «expiry_reminder_min_remaining_gb» ذخیره شد.")
+            dest = context.user_data.pop('settings_return_to', None) or _infer_return_target(key)
+            context.user_data.pop('editing_setting_key', None)
+            if dest == "reports_reminders":
+                return await reports_and_reminders_submenu(update, context)
+            return await settings_menu(update, context)
+        except Exception:
+            await update.message.reply_text("❌ مقدار GB نامعتبر است (مثال: 1 یا 0.5).")
+            return AWAIT_SETTING_VALUE
+
+    # ذخیره مقدار برای سایر کلیدها
     db.set_setting(key, val)
 
-    # اگر مدت را تغییر داد و الان تخفیف روشن است → تاریخ پایان را با شروع موجود به‌روز کن
+    # بروزرسانی تاریخ پایان تخفیف همگانی در صورت تغییر days و روشن بودن
     if key == "global_discount_days" and _get_bool("global_discount_enabled"):
         try:
             d = int(_get("global_discount_days", "0") or 0)
