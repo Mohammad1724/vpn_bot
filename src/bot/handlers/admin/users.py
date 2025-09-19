@@ -3,6 +3,7 @@
 
 import re
 import logging
+import math
 import asyncio
 from datetime import datetime
 from telegram.ext import ContextTypes, ConversationHandler
@@ -56,6 +57,7 @@ def _normalize_amount_text(t: str) -> str:
 def _user_mgmt_root_inline() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🔎 جستجو با آیدی (یا شناسه عددی)", callback_data="admin_users_ask_id")],
+        [InlineKeyboardButton("📃 لیست کاربران", callback_data="admin_users_list")],
         [InlineKeyboardButton("🏠 منوی ادمین", callback_data="admin_panel")],
     ])
 
@@ -88,7 +90,7 @@ def _amount_prompt_kb(target_id: int) -> InlineKeyboardMarkup:
     ]])
 
 def _back_to_user_panel_kb(target_id: int) -> InlineKeyboardMarkup:
-    # تغییر به admin_user_refresh_* تا نیازی به اضافه کردن هندلر جدید در app.py نباشد
+    # استفاده از refresh تا نیازی به هندلر جدید نباشد
     return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت به پنل کاربر", callback_data=f"admin_user_refresh_{target_id}")]])
 
 async def _send_new(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, kb: InlineKeyboardMarkup | None = None, pm: str | None = None):
@@ -331,7 +333,7 @@ async def broadcast_cancel_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
 # -------------------------------
 
 async def user_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = "👥 مدیریت کاربران\n\nآیدی کاربر (یوزرنیم مثل @username) یا شناسه عددی را تایپ کنید، یا از دکمه زیر استفاده کنید."
+    text = "👥 مدیریت کاربران\n\nآیدی کاربر (یوزرنیم مثل @username) یا شناسه عددی را تایپ کنید، یا از دکمه‌های زیر استفاده کنید."
     await _send_new(update, context, text, _user_mgmt_root_inline())
     return USER_MANAGEMENT_MENU
 
@@ -342,6 +344,95 @@ async def ask_user_id_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer("✅ منتظر ارسال آیدی یا شناسه عددی کاربر هستم...", show_alert=False)
     return USER_MANAGEMENT_MENU
+
+# ---------- Users List (paged) ----------
+
+_USERS_PAGE_SIZE = 18  # 3 ستون * 6 ردیف پیشنهادی
+
+def _user_btn_label(u: dict) -> str:
+    banned = bool(u.get("is_banned"))
+    dot = "🔴" if banned else "🟡"
+    uname = u.get("username") or f"User_{u.get('user_id')}"
+    if len(uname) > 12:
+        uname = uname[:11] + "…"
+    return f"{dot} |{uname}"
+
+def _build_users_list_markup(users: list[dict], page: int, pages: int) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for u in users:
+        row.append(InlineKeyboardButton(_user_btn_label(u), callback_data=f"admin_user_open_{u['user_id']}"))
+        if len(row) == 3:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+
+    nav_row = []
+    if page > 1:
+        nav_row.append(InlineKeyboardButton("◀️", callback_data=f"admin_users_list_page_{page-1}"))
+    if page < pages:
+        nav_row.append(InlineKeyboardButton("▶️", callback_data=f"admin_users_list_page_{page+1}"))
+    if nav_row:
+        rows.append(nav_row)
+
+    rows.append([InlineKeyboardButton("بازگشت", callback_data="admin_users")])
+    return InlineKeyboardMarkup(rows)
+
+def _users_list_header(total: int, page: int, pages: int, online_count: int = 0) -> str:
+    return (
+        "لیست کاربران #\n"
+        "❕ شما می‌توانید لیست کاربران و اطلاعات آن‌ها را اینجا مشاهده کنید\n"
+        f"👥 تعداد کاربران: {total}\n"
+        f"🔵 کاربران آنلاین: {online_count}\n"
+        f"صفحه: {page}/{pages}"
+    )
+
+async def list_users_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    total = db.get_total_users_count()
+    pages = max(1, math.ceil(total / _USERS_PAGE_SIZE))
+    page = 1
+    users = db.get_all_users_paginated(page=page, page_size=_USERS_PAGE_SIZE)
+    text = _users_list_header(total, page, pages, online_count=0)
+    kb = _build_users_list_markup(users, page, pages)
+    try:
+        await q.edit_message_text(text, reply_markup=kb)
+    except Exception:
+        await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=kb)
+    return USER_MANAGEMENT_MENU
+
+async def list_users_page_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    try:
+        page = int(q.data.split("_")[-1])
+    except Exception:
+        page = 1
+    total = db.get_total_users_count()
+    pages = max(1, math.ceil(total / _USERS_PAGE_SIZE))
+    page = max(1, min(page, pages))
+    users = db.get_all_users_paginated(page=page, page_size=_USERS_PAGE_SIZE)
+    text = _users_list_header(total, page, pages, online_count=0)
+    kb = _build_users_list_markup(users, page, pages)
+    try:
+        await q.edit_message_text(text, reply_markup=kb)
+    except Exception:
+        await context.bot.send_message(chat_id=q.from_user.id, text=text, reply_markup=kb)
+    return USER_MANAGEMENT_MENU
+
+async def open_user_from_list_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    try:
+        target_id = int(q.data.split("_")[-1])
+    except Exception:
+        return USER_MANAGEMENT_MENU
+    await _send_user_panel(update, context, target_id)
+    return USER_MANAGEMENT_MENU
+
+# ---------- existing panel/send helpers ----------
 
 async def _send_user_panel(update: Update, context: ContextTypes.DEFAULT_TYPE, target_id: int):
     q = getattr(update, "callback_query", None)
@@ -461,7 +552,6 @@ async def admin_user_services_cb(update: Update, context: ContextTypes.DEFAULT_T
     if over_limit:
         lines.append(f"\n… و {len(services) - MAX_ITEMS} سرویس دیگر")
 
-    # اصلاح: استفاده از refresh به‌جای back
     kb_rows.append([InlineKeyboardButton("🔙 بازگشت به پنل کاربر", callback_data=f"admin_user_refresh_{target_id}")])
     kb = InlineKeyboardMarkup(kb_rows)
 
