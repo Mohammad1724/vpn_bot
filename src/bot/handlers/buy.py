@@ -1,10 +1,10 @@
+# filename: bot/handlers/buy.py
 # -*- coding: utf-8 -*-
 
 import asyncio
 import logging
 from datetime import datetime
 from typing import Optional
-from urllib.parse import quote_plus
 
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram import (
@@ -316,6 +316,7 @@ async def skip_promo_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     q = update.callback_query
     await q.answer()
     context.user_data['buy_promo_code'] = ""
+    # می‌توانستیم از خود update استفاده کنیم؛ برای سازگاری، همان مسیر کال‌بک را می‌رویم
     dummy_update = Update(update.update_id, callback_query=q)
     return await _ask_purchase_confirm(dummy_update, context, custom_name=context.user_data.get('buy_custom_name', ''))
 
@@ -442,7 +443,9 @@ async def _do_purchase_confirmed(q, context: ContextTypes.DEFAULT_TYPE, custom_n
             raise RuntimeError("Failed to create and configure service in panel")
 
         main_uuid, main_sublink = provision["uuid"], provision.get("full_link", "")
-        db.finalize_purchase_transaction(txn_id, main_uuid, main_sublink, custom_name)
+        # اصلاح: اگر نام خالی بود، نام پیش‌فرض ذخیره شود
+        stored_name = custom_name or default_name
+        db.finalize_purchase_transaction(txn_id, main_uuid, main_sublink, stored_name)
 
         if data.get('promo_code'):
             db.mark_promo_code_as_used(user_id, data['promo_code'])
@@ -471,8 +474,9 @@ async def _send_service_info_to_user(context, user_id, new_uuid, plan):
 
     if user_data:
         config_name = (user_data.get('name', 'config') or 'config')
-        
-        final_link = utils.build_subscription_url(new_uuid, name=config_name)
+
+        # اصلاح: توجه به نوع پلن برای انتخاب دامنه (unlimited/volume)
+        final_link = utils.build_subscription_url(new_uuid, name=config_name, plan_gb=int(plan['gb']))
 
         qr_bio = utils.make_qr_bytes(final_link)
         caption = utils.create_service_info_caption(
