@@ -2,9 +2,11 @@
 # -*- coding: utf-8 -*-
 
 import logging
+import re
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram import Update, InlineKeyboardMarkup
 from telegram.constants import ParseMode
+from telegram.helpers import escape_markdown
 
 import database as db
 from config import ADMIN_ID, REFERRAL_BONUS_AMOUNT
@@ -15,6 +17,20 @@ from bot.keyboards import get_main_menu_keyboard
 logger = logging.getLogger(__name__)
 
 _PERSIAN_TO_EN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
+
+
+def _normalize_amount_text(t: str) -> str:
+    """
+    نرمال‌سازی ورودی مبلغ:
+    - تبدیل ارقام فارسی به انگلیسی
+    - حذف جداکننده‌ها: , ٬ ، فاصله
+    - نگه‌داشتن فقط رقم و نقطه
+    """
+    s = (t or "").strip().translate(_PERSIAN_TO_EN_DIGITS)
+    s = s.replace(",", "").replace("٬", "").replace("،", "").replace(" ", "")
+    s = re.sub(r"[^\d.]", "", s)
+    return s
+
 
 def _get_payment_info_text() -> str:
     text = db.get_setting("payment_instruction_text")
@@ -33,6 +49,7 @@ def _get_payment_info_text() -> str:
         text += "\n\n" + "\n".join(card_lines)
 
     return text
+
 
 # --- Handlers ---
 async def charge_menu_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -81,6 +98,7 @@ async def charge_menu_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     return CHARGE_MENU
 
+
 async def show_referral_info_inline(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     await q.answer()
@@ -105,6 +123,7 @@ async def show_referral_info_inline(update: Update, context: ContextTypes.DEFAUL
     await q.edit_message_text(text, reply_markup=markup(kb), parse_mode=ParseMode.MARKDOWN)
     return CHARGE_MENU
 
+
 async def charge_start_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     await q.answer()
@@ -124,6 +143,7 @@ async def charge_start_payment(update: Update, context: ContextTypes.DEFAULT_TYP
     await q.edit_message_text(text, reply_markup=markup(keyboard), parse_mode=ParseMode.MARKDOWN)
     return CHARGE_AMOUNT
 
+
 async def ask_custom_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     await q.answer()
@@ -134,10 +154,10 @@ async def ask_custom_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await q.edit_message_text(text, reply_markup=markup(kb))
     return AWAIT_CUSTOM_AMOUNT
 
+
 async def charge_amount_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
-        raw_text = (update.message.text or "").strip().replace(',', '')
-        raw_text = raw_text.translate(_PERSIAN_TO_EN_DIGITS)
+        raw_text = _normalize_amount_text(update.message.text or "")
         amount = int(float(raw_text))
         if amount < 1000:
             await update.message.reply_text("مبلغ باید حداقل ۱,۰۰۰ تومان باشد.")
@@ -148,6 +168,7 @@ async def charge_amount_received(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("لطفاً مبلغ را به صورت عدد (تومان) وارد کنید.")
         return AWAIT_CUSTOM_AMOUNT
 
+
 async def charge_amount_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     await q.answer()
@@ -155,6 +176,7 @@ async def charge_amount_confirm_cb(update: Update, context: ContextTypes.DEFAULT
     amount = int(amount_str)
     context.user_data['charge_amount'] = amount
     return await _confirm_amount(update, context, amount)
+
 
 async def _confirm_amount(update: Update, context: ContextTypes.DEFAULT_TYPE, amount: int) -> int:
     q = getattr(update, "callback_query", None)
@@ -173,6 +195,7 @@ async def _confirm_amount(update: Update, context: ContextTypes.DEFAULT_TYPE, am
 
     return CHARGE_RECEIPT
 
+
 async def charge_receipt_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     amount = context.user_data.get('charge_amount')
     if not amount:
@@ -180,18 +203,25 @@ async def charge_receipt_received(update: Update, context: ContextTypes.DEFAULT_
         return ConversationHandler.END
 
     user = update.effective_user
-    username = f"@{user.username}" if user.username else "ندارد"
+    username_disp = f"@{user.username}" if user.username else "ندارد"
     charge_id = db.create_charge_request(user.id, amount, note=f"From user: {user.id}")
 
     if not charge_id:
         await update.message.reply_text("❌ خطایی در ثبت درخواست شما رخ داد. لطفاً به پشتیبانی اطلاع دهید.", reply_markup=get_main_menu_keyboard(user.id))
+        # پاکسازی فقط کلیدهای مربوط به شارژ
+        for k in ('charge_amount', 'charge_from_acc', 'charge_is_exiting_to_acc'):
+            context.user_data.pop(k, None)
         return ConversationHandler.END
+
+    # امن‌سازی مقادیر برای Markdown
+    user_name_safe = escape_markdown(user.full_name or "-", version=1)
+    username_safe = escape_markdown(username_disp, version=1)
 
     caption = (
         f"💰 درخواست شارژ جدید\n\n"
-        f"کاربر: {user.full_name}\n"
+        f"کاربر: {user_name_safe}\n"
         f"آیدی: `{user.id}`\n"
-        f"یوزرنیم: {username}\n"
+        f"یوزرنیم: `{username_safe}`\n"
         f"مبلغ: **{amount:,.0f} تومان**"
     )
 
@@ -202,20 +232,41 @@ async def charge_receipt_received(update: Update, context: ContextTypes.DEFAULT_
         ]
     ])
 
-    await context.bot.send_photo(
-        chat_id=ADMIN_ID,
-        photo=update.message.photo[-1].file_id,
-        caption=caption,
-        reply_markup=kb,
-        parse_mode=ParseMode.MARKDOWN
-    )
+    # تلاش برای ارسال به ادمین
+    try:
+        try:
+            admin_chat_id = int(ADMIN_ID)
+        except Exception:
+            admin_chat_id = ADMIN_ID  # اگر عددی نبود، همان مقدار (احتمالاً اشتباه پیکربندی)؛ لاگ می‌کنیم
+            logger.warning("ADMIN_ID is not numeric; attempting to send as-is: %r", ADMIN_ID)
+
+        await context.bot.send_photo(
+            chat_id=admin_chat_id,
+            photo=update.message.photo[-1].file_id,
+            caption=caption,
+            reply_markup=kb,
+            parse_mode=ParseMode.MARKDOWN
+        )
+    except Exception as e:
+        logger.error("Failed to forward charge receipt to admin: %s", e, exc_info=True)
+        await update.message.reply_text(
+            "⚠️ رسید شما ثبت شد اما ارسال به ادمین با خطا مواجه شد. لطفاً به پشتیبانی اطلاع دهید.",
+            reply_markup=get_main_menu_keyboard(user.id)
+        )
+        # پاکسازی فقط کلیدهای مربوط به شارژ
+        for k in ('charge_amount', 'charge_from_acc', 'charge_is_exiting_to_acc'):
+            context.user_data.pop(k, None)
+        return ConversationHandler.END
 
     await update.message.reply_text(
         "✅ رسید شما دریافت شد. پس از تایید توسط ادمین، حساب شما شارژ خواهد شد.",
         reply_markup=get_main_menu_keyboard(user.id)
     )
-    context.user_data.clear()
+    # پاکسازی فقط کلیدهای مربوط به شارژ
+    for k in ('charge_amount', 'charge_from_acc', 'charge_is_exiting_to_acc'):
+        context.user_data.pop(k, None)
     return ConversationHandler.END
+
 
 async def charge_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q = getattr(update, "callback_query", None)
@@ -234,7 +285,7 @@ async def charge_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             reply_markup=get_main_menu_keyboard(update.effective_user.id)
         )
 
-    # پاکسازی user_data
+    # پاکسازی user_data مربوط به شارژ
     for k in ('charge_from_acc', 'charge_amount', 'charge_is_exiting_to_acc'):
         context.user_data.pop(k, None)
 
