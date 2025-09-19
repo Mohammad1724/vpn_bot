@@ -72,12 +72,9 @@ def build_application():
 
     # --- Helper to exit charge conversation cleanly ---
     async def exit_charge_to_account_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """
-        از کانورسیشن شارژ خارج می‌شود و بعد کاربر را به منوی اطلاعات حساب هدایت می‌کند.
-        """
         context.user_data['charge_is_exiting_to_acc'] = True
-        await charge_h.charge_cancel(update, context)  # Ends the conversation
-        await start_h.show_account_info(update, context) # Shows the account menu
+        await charge_h.charge_cancel(update, context)
+        await start_h.show_account_info(update, context)
         return ConversationHandler.END
 
     # --------- BUY FLOW ----------
@@ -233,7 +230,7 @@ def build_application():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_category_received),
                 CommandHandler('skip', admin_plans.skip_edit_plan_category)
             ],
-        },
+        ],
         fallbacks=[CommandHandler('cancel', admin_plans.cancel_edit_plan)],
         map_to_parent={ConversationHandler.END: constants.PLAN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
@@ -351,6 +348,12 @@ def build_application():
         MessageHandler(filters.Regex(r'^👥 مدیریت کاربران$') & admin_filter, admin_users.user_management_menu),
         MessageHandler(filters.Regex(r'^🎁 مدیریت کد هدیه$') & admin_filter, admin_gift.gift_code_management_menu),
         MessageHandler(filters.Regex(r'^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
+
+        # جدید: لیست کاربران با صفحه‌بندی و بازکردن پنل کاربر
+        CallbackQueryHandler(admin_users.list_users_start, pattern=r"^admin_users_list$"),
+        CallbackQueryHandler(admin_users.list_users_page_cb, pattern=r"^admin_users_list_page_\d+$"),
+        CallbackQueryHandler(admin_users.open_user_from_list_cb, pattern=r"^admin_user_open_\d+$"),
+
         CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
         CallbackQueryHandler(admin_users.ask_user_id_cb, pattern=r"^admin_users_ask_id$"),
         CallbackQueryHandler(admin_users.user_management_menu_cb, pattern=r"^admin_users$"),
@@ -408,7 +411,7 @@ def build_application():
         CallbackQueryHandler(admin_settings.maintenance_and_join_submenu, pattern=r"^settings_maint_join$"),
         CallbackQueryHandler(admin_settings.payment_and_guides_submenu, pattern=r"^settings_payment_guides$"),
         CallbackQueryHandler(admin_settings.payment_info_submenu, pattern=r"^payment_info_submenu$"),
-        CallbackQueryHandler(admin_settings.first_charge_promo_submenu, pattern=r"^first_charge_promo_submenu$"),  # <-- added
+        CallbackQueryHandler(admin_settings.first_charge_promo_submenu, pattern=r"^first_charge_promo_submenu$"),
         CallbackQueryHandler(admin_settings.service_configs_submenu, pattern=r"^settings_service_configs$"),
         CallbackQueryHandler(admin_settings.subdomains_submenu, pattern=r"^settings_subdomains$"),
         CallbackQueryHandler(admin_settings.reports_and_reminders_submenu, pattern=r"^settings_reports_reminders$"),
