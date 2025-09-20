@@ -211,7 +211,7 @@ def init_db():
     ''')
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_traffic_user ON user_traffic(user_id)")
 
-    # service_endpoints: extra endpoints per service (optional)
+    # service_endpoints
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS service_endpoints (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -229,7 +229,6 @@ def init_db():
 
     # Default settings
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('card_number', '0000-0000-0000-0000'))
-    # ... (other default settings)
 
     # Indexes
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_services_user ON active_services(user_id)")
@@ -244,9 +243,6 @@ def init_db():
     logger.info("Database initialized successfully.")
 
 def _resolve_server_name_from_link(sub_link: str) -> str | None:
-    """
-    Resolve server_name directly from subscription link host (no nodes/config lookup).
-    """
     try:
         parsed = urlparse(sub_link)
         host = (parsed.hostname or "").lower()
@@ -467,83 +463,58 @@ def delete_service(service_id: int):
     conn.commit()
 
 def initiate_purchase_transaction(user_id: int, plan_id: int, final_price: float) -> int | None:
-    """آغاز تراکنش خرید با مدیریت تراکنش بهتر"""
     conn = _connect_db()
     cursor = conn.cursor()
-
     try:
         conn.execute("BEGIN TRANSACTION")
-
-        # بررسی موجودی کافی
         cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
         user_balance = cursor.fetchone()
-
         if not user_balance or user_balance['balance'] < final_price:
             conn.rollback()
             return None
-
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute(
             "INSERT INTO transactions (user_id, plan_id, type, amount, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (user_id, plan_id, 'purchase', final_price, 'pending', now_str, now_str)
         )
         txn_id = cursor.lastrowid
-
         conn.commit()
         return txn_id
-
     except sqlite3.Error as e:
         logger.error(f"Error initiating purchase: {e}", exc_info=True)
         conn.rollback()
         return None
 
 def finalize_purchase_transaction(transaction_id: int, sub_uuid: str, sub_link: str, custom_name: str):
-    """نهایی کردن تراکنش خرید با مدیریت تراکنش بهتر"""
     conn = _connect_db()
     cursor = conn.cursor()
-
     try:
         conn.execute("BEGIN TRANSACTION")
-
-        # بررسی وجود و وضعیت تراکنش
-        cursor.execute("SELECT * FROM transactions WHERE transaction_id = ? AND status = 'pending'", (transaction_id,))
+        cursor.execute("SELECT * FROM transactions WHERE transaction_id = ? AND status = 'pending' AND type = 'purchase'", (transaction_id,))
         txn = cursor.fetchone()
-
         if not txn:
             conn.rollback()
-            raise ValueError("Transaction not found or not pending.")
-
-        # کسر مبلغ از موجودی کاربر
+            raise ValueError("Transaction not found or not pending (purchase).")
         cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (txn['amount'], txn['user_id']))
-
-        # ایجاد سرویس فعال (تشخیص سرور از لینک)
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         server_name = _resolve_server_name_from_link(sub_link)
-
         cursor.execute(
             "INSERT INTO active_services (user_id, name, sub_uuid, sub_link, plan_id, created_at, server_name) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (txn['user_id'], custom_name, sub_uuid, sub_link, txn['plan_id'], now_str, server_name)
         )
-
-        # ثبت در سوابق فروش
         cursor.execute(
             "INSERT INTO sales_log (user_id, plan_id, price, sale_date) VALUES (?, ?, ?, ?)",
             (txn['user_id'], txn['plan_id'], txn['amount'], now_str)
         )
-
-        # به‌روزرسانی وضعیت تراکنش
         cursor.execute("UPDATE transactions SET status = 'completed', updated_at = ? WHERE transaction_id = ?", (now_str, transaction_id))
-
         conn.commit()
         logger.info(f"Purchase transaction {transaction_id} successfully finalized")
-
     except Exception as e:
         logger.error(f"Error finalizing purchase {transaction_id}: {e}", exc_info=True)
         conn.rollback()
         raise
 
 def cancel_purchase_transaction(transaction_id: int):
-    """لغو تراکنش خرید با ثبت دقیق‌تر"""
     conn = _connect_db()
     try:
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -556,83 +527,72 @@ def cancel_purchase_transaction(transaction_id: int):
         conn.rollback()
 
 def initiate_renewal_transaction(user_id: int, service_id: int, plan_id: int) -> int | None:
-    """آغاز تراکنش تمدید با مدیریت تراکنش بهتر"""
     conn = _connect_db()
     cursor = conn.cursor()
-
     try:
         conn.execute("BEGIN TRANSACTION")
-
-        # بررسی معتبر بودن سرویس و پلن
         plan = get_plan(plan_id)
         service = get_service(service_id)
-
         if not plan or not service:
             conn.rollback()
             return None
-
-        # بررسی موجودی کافی
         cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
         user_balance = cursor.fetchone()
-
         if not user_balance or user_balance['balance'] < plan['price']:
             conn.rollback()
             return None
-
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute(
             "INSERT INTO transactions (user_id, plan_id, service_id, type, amount, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (user_id, plan_id, service_id, 'renewal', plan['price'], 'pending', now_str, now_str)
         )
         txn_id = cursor.lastrowid
-
         conn.commit()
         return txn_id
-
     except sqlite3.Error as e:
         logger.error(f"Error initiating renewal: {e}", exc_info=True)
         conn.rollback()
         return None
 
 def finalize_renewal_transaction(transaction_id: int, new_plan_id: int):
-    """نهایی کردن تراکنش تمدید با مدیریت تراکنش بهتر (بدون وابستگی به نود)"""
+    """
+    تمدید: مبلغ کسر می‌شود، سرویس به پلن جدید/فعلی ست می‌شود،
+    هشدار مصرف کم ریست و created_at به اکنون تغییر می‌کند تا روزها ریست شوند.
+    """
     conn = _connect_db()
     cursor = conn.cursor()
-
     try:
         conn.execute("BEGIN TRANSACTION")
-
-        # بررسی وجود و وضعیت تراکنش
-        cursor.execute("SELECT * FROM transactions WHERE transaction_id = ? AND status = 'pending'", (transaction_id,))
+        cursor.execute("SELECT * FROM transactions WHERE transaction_id = ? AND status = 'pending' AND type = 'renewal'", (transaction_id,))
         txn = cursor.fetchone()
-
         if not txn:
             conn.rollback()
             raise ValueError("Renewal transaction not found or not pending.")
-
-        # کسر مبلغ از موجودی کاربر
+        # تطبیق plan_id
+        plan_to_apply = int(new_plan_id or 0) or int(txn['plan_id'])
+        if plan_to_apply != int(txn['plan_id']):
+            cursor.execute("UPDATE transactions SET plan_id = ? WHERE transaction_id = ?", (plan_to_apply, transaction_id))
+        # کسر مبلغ
         cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (txn['amount'], txn['user_id']))
-
-        # به‌روزرسانی سرویس (صرفاً تغییر plan_id و ریست هشدار مصرف کم)
-        cursor.execute("UPDATE active_services SET plan_id = ?, low_usage_alert_sent = 0 WHERE service_id = ?", (new_plan_id, txn['service_id']))
-
-        # ثبت در سوابق فروش
+        # به‌روزرسانی سرویس: plan + created_at + reset low_usage_alert_sent
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        cursor.execute("INSERT INTO sales_log (user_id, plan_id, price, sale_date) VALUES (?, ?, ?, ?)", (txn['user_id'], txn['plan_id'], txn['amount'], now_str))
-
-        # به‌روزرسانی وضعیت تراکنش
+        cursor.execute(
+            "UPDATE active_services SET plan_id = ?, low_usage_alert_sent = 0, created_at = ? WHERE service_id = ?",
+            (plan_to_apply, now_str, txn['service_id'])
+        )
+        # ثبت فروش
+        cursor.execute("INSERT INTO sales_log (user_id, plan_id, price, sale_date) VALUES (?, ?, ?, ?)",
+                       (txn['user_id'], plan_to_apply, txn['amount'], now_str))
+        # وضعیت تراکنش
         cursor.execute("UPDATE transactions SET status = 'completed', updated_at = ? WHERE transaction_id = ?", (now_str, transaction_id))
-
         conn.commit()
-        logger.info(f"Renewal transaction {transaction_id} successfully finalized")
-
+        logger.info(f"Renewal transaction {transaction_id} successfully finalized (plan {plan_to_apply})")
     except Exception as e:
         logger.error(f"Error finalizing renewal {transaction_id}: {e}", exc_info=True)
         conn.rollback()
         raise
 
 def cancel_renewal_transaction(transaction_id: int):
-    """لغو تراکنش تمدید با ثبت دقیق‌تر"""
     conn = _connect_db()
     try:
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -648,15 +608,16 @@ def use_gift_code(code: str, user_id: int) -> float | None:
     conn = _connect_db()
     cur = conn.cursor()
     try:
+        code_up = (code or "").strip().upper()
         conn.execute("BEGIN")
-        cur.execute("SELECT * FROM gift_codes WHERE code = ? AND is_used = 0", (code,))
+        cur.execute("SELECT * FROM gift_codes WHERE code = ? AND is_used = 0", (code_up,))
         gift = cur.fetchone()
         if not gift:
             conn.rollback()
             return None
         amount = gift['amount']
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        cur.execute("UPDATE gift_codes SET is_used = 1, used_by = ?, used_date = ? WHERE code = ?", (user_id, now_str, code))
+        cur.execute("UPDATE gift_codes SET is_used = 1, used_by = ?, used_date = ? WHERE code = ?", (user_id, now_str, code_up))
         cur.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
         conn.commit()
         return amount
@@ -683,7 +644,8 @@ def get_all_gift_codes() -> list:
 def delete_gift_code(code: str) -> bool:
     conn = _connect_db()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM gift_codes WHERE code = ?", (code,))
+    code_up = (code or "").strip().upper()
+    cursor.execute("DELETE FROM gift_codes WHERE code = ?", (code_up,))
     conn.commit()
     return cursor.rowcount > 0
 
@@ -807,7 +769,7 @@ def get_all_promo_codes():
 def delete_promo_code(code: str) -> bool:
     with _connect_db() as conn:
         cur = conn.cursor()
-        cur.execute("DELETE FROM promo_codes WHERE code = ?", (code,))
+        cur.execute("DELETE FROM promo_codes WHERE code = ?", (code.upper(),))
         conn.commit()
         return cur.rowcount > 0
 
@@ -873,7 +835,6 @@ def reject_charge_request(charge_id: int) -> bool:
         return False
 
 def get_user_charge_count(user_id: int) -> int:
-    """تعداد شارژهای موفق کاربر را برمی‌گرداند"""
     conn = _connect_db()
     try:
         cur = conn.cursor()
@@ -907,10 +868,6 @@ def get_total_user_traffic(user_id: int) -> float:
     return float(val or 0.0)
 
 def backfill_active_services_server_names() -> int:
-    """
-    برای سرویس‌های فعالی که server_name ندارند، از روی sub_link مقداردهی می‌کند.
-    خروجی: تعداد رکوردهای به‌روزرسانی‌شده.
-    """
     conn = _connect_db()
     cur = conn.cursor()
     cur.execute("SELECT service_id, sub_link FROM active_services WHERE server_name IS NULL OR TRIM(server_name) = ''")
@@ -931,19 +888,11 @@ def backfill_active_services_server_names() -> int:
     return updated
 
 def delete_user_traffic_not_in_and_older(user_id: int, allowed_servers: list[str], older_than_minutes: int, also_delete_unknown: bool = True):
-    """
-    رکوردهای user_traffic کاربر را که:
-      - server_name در لیست allowed_servers نیست، و
-      - last_updated قدیمی‌تر از آستانه است،
-    حذف می‌کند. در صورت also_delete_unknown، رکوردهای 'Unknown' قدیمی نیز حذف می‌شوند.
-    """
     try:
         conn = _connect_db()
         cur = conn.cursor()
         threshold_dt = datetime.now() - timedelta(minutes=int(older_than_minutes or 0))
         threshold_str = threshold_dt.strftime("%Y-%m-%d %H:%M:%S")
-
-        # اگر allowed خالی است، فقط Unknown قدیمی را پاک کن و بقیه را دست نزن
         if not allowed_servers:
             if also_delete_unknown:
                 conn.execute(
@@ -952,32 +901,23 @@ def delete_user_traffic_not_in_and_older(user_id: int, allowed_servers: list[str
                 )
                 conn.commit()
             return
-
         placeholders = ",".join(["?"] * len(allowed_servers))
         params = [user_id, threshold_str] + allowed_servers
-
-        # حذف رکوردهای غیر از allowed که قدیمی‌اند
         conn.execute(
             f"DELETE FROM user_traffic WHERE user_id = ? AND last_updated < ? AND server_name NOT IN ({placeholders})",
             tuple(params)
         )
-
-        # حذف Unknown قدیمی
         if also_delete_unknown:
             conn.execute(
                 "DELETE FROM user_traffic WHERE user_id = ? AND server_name = 'Unknown' AND last_updated < ?",
                 (user_id, threshold_str)
             )
-
         conn.commit()
     except Exception as e:
         logger.error("delete_user_traffic_not_in_and_older failed for user %s: %s", user_id, e, exc_info=True)
 
 # ===================== Service Endpoints (optional) =====================
 def add_service_endpoint(service_id: int, server_name: str | None, sub_uuid: str | None, sub_link: str) -> int:
-    """
-    افزودن endpoint اضافه برای یک سرویس (مثلا لینک دوم).
-    """
     conn = _connect_db()
     cur = conn.cursor()
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1000,10 +940,6 @@ def delete_service_endpoints(service_id: int):
     conn.commit()
 
 def list_all_endpoints_with_user() -> list:
-    """
-    برمی‌گرداند: [{user_id, service_id, server_name, sub_uuid, sub_link, id}, ...]
-    برای استفاده در جاب‌های مصرف یا عملیات گروهی.
-    """
     conn = _connect_db()
     cur = conn.cursor()
     cur.execute("""
@@ -1014,12 +950,8 @@ def list_all_endpoints_with_user() -> list:
     """)
     return [dict(r) for r in cur.fetchall()]
 
-# ========== توابع جدید برای لیست کاربران و بخش‌بندی ==========
-
+# ========== Users list and segmentation ==========
 def get_users_with_no_orders() -> list[int]:
-    """
-    لیست user_id کاربرانی که هیچ خرید موفقی نداشته‌اند را برمی‌گرداند.
-    """
     conn = _connect_db()
     cur = conn.cursor()
     cur.execute("""
@@ -1030,9 +962,6 @@ def get_users_with_no_orders() -> list[int]:
     return [row['user_id'] for row in cur.fetchall()]
 
 def get_expired_user_ids(min_weeks_ago: int = 0) -> list[int]:
-    """
-    لیست user_id کاربرانی که *تمام* سرویس‌هایشان منقضی شده را برمی‌گرداند.
-    """
     conn = _connect_db()
     cur = conn.cursor()
     query = """
@@ -1061,9 +990,6 @@ def get_total_users_count() -> int:
     return count or 0
 
 def get_all_users_paginated(page: int = 1, page_size: int = 15) -> list[dict]:
-    """
-    لیست کاربران را به‌صورت صفحه‌بندی شده برمی‌گرداند.
-    """
     conn = _connect_db()
     cur = conn.cursor()
     offset = (page - 1) * page_size
@@ -1071,9 +997,6 @@ def get_all_users_paginated(page: int = 1, page_size: int = 15) -> list[dict]:
     return [dict(row) for row in cur.fetchall()]
 
 def is_user_active(user_id: int) -> bool:
-    """
-    بررسی می‌کند آیا کاربر حداقل یک سرویس فعال (منقضی نشده) دارد یا خیر.
-    """
     conn = _connect_db()
     cur = conn.cursor()
     query = """
