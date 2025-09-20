@@ -9,6 +9,7 @@ import logging
 import types
 import time
 from typing import Optional, Dict, Any
+from datetime import datetime, timezone
 
 # --- Robust config loader ---
 try:
@@ -42,10 +43,6 @@ RESET_TOLERANCE_SEC = 6 * 3600  # 6 hours
 
 
 def _normalize_host(host: str) -> str:
-    """
-    - اگر scheme ندارد، https:// اضافه می‌کنیم
-    - اسلش پایانی را حذف می‌کنیم
-    """
     h = (host or "").strip()
     if not h:
         return ""
@@ -64,9 +61,6 @@ def _strip_scheme(host: str) -> str:
 
 
 def _normalize_subdomains(sd):
-    """
-    SUB_DOMAINS ممکن است رشته یا لیست باشد؛ خروجی لیست hostname بدون scheme
-    """
     if isinstance(sd, str):
         parts = [p.strip() for p in sd.split(",") if p.strip()]
     else:
@@ -78,10 +72,6 @@ SUB_DOMAINS = _normalize_subdomains(SUB_DOMAINS)
 
 
 def _get_base_url() -> str:
-    """
-    URL پایه API. PANEL_DOMAIN را در config ست کنید.
-    اگر خالی بود، سعی با SUB_DOMAINS[0]؛ در نهایت فقط برای جلوگیری از کرش به localhost می‌افتد.
-    """
     base = _normalize_host(PANEL_DOMAIN)
     if not base:
         alt = _normalize_host(SUB_DOMAINS[0] if SUB_DOMAINS else "")
@@ -138,7 +128,6 @@ def _is_unlimited_value(x) -> bool:
         return False
 
 
-# سازگاری با buy.py
 def _compensate_days(days: int) -> int:
     return int(days)
 
@@ -147,16 +136,57 @@ def _now_ts() -> int:
     return int(time.time())
 
 
+def _now_local_strings():
+    """
+    خروجی:
+    - date_str: YYYY-MM-DD (برای start_date)
+    - dt_str: YYYY-MM-DD HH:MM:SS (برای last_reset_time)
+    - now_sec: timestamp ثانیه‌ای
+    """
+    now_sec = int(time.time())
+    local = time.localtime(now_sec)
+    date_str = time.strftime("%Y-%m-%d", local)
+    dt_str = time.strftime("%Y-%m-%d %H:%M:%S", local)
+    return date_str, dt_str, now_sec
+
+
 def _to_sec_ts(v) -> Optional[int]:
     try:
         if v is None:
             return None
-        val = float(v) if isinstance(v, (int, float)) else float(str(v).strip())
-        if val > 1e12:  # likely milliseconds
-            val = val / 1000.0
-        return int(val)
+        if isinstance(v, (int, float)):
+            val = float(v)
+            if val > 1e12:
+                val = val / 1000.0
+            return int(val)
+        s = str(v).strip()
+        # اگر عددی بود
+        try:
+            val = float(s)
+            if val > 1e12:
+                val = val / 1000.0
+            return int(val)
+        except Exception:
+            pass
+        # تلاش برای ISO
+        try:
+            iso = s.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(iso)
+            if dt.tzinfo is None:
+                return int(time.mktime(dt.timetuple()))
+            return int(dt.timestamp())
+        except Exception:
+            pass
+        # فرمت‌های رایج
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+            try:
+                dt = datetime.strptime(s, fmt)
+                return int(time.mktime(dt.timetuple()))
+            except Exception:
+                continue
     except Exception:
         return None
+    return None
 
 
 def _is_reset_applied(after_info: Dict[str, Any], exact_days: int, ref_ts_sec: int) -> bool:
@@ -165,14 +195,14 @@ def _is_reset_applied(after_info: Dict[str, Any], exact_days: int, ref_ts_sec: i
     یا expire ≈ now + exact_days یا start_date/last_reset_time ≈ now (با تلورانس زمانی).
     """
     try:
-        # 1) با expire (در برخی پنل‌ها با کلیدهای مختلف)
+        # 1) expire keys
         for key in ("expire", "expiry", "expire_time"):
             ts = _to_sec_ts(after_info.get(key))
             if ts:
                 days_delta = (ts - ref_ts_sec) / 86400.0
                 if days_delta >= (exact_days - 1):
                     return True
-        # 2) با start_date/last_reset_time/created_at
+        # 2) start/last_reset/created
         for key in ("start_date", "last_reset_time", "created_at", "create_time"):
             ts = _to_sec_ts(after_info.get(key))
             if ts and abs(ts - ref_ts_sec) <= RESET_TOLERANCE_SEC:
@@ -268,7 +298,6 @@ async def create_hiddify_user(
     # ساخت لینک سابسکریپشن با الگوی .../sub/ (بدون asn)
     sub_host = _strip_scheme(random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN)
     if not sub_host:
-        # هم‌راستا با fallback در _get_base_url
         sub_host = "localhost"
     client_secret = str(PANEL_SECRET_UUID or "").strip().strip("/")
 
@@ -305,12 +334,12 @@ async def _try_set_unlimited(user_uuid: str, exact_days: int) -> Optional[Dict[s
         if c not in candidates:
             candidates.append(c)
 
-    now_sec = _now_ts()
+    date_str, dt_str, now_sec = _now_local_strings()
+    # فقط قالب‌های معتبر برای پنل: start_date = YYYY-MM-DD و last_reset_time = "YYYY-MM-DD HH:MM:SS"
     time_variants = [
-        ("last_reset_time", now_sec),
-        ("start_date", now_sec),
-        ("last_reset_time", int(now_sec * 1000)),
-        ("start_date", int(now_sec * 1000)),
+        ("last_reset_time", dt_str),
+        ("start_date", date_str),
+        ("last_reset_time", now_sec),  # برخی پنل‌ها timestamp را هم قبول می‌کنند
     ]
 
     for idx, cand in enumerate(candidates, start=1):
@@ -350,12 +379,11 @@ async def _set_large_quota(user_uuid: str, exact_days: int, large_gb: float) -> 
     """
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
     large_gb = float(large_gb)
-    now_sec = _now_ts()
+    date_str, dt_str, now_sec = _now_local_strings()
     time_variants = [
+        ("last_reset_time", dt_str),
+        ("start_date", date_str),
         ("last_reset_time", now_sec),
-        ("start_date", now_sec),
-        ("last_reset_time", int(now_sec * 1000)),
-        ("start_date", int(now_sec * 1000)),
     ]
 
     for tf, tv in time_variants:
@@ -400,12 +428,11 @@ async def _apply_and_verify_plan(user_uuid: str, plan_days: int, plan_gb: float)
 
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
     usage_limit_gb = float(plan_gb)
-    now_sec = _now_ts()
+    date_str, dt_str, now_sec = _now_local_strings()
     time_variants = [
+        ("last_reset_time", dt_str),
+        ("start_date", date_str),
         ("last_reset_time", now_sec),
-        ("start_date", now_sec),
-        ("last_reset_time", int(now_sec * 1000)),
-        ("start_date", int(now_sec * 1000)),
     ]
 
     for tf, tv in time_variants:
