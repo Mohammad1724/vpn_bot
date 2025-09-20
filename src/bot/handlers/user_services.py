@@ -450,6 +450,10 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
     except Exception as e:
         logger.error("Service renewal failed for UUID %s: %s", service['sub_uuid'], e, exc_info=True)
         db.cancel_renewal_transaction(txn_id)
+        panel_data_after_fail = await hiddify_api.get_user_info(service['sub_uuid'])
+    logger.info("DEBUG: Panel data after failed renewal for UUID %s -> %s", service['sub_uuid'], panel_data_after_fail)
+
+    raise ValueError("Panel verification failed")
         await _send_renewal_error(original_message, "❌ تمدید در پنل اعمال نشد. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.")
     finally:
         context.user_data.pop('renewal_service_id', None)
