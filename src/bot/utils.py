@@ -106,10 +106,6 @@ def _to_int(x, default=0) -> int:
 
 
 def normalize_link_type(t: str) -> str:
-    """
-    نوع لینک را دقیقاً طبق انتخاب ادمین برمی‌گرداند.
-    مجاز: sub, sub64, singbox, clash, clashmeta, xray
-    """
     lt = (t or "sub").strip().lower().replace("clash-meta", "clashmeta")
     allowed = {"sub", "sub64", "singbox", "clash", "clashmeta", "xray"}
     return lt if lt in allowed else "sub"
@@ -142,14 +138,6 @@ def _parse_domains_csv(s: str) -> list[str]:
 
 
 def _pick_domains_from_settings(plan_gb: int | None) -> list[str]:
-    """
-    انتخاب دامنه‌ها بر اساس تنظیمات دیتابیس:
-      - اگر plan_gb مشخص باشد:
-          - نامحدود (gb<=0): unlimited_sub_domains
-          - حجمی (gb>0): volume_based_sub_domains
-      - در غیر این صورت: sub_domains عمومی
-      - در نهایت fallback به config
-    """
     if plan_gb is not None:
         try:
             g = int(plan_gb)
@@ -177,52 +165,33 @@ def build_subscription_url(
     name: str | None = None,
     plan_gb: int | None = None
 ) -> str:
-    """
-    ساخت لینک اشتراک مطابق تنظیمات ادمین (نوع و دامنه):
-    - link_type=None → از DB کلید default_sub_link_type خوانده می‌شود.
-    - مسیرها:
-      - با PANEL_SECRET_UUID:
-         sub  → https://host/<secret>/<uuid>/sub/
-         دیگر → https://host/<secret>/<uuid>/<type>/
-      - بدون PANEL_SECRET_UUID:
-         sub  → https://host/sub/<uuid>/
-         دیگر → https://host/<type>/<uuid>/
-    - name: برای sub به‌صورت #name، برای سایرین ?name=name
-    """
-    # دامنه مطابق تنظیمات
     domains = _pick_domains_from_settings(plan_gb)
     host = _hostname_only(random.choice(domains) if domains else PANEL_DOMAIN)
 
-    # نوع لینک
     if link_type is None:
         link_type = (db.get_setting("default_sub_link_type") or "sub").strip().lower()
     lt = normalize_link_type(link_type)
 
-    # پایه مسیر
     client_secret = _clean_path(PANEL_SECRET_UUID)
     sub_path = _clean_path(SUB_PATH) or "sub"
 
     if client_secret:
-        # https://host/<secret>/<uuid>/...
         base = f"https://{host}/{client_secret}/{user_uuid}"
         if lt == "sub":
             final_url = f"{base}/sub/"
         else:
             final_url = f"{base}/{lt}/"
     else:
-        # https://host/[sub|type]/<uuid>/
         if lt == "sub":
             final_url = f"https://{host}/{sub_path}/{user_uuid}/"
         else:
             final_url = f"https://{host}/{lt}/{user_uuid}/"
 
-    # افزودن نام
     if name:
         safe_name = quote_plus(name)
         if lt == "sub":
             final_url += f"#{safe_name}"
         else:
-            # اگر ?name قبلاً اضافه نشده
             sep = "&" if "?" in final_url else "?"
             final_url += f"{sep}name={safe_name}"
 
@@ -348,7 +317,8 @@ def create_service_info_caption(
     title: str = "اطلاعات سرویس شما",
     override_sub_url: str | None = None
 ) -> str:
-    status, jalali_exp, is_expired = get_service_status(hiddify_user_info)
+    # پاس دادن رکورد DB برای محاسبه صحیح انقضا
+    status, jalali_exp, is_expired = get_service_status(hiddify_user_info, service_db_record)
 
     usage_limit = _to_float(hiddify_user_info.get('usage_limit_GB'), 0.0)
     current_usage = _to_float(hiddify_user_info.get('current_usage_GB'), 0.0)
@@ -373,8 +343,12 @@ def create_service_info_caption(
     return caption
 
 
-def get_service_status(hiddify_info: dict) -> Tuple[str, str, bool]:
-    expire_jalali, days_left = _format_expiry_and_days(hiddify_info, None)
+def get_service_status(hiddify_info: dict, service_db_record: Optional[dict] = None) -> Tuple[str, str, bool]:
+    """
+    خروجی: (متن وضعیت، تاریخ انقضا، منقضی است؟)
+    با دریافت رکورد DB (اختیاری) created_at تازه را در محاسبه لحاظ می‌کند.
+    """
+    expire_jalali, days_left = _format_expiry_and_days(hiddify_info, service_db_record)
     is_expired = days_left <= 0
     status_field = str(hiddify_info.get('status') or '').lower()
     if status_field in ('disabled', 'limited'):
