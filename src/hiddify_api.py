@@ -7,6 +7,7 @@ import uuid
 import random
 import logging
 import types
+import time  # اضافه شد
 from typing import Optional, Dict, Any
 
 # --- Robust config loader ---
@@ -254,34 +255,41 @@ async def _try_set_unlimited(user_uuid: str, exact_days: int) -> Optional[Dict[s
         if c not in candidates:
             candidates.append(c)
 
+    # زمان فعلی برای ریست روزها
+    now_ts = int(time.time())
+
     for idx, cand in enumerate(candidates, start=1):
-        payload = {"package_days": exact_days, "current_usage_GB": 0}
+        base_payload = {"package_days": exact_days, "current_usage_GB": 0}
         if cand != "OMIT":
-            payload["usage_limit_GB"] = cand
-            show = "null" if cand is None else str(cand)
-        else:
-            show = "OMIT"
+            base_payload["usage_limit_GB"] = cand
 
-        logger.info("Trying unlimited strategy %d/%d: usage_limit_GB=%s", idx, len(candidates), show)
+        # تلاش 1: last_reset_time
+        payload = dict(base_payload); payload["last_reset_time"] = now_ts
+        logger.info("Trying unlimited strategy %d/%d with last_reset_time...", idx, len(candidates))
         resp = await _make_request("patch", endpoint, json=payload)
-        if resp is None or resp.get("_not_found"):
-            logger.warning("Unlimited strategy %s: PATCH failed (skipping).", show)
-            continue
 
+        # اگر ناموفق، تلاش 2: start_date
+        if resp is None or resp.get("_not_found"):
+            payload = dict(base_payload); payload["start_date"] = now_ts
+            logger.info("Retry unlimited strategy %d/%d with start_date...", idx, len(candidates))
+            resp = await _make_request("patch", endpoint, json=payload)
+            if resp is None or resp.get("_not_found"):
+                logger.warning("Unlimited strategy %d failed to PATCH; trying next candidate.", idx)
+                continue
+
+        # تأیید
         for attempt in range(VERIFICATION_RETRIES):
             await asyncio.sleep(VERIFICATION_DELAY)
             after_info = await get_user_info(user_uuid)
             if not after_info:
                 continue
-
             after_days = int(after_info.get("package_days", -1))
             after_gb_raw = after_info.get("usage_limit_GB", None)
-
             if after_days == exact_days and _is_unlimited_value(after_gb_raw):
-                logger.info("Unlimited strategy '%s' verified on attempt %d.", show, attempt + 1)
+                logger.info("Unlimited strategy verified on attempt %d.", attempt + 1)
                 return after_info
 
-        logger.warning("Unlimited strategy '%s' did not verify; trying next.", show)
+        logger.warning("Unlimited strategy did not verify; trying next.")
 
     logger.error("All unlimited strategies failed for user %s.", user_uuid)
     return None
@@ -293,15 +301,29 @@ async def _set_large_quota(user_uuid: str, exact_days: int, large_gb: float) -> 
     """
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
     large_gb = float(large_gb)
+    now_ts = int(time.time())
+
+    # تلاش 1: با last_reset_time
     payload = {
         "package_days": exact_days,
         "usage_limit_GB": large_gb,
         "current_usage_GB": 0,
+        "last_reset_time": now_ts,
     }
     resp = await _make_request("patch", endpoint, json=payload)
+
+    # تلاش 2: با start_date
     if resp is None or resp.get("_not_found"):
-        logger.error("Large-quota PATCH failed for UUID %s", user_uuid)
-        return None
+        payload = {
+            "package_days": exact_days,
+            "usage_limit_GB": large_gb,
+            "current_usage_GB": 0,
+            "start_date": now_ts,
+        }
+        resp = await _make_request("patch", endpoint, json=payload)
+        if resp is None or resp.get("_not_found"):
+            logger.error("Large-quota PATCH failed for UUID %s", user_uuid)
+            return None
 
     for attempt in range(VERIFICATION_RETRIES):
         await asyncio.sleep(VERIFICATION_DELAY)
@@ -338,16 +360,29 @@ async def _apply_and_verify_plan(user_uuid: str, plan_days: int, plan_gb: float)
 
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
     usage_limit_gb = float(plan_gb)
+    now_ts = int(time.time())
+
+    # تلاش 1: با last_reset_time
     payload = {
         "package_days": exact_days,
         "usage_limit_GB": usage_limit_gb,
         "current_usage_GB": 0,
+        "last_reset_time": now_ts,
     }
-
     response = await _make_request("patch", endpoint, json=payload)
+
+    # تلاش 2: با start_date
     if response is None or response.get("_not_found"):
-        logger.error("Renew/update PATCH request failed for UUID %s", user_uuid)
-        return None
+        payload = {
+            "package_days": exact_days,
+            "usage_limit_GB": usage_limit_gb,
+            "current_usage_GB": 0,
+            "start_date": now_ts,
+        }
+        response = await _make_request("patch", endpoint, json=payload)
+        if response is None or response.get("_not_found"):
+            logger.error("Renew/update PATCH request failed for UUID %s", user_uuid)
+            return None
 
     for attempt in range(VERIFICATION_RETRIES):
         await asyncio.sleep(VERIFICATION_DELAY)
