@@ -1,4 +1,4 @@
-#filename: database.py
+# filename: database.py
 # -*- coding: utf-8 -*-
 
 import sqlite3
