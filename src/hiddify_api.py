@@ -7,6 +7,7 @@ import uuid
 import random
 import logging
 import types
+import time
 from typing import Optional, Dict, Any
 
 # --- Robust config loader ---
@@ -38,10 +39,6 @@ VERIFICATION_DELAY = 1.0
 
 
 def _normalize_host(host: str) -> str:
-    """
-    - اگر scheme ندارد، https:// اضافه می‌کنیم
-    - اسلش پایانی را حذف می‌کنیم
-    """
     h = (host or "").strip()
     if not h:
         return ""
@@ -60,9 +57,6 @@ def _strip_scheme(host: str) -> str:
 
 
 def _normalize_subdomains(sd):
-    """
-    SUB_DOMAINS ممکن است رشته یا لیست باشد؛ خروجی لیست hostname بدون scheme
-    """
     if isinstance(sd, str):
         parts = [p.strip() for p in sd.split(",") if p.strip()]
     else:
@@ -74,10 +68,6 @@ SUB_DOMAINS = _normalize_subdomains(SUB_DOMAINS)
 
 
 def _get_base_url() -> str:
-    """
-    URL پایه API. PANEL_DOMAIN را در config ست کنید.
-    اگر خالی بود، سعی با SUB_DOMAINS[0]؛ در نهایت فقط برای جلوگیری از کرش به localhost می‌افتد.
-    """
     base = _normalize_host(PANEL_DOMAIN)
     if not base:
         alt = _normalize_host(SUB_DOMAINS[0] if SUB_DOMAINS else "")
@@ -134,9 +124,35 @@ def _is_unlimited_value(x) -> bool:
         return False
 
 
-# سازگاری با buy.py
-def _compensate_days(days: int) -> int:
-    return int(days)
+def _now_ts() -> int:
+    return int(time.time())
+
+
+def _expected_expire_ts(days: int) -> int:
+    return _now_ts() + int(days) * 86400
+
+
+def _verify_days_and_expire(after_info: Dict[str, Any], exact_days: int) -> bool:
+    try:
+        after_days = int(after_info.get("package_days", -1))
+    except Exception:
+        after_days = -1
+
+    exp_raw = after_info.get("expire", None)
+    ok_expire = True
+    if exp_raw is not None:
+        try:
+            exp = float(exp_raw)
+            if exp > 1e12:  # ms -> s
+                exp = exp / 1000.0
+            now_ts = _now_ts()
+            expected = now_ts + exact_days * 86400
+            # اختلاف تا 6 ساعت را مجاز بگیر
+            ok_expire = abs(exp - expected) <= 6 * 3600
+        except Exception:
+            ok_expire = True  # اگر قابل خواندن نبود، فقط روزها را ملاک می‌گیریم
+
+    return (after_days == int(exact_days)) and ok_expire
 
 
 async def _make_request(method: str, url: str, **kwargs) -> Optional[Dict[str, Any]]:
@@ -182,7 +198,6 @@ async def create_hiddify_user(
 
     endpoint = _get_base_url() + "user/"
 
-    # ساخت نام: custom_name > server_name > tg-id
     random_suffix = uuid.uuid4().hex[:4]
     tg_part = (user_telegram_id or "").split(":")[-1] or "user"
     if custom_name:
@@ -193,14 +208,12 @@ async def create_hiddify_user(
         base_name = f"tg-{tg_part}"
     unique_user_name = f"{base_name}-{random_suffix}"
 
-    # کامنت: اطلاعات تلگرام + سرور
     comment = user_telegram_id or ""
     if server_name:
         safe_srv = str(server_name)[:32]
         if "|srv:" not in comment:
             comment = f"{comment}|srv:{safe_srv}" if comment else f"srv:{safe_srv}"
 
-    # مرحله ۱: ساخت کاربر
     payload_create = {"name": unique_user_name, "comment": comment}
     data = await _make_request("post", endpoint, json=payload_create)
     if not data or not data.get("uuid"):
@@ -209,7 +222,6 @@ async def create_hiddify_user(
 
     user_uuid = data.get("uuid")
 
-    # مرحله ۲: اعمال پلن
     logger.info("User %s created. Now applying plan details via PATCH...", user_uuid)
     update_success = await _apply_and_verify_plan(user_uuid, plan_days, plan_gb)
     if not update_success:
@@ -217,7 +229,6 @@ async def create_hiddify_user(
         await delete_user_from_panel(user_uuid)
         return None
 
-    # ساخت لینک سابسکریپشن با الگوی .../sub/ (بدون asn)
     sub_host = _strip_scheme(random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN)
     client_secret = str(PANEL_SECRET_UUID or "").strip().strip("/")
 
@@ -236,9 +247,6 @@ async def get_user_info(user_uuid: str, server_name: Optional[str] = None, **kwa
 
 
 async def _try_set_unlimited(user_uuid: str, exact_days: int) -> Optional[Dict[str, Any]]:
-    """
-    حالت auto: چند استراتژی مختلف برای نامحدود واقعی.
-    """
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
     pref = _normalize_unlimited_value(HIDDIFY_UNLIMITED_VALUE)
 
@@ -249,23 +257,22 @@ async def _try_set_unlimited(user_uuid: str, exact_days: int) -> Optional[Dict[s
         candidates.append(None)
     elif isinstance(pref, (int, float)):
         candidates.append(float(pref))
-
     for c in [None, 0.0, -1.0, "OMIT"]:
         if c not in candidates:
             candidates.append(c)
 
+    expected_expire = _expected_expire_ts(exact_days)
+    now_ts = _now_ts()
+
     for idx, cand in enumerate(candidates, start=1):
-        payload = {"package_days": exact_days, "current_usage_GB": 0}
+        payload = {"package_days": exact_days, "current_usage_GB": 0, "expire": expected_expire, "last_reset_time": now_ts}
         if cand != "OMIT":
             payload["usage_limit_GB"] = cand
-            show = "null" if cand is None else str(cand)
-        else:
-            show = "OMIT"
 
-        logger.info("Trying unlimited strategy %d/%d: usage_limit_GB=%s", idx, len(candidates), show)
+        logger.info("Trying unlimited strategy %d/%d (set expire & last_reset_time).", idx, len(candidates))
         resp = await _make_request("patch", endpoint, json=payload)
         if resp is None or resp.get("_not_found"):
-            logger.warning("Unlimited strategy %s: PATCH failed (skipping).", show)
+            logger.warning("Unlimited strategy PATCH failed (skipping).")
             continue
 
         for attempt in range(VERIFICATION_RETRIES):
@@ -273,30 +280,27 @@ async def _try_set_unlimited(user_uuid: str, exact_days: int) -> Optional[Dict[s
             after_info = await get_user_info(user_uuid)
             if not after_info:
                 continue
-
-            after_days = int(after_info.get("package_days", -1))
-            after_gb_raw = after_info.get("usage_limit_GB", None)
-
-            if after_days == exact_days and _is_unlimited_value(after_gb_raw):
-                logger.info("Unlimited strategy '%s' verified on attempt %d.", show, attempt + 1)
+            if _verify_days_and_expire(after_info, exact_days) and _is_unlimited_value(after_info.get("usage_limit_GB", None)):
+                logger.info("Unlimited strategy verified on attempt %d.", attempt + 1)
                 return after_info
 
-        logger.warning("Unlimited strategy '%s' did not verify; trying next.", show)
-
+        logger.warning("Unlimited strategy did not verify; trying next.")
     logger.error("All unlimited strategies failed for user %s.", user_uuid)
     return None
 
 
 async def _set_large_quota(user_uuid: str, exact_days: int, large_gb: float) -> Optional[Dict[str, Any]]:
-    """
-    نامحدود به‌صورت سقف حجمی بزرگ (مثلاً 1000GB).
-    """
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
     large_gb = float(large_gb)
+    expected_expire = _expected_expire_ts(exact_days)
+    now_ts = _now_ts()
+
     payload = {
         "package_days": exact_days,
         "usage_limit_GB": large_gb,
         "current_usage_GB": 0,
+        "expire": expected_expire,
+        "last_reset_time": now_ts,
     }
     resp = await _make_request("patch", endpoint, json=payload)
     if resp is None or resp.get("_not_found"):
@@ -308,21 +312,11 @@ async def _set_large_quota(user_uuid: str, exact_days: int, large_gb: float) -> 
         after_info = await get_user_info(user_uuid)
         if not after_info:
             continue
-
-        after_days = int(after_info.get("package_days", -1))
-        after_gb_raw = after_info.get("usage_limit_GB", None)
-        try:
-            after_gb = float(after_gb_raw)
-        except Exception:
-            after_gb = None
-
-        if after_days == exact_days and (
-            _is_unlimited_value(after_gb_raw) or (after_gb is not None and abs(after_gb - large_gb) < 1e-6)
-        ):
-            logger.info("Large-quota unlimited (%.0f GB) verified for UUID %s on attempt %d.", large_gb, user_uuid, attempt + 1)
+        if _verify_days_and_expire(after_info, exact_days):
+            logger.info("Large-quota verified for UUID %s on attempt %d.", user_uuid, attempt + 1)
             return after_info
 
-    logger.error("Large-quota unlimited verification failed for UUID %s", user_uuid)
+    logger.error("Large-quota verification failed for UUID %s", user_uuid)
     return None
 
 
@@ -338,10 +332,15 @@ async def _apply_and_verify_plan(user_uuid: str, plan_days: int, plan_gb: float)
 
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
     usage_limit_gb = float(plan_gb)
+    expected_expire = _expected_expire_ts(exact_days)
+    now_ts = _now_ts()
+
     payload = {
         "package_days": exact_days,
         "usage_limit_GB": usage_limit_gb,
         "current_usage_GB": 0,
+        "expire": expected_expire,
+        "last_reset_time": now_ts,
     }
 
     response = await _make_request("patch", endpoint, json=payload)
@@ -354,21 +353,15 @@ async def _apply_and_verify_plan(user_uuid: str, plan_days: int, plan_gb: float)
         after_info = await get_user_info(user_uuid)
         if not after_info:
             continue
-
-        after_days = int(after_info.get("package_days", -1))
-        after_gb_raw = after_info.get("usage_limit_GB", None)
-        try:
-            after_gb = float(after_gb_raw)
-        except Exception:
-            after_gb = None
-
-        if after_days == exact_days and after_gb is not None and abs(after_gb - usage_limit_gb) < 1e-6:
+        if _verify_days_and_expire(after_info, exact_days):
             logger.info("Update for UUID %s verified successfully on attempt %d.", user_uuid, attempt + 1)
             return after_info
 
+        # تلاش دوم: اگر expire/last_reset_time نرفتند، دوباره فقط با package_days و current_usage_GB امتحان نکنیم
+        # اما به هر حال گزارش کنیم
         logger.warning(
-            "Verification attempt %d for UUID %s failed. Expected (days:%s, gb:%s), Got (days:%s, gb:%s)",
-            attempt + 1, user_uuid, exact_days, usage_limit_gb, after_days, after_gb_raw
+            "Verification attempt %d for UUID %s failed. Expected days=%s; got days=%s, expire=%s",
+            attempt + 1, user_uuid, exact_days, after_info.get("package_days"), after_info.get("expire")
         )
 
     logger.error("Verification failed for UUID %s after %d attempts.", user_uuid, VERIFICATION_RETRIES)
