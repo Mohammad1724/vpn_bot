@@ -128,33 +128,6 @@ def _now_ts() -> int:
     return int(time.time())
 
 
-def _expected_expire_ts(days: int) -> int:
-    return _now_ts() + int(days) * 86400
-
-
-def _verify_days_and_expire(after_info: Dict[str, Any], exact_days: int) -> bool:
-    try:
-        after_days = int(after_info.get("package_days", -1))
-    except Exception:
-        after_days = -1
-
-    exp_raw = after_info.get("expire", None)
-    ok_expire = True
-    if exp_raw is not None:
-        try:
-            exp = float(exp_raw)
-            if exp > 1e12:  # ms -> s
-                exp = exp / 1000.0
-            now_ts = _now_ts()
-            expected = now_ts + exact_days * 86400
-            # اختلاف تا 6 ساعت را مجاز بگیر
-            ok_expire = abs(exp - expected) <= 6 * 3600
-        except Exception:
-            ok_expire = True  # اگر قابل خواندن نبود، فقط روزها را ملاک می‌گیریم
-
-    return (after_days == int(exact_days)) and ok_expire
-
-
 async def _make_request(method: str, url: str, **kwargs) -> Optional[Dict[str, Any]]:
     headers = kwargs.pop("headers", _get_api_headers())
     delay = BASE_RETRY_DELAY
@@ -171,19 +144,39 @@ async def _make_request(method: str, url: str, **kwargs) -> Optional[Dict[str, A
             status = e.response.status_code if e.response is not None else None
             text = e.response.text if e.response is not None else str(e)
             if status == 500 and "404 Not Found" in text:
-                logger.warning("Treating 500 error with '404 Not Found' message as a 404 for URL %s", url)
+                logger.warning("Treating 500 with embedded 404 as a 404 for URL %s", url)
                 return {"_not_found": True}
             if status == 404:
                 return {"_not_found": True}
             if status in (401, 403, 422):
                 logger.error("%s to %s failed with %s: %s", method.upper(), url, status, text)
-                break
+                # Don't break the loop instantly; caller may retry with another payload
+                return None
             logger.warning("%s to %s failed with %s: %s (retry %d/%d)", method.upper(), url, status, text, attempt, MAX_RETRIES)
         except Exception as e:
             logger.error("%s to %s failed: %s", method.upper(), url, e, exc_info=True)
         if attempt < MAX_RETRIES:
             await asyncio.sleep(delay)
             delay *= 2
+    return None
+
+
+async def _patch_with_start_fields(user_uuid: str, base_payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Try different start-time fields accepted by panel (last_reset_time, start_date).
+    """
+    endpoint = f"{_get_base_url()}user/{user_uuid}/"
+    now_ts = _now_ts()
+
+    candidates = [
+        {"last_reset_time": now_ts},
+        {"start_date": now_ts},
+    ]
+    for extra in candidates:
+        payload = {**base_payload, **extra}
+        resp = await _make_request("patch", endpoint, json=payload)
+        if resp is not None and not resp.get("_not_found"):
+            return resp
     return None
 
 
@@ -200,12 +193,7 @@ async def create_hiddify_user(
 
     random_suffix = uuid.uuid4().hex[:4]
     tg_part = (user_telegram_id or "").split(":")[-1] or "user"
-    if custom_name:
-        base_name = str(custom_name)
-    elif server_name:
-        base_name = str(server_name)
-    else:
-        base_name = f"tg-{tg_part}"
+    base_name = str(custom_name or server_name or f"tg-{tg_part}")
     unique_user_name = f"{base_name}-{random_suffix}"
 
     comment = user_telegram_id or ""
@@ -214,24 +202,25 @@ async def create_hiddify_user(
         if "|srv:" not in comment:
             comment = f"{comment}|srv:{safe_srv}" if comment else f"srv:{safe_srv}"
 
+    # Step 1: create user
     payload_create = {"name": unique_user_name, "comment": comment}
     data = await _make_request("post", endpoint, json=payload_create)
     if not data or not data.get("uuid"):
-        logger.error("create_hiddify_user (step 1 - POST): failed or UUID missing")
+        logger.error("create_hiddify_user (POST): failed or UUID missing")
         return None
-
     user_uuid = data.get("uuid")
 
-    logger.info("User %s created. Now applying plan details via PATCH...", user_uuid)
+    # Step 2: apply plan (days, GB, reset start)
+    logger.info("User %s created. Applying plan via PATCH...", user_uuid)
     update_success = await _apply_and_verify_plan(user_uuid, plan_days, plan_gb)
     if not update_success:
-        logger.error("create_hiddify_user (step 2 - PATCH): Failed to apply plan details to user %s. Deleting user.", user_uuid)
+        logger.error("create_hiddify_user (PATCH): failed to apply plan. Deleting user.")
         await delete_user_from_panel(user_uuid)
         return None
 
+    # Build subscription link
     sub_host = _strip_scheme(random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN)
     client_secret = str(PANEL_SECRET_UUID or "").strip().strip("/")
-
     if not client_secret:
         sub_path = str(SUB_PATH or "sub").strip().strip("/")
         full_link = f"https://{sub_host}/{sub_path}/{user_uuid}/"
@@ -246,126 +235,56 @@ async def get_user_info(user_uuid: str, server_name: Optional[str] = None, **kwa
     return await _make_request("get", endpoint)
 
 
-async def _try_set_unlimited(user_uuid: str, exact_days: int) -> Optional[Dict[str, Any]]:
-    endpoint = f"{_get_base_url()}user/{user_uuid}/"
-    pref = _normalize_unlimited_value(HIDDIFY_UNLIMITED_VALUE)
+async def _apply_and_verify_plan(user_uuid: str, plan_days: int, plan_gb: float) -> Optional[Dict[str, Any]]:
+    exact_days = int(plan_days)
 
-    candidates = []
-    if pref == "OMIT":
-        candidates.append("OMIT")
-    elif pref is None:
-        candidates.append(None)
-    elif isinstance(pref, (int, float)):
-        candidates.append(float(pref))
-    for c in [None, 0.0, -1.0, "OMIT"]:
-        if c not in candidates:
-            candidates.append(c)
-
-    expected_expire = _expected_expire_ts(exact_days)
-    now_ts = _now_ts()
-
-    for idx, cand in enumerate(candidates, start=1):
-        payload = {"package_days": exact_days, "current_usage_GB": 0, "expire": expected_expire, "last_reset_time": now_ts}
-        if cand != "OMIT":
-            payload["usage_limit_GB"] = cand
-
-        logger.info("Trying unlimited strategy %d/%d (set expire & last_reset_time).", idx, len(candidates))
-        resp = await _make_request("patch", endpoint, json=payload)
-        if resp is None or resp.get("_not_found"):
-            logger.warning("Unlimited strategy PATCH failed (skipping).")
-            continue
+    base_payload = {"package_days": exact_days, "current_usage_GB": 0}
+    # Unlimited or volume
+    if plan_gb is None or float(plan_gb) <= 0.0:
+        # try unlimited strategies by usage_limit_GB <= 0
+        pref = _normalize_unlimited_value(HIDDIFY_UNLIMITED_VALUE)
+        candidates = []
+        if pref == "OMIT":
+            candidates.append("OMIT")
+        elif pref is None:
+            candidates.append(None)
+        elif isinstance(pref, (int, float)):
+            candidates.append(float(pref))
+        for c in [None, 0.0, -1.0, "OMIT"]:
+            if c not in candidates:
+                candidates.append(c)
+        for idx, cand in enumerate(candidates, 1):
+            payload = dict(base_payload)
+            if cand != "OMIT":
+                payload["usage_limit_GB"] = cand
+            logger.info("Unlimited patch try %d/%d...", idx, len(candidates))
+            resp = await _patch_with_start_fields(user_uuid, payload)
+            if resp is None:
+                continue
+            # verify by reading user and checking days set
+            for attempt in range(VERIFICATION_RETRIES):
+                await asyncio.sleep(VERIFICATION_DELAY)
+                after_info = await get_user_info(user_uuid)
+                if after_info and int(after_info.get("package_days", -1)) == exact_days:
+                    return after_info
+        return None
+    else:
+        # Volume plan
+        payload = dict(base_payload)
+        payload["usage_limit_GB"] = float(plan_gb)
+        resp = await _patch_with_start_fields(user_uuid, payload)
+        if resp is None:
+            logger.error("PATCH (volume) failed for %s", user_uuid)
+            return None
 
         for attempt in range(VERIFICATION_RETRIES):
             await asyncio.sleep(VERIFICATION_DELAY)
             after_info = await get_user_info(user_uuid)
-            if not after_info:
-                continue
-            if _verify_days_and_expire(after_info, exact_days) and _is_unlimited_value(after_info.get("usage_limit_GB", None)):
-                logger.info("Unlimited strategy verified on attempt %d.", attempt + 1)
+            if after_info and int(after_info.get("package_days", -1)) == exact_days:
                 return after_info
 
-        logger.warning("Unlimited strategy did not verify; trying next.")
-    logger.error("All unlimited strategies failed for user %s.", user_uuid)
-    return None
-
-
-async def _set_large_quota(user_uuid: str, exact_days: int, large_gb: float) -> Optional[Dict[str, Any]]:
-    endpoint = f"{_get_base_url()}user/{user_uuid}/"
-    large_gb = float(large_gb)
-    expected_expire = _expected_expire_ts(exact_days)
-    now_ts = _now_ts()
-
-    payload = {
-        "package_days": exact_days,
-        "usage_limit_GB": large_gb,
-        "current_usage_GB": 0,
-        "expire": expected_expire,
-        "last_reset_time": now_ts,
-    }
-    resp = await _make_request("patch", endpoint, json=payload)
-    if resp is None or resp.get("_not_found"):
-        logger.error("Large-quota PATCH failed for UUID %s", user_uuid)
+        logger.error("Verification failed for UUID %s after %d attempts.", user_uuid, VERIFICATION_RETRIES)
         return None
-
-    for attempt in range(VERIFICATION_RETRIES):
-        await asyncio.sleep(VERIFICATION_DELAY)
-        after_info = await get_user_info(user_uuid)
-        if not after_info:
-            continue
-        if _verify_days_and_expire(after_info, exact_days):
-            logger.info("Large-quota verified for UUID %s on attempt %d.", user_uuid, attempt + 1)
-            return after_info
-
-    logger.error("Large-quota verification failed for UUID %s", user_uuid)
-    return None
-
-
-async def _apply_and_verify_plan(user_uuid: str, plan_days: int, plan_gb: float) -> Optional[Dict[str, Any]]:
-    exact_days = int(plan_days)
-
-    if plan_gb is None or float(plan_gb) <= 0.0:
-        if str(HIDDIFY_UNLIMITED_STRATEGY).lower() == "auto":
-            info = await _try_set_unlimited(user_uuid, exact_days)
-            if info:
-                return info
-        return await _set_large_quota(user_uuid, exact_days, HIDDIFY_UNLIMITED_LARGE_GB)
-
-    endpoint = f"{_get_base_url()}user/{user_uuid}/"
-    usage_limit_gb = float(plan_gb)
-    expected_expire = _expected_expire_ts(exact_days)
-    now_ts = _now_ts()
-
-    payload = {
-        "package_days": exact_days,
-        "usage_limit_GB": usage_limit_gb,
-        "current_usage_GB": 0,
-        "expire": expected_expire,
-        "last_reset_time": now_ts,
-    }
-
-    response = await _make_request("patch", endpoint, json=payload)
-    if response is None or response.get("_not_found"):
-        logger.error("Renew/update PATCH request failed for UUID %s", user_uuid)
-        return None
-
-    for attempt in range(VERIFICATION_RETRIES):
-        await asyncio.sleep(VERIFICATION_DELAY)
-        after_info = await get_user_info(user_uuid)
-        if not after_info:
-            continue
-        if _verify_days_and_expire(after_info, exact_days):
-            logger.info("Update for UUID %s verified successfully on attempt %d.", user_uuid, attempt + 1)
-            return after_info
-
-        # تلاش دوم: اگر expire/last_reset_time نرفتند، دوباره فقط با package_days و current_usage_GB امتحان نکنیم
-        # اما به هر حال گزارش کنیم
-        logger.warning(
-            "Verification attempt %d for UUID %s failed. Expected days=%s; got days=%s, expire=%s",
-            attempt + 1, user_uuid, exact_days, after_info.get("package_days"), after_info.get("expire")
-        )
-
-    logger.error("Verification failed for UUID %s after %d attempts.", user_uuid, VERIFICATION_RETRIES)
-    return None
 
 
 async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float) -> Optional[Dict[str, Any]]:
