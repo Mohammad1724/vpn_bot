@@ -37,6 +37,9 @@ BASE_RETRY_DELAY = 1.0
 VERIFICATION_RETRIES = 5
 VERIFICATION_DELAY = 1.0
 
+# زمان مجاز برای نزدیک بودن reset به «الان»
+RESET_TOLERANCE_SEC = 6 * 3600  # 6 hours
+
 
 def _normalize_host(host: str) -> str:
     """
@@ -139,8 +142,45 @@ def _is_unlimited_value(x) -> bool:
 def _compensate_days(days: int) -> int:
     return int(days)
 
+
 def _now_ts() -> int:
     return int(time.time())
+
+
+def _to_sec_ts(v) -> Optional[int]:
+    try:
+        if v is None:
+            return None
+        val = float(v) if isinstance(v, (int, float)) else float(str(v).strip())
+        if val > 1e12:  # likely milliseconds
+            val = val / 1000.0
+        return int(val)
+    except Exception:
+        return None
+
+
+def _is_reset_applied(after_info: Dict[str, Any], exact_days: int, ref_ts_sec: int) -> bool:
+    """
+    بررسی اینکه شروع دوره/انقضا واقعاً از 'الان' ریست شده باشد.
+    یا expire ≈ now + exact_days یا start_date/last_reset_time ≈ now (با تلورانس زمانی).
+    """
+    try:
+        # 1) با expire (در برخی پنل‌ها با کلیدهای مختلف)
+        for key in ("expire", "expiry", "expire_time"):
+            ts = _to_sec_ts(after_info.get(key))
+            if ts:
+                days_delta = (ts - ref_ts_sec) / 86400.0
+                if days_delta >= (exact_days - 1):
+                    return True
+        # 2) با start_date/last_reset_time/created_at
+        for key in ("start_date", "last_reset_time", "created_at", "create_time"):
+            ts = _to_sec_ts(after_info.get(key))
+            if ts and abs(ts - ref_ts_sec) <= RESET_TOLERANCE_SEC:
+                return True
+    except Exception:
+        pass
+    return False
+
 
 async def _make_request(method: str, url: str, **kwargs) -> Optional[Dict[str, Any]]:
     headers = kwargs.pop("headers", _get_api_headers())
@@ -206,11 +246,16 @@ async def create_hiddify_user(
     # مرحله ۱: ساخت کاربر
     payload_create = {"name": unique_user_name, "comment": comment}
     data = await _make_request("post", endpoint, json=payload_create)
-    if not data or not data.get("uuid"):
-        logger.error("create_hiddify_user (step 1 - POST): failed or UUID missing")
+    if not data:
+        logger.error("create_hiddify_user (step 1 - POST): request failed (no data)")
         return None
-
-    user_uuid = data.get("uuid")
+    # برخی پنل‌ها uuid را داخل کلید user برمی‌گردانند
+    user_uuid = data.get("uuid") if isinstance(data, dict) else None
+    if not user_uuid and isinstance(data, dict):
+        user_uuid = (data.get("user") or {}).get("uuid")
+    if not user_uuid:
+        logger.error("create_hiddify_user (step 1 - POST): UUID missing in response: %s", data)
+        return None
 
     # مرحله ۲: اعمال پلن
     logger.info("User %s created. Now applying plan details via PATCH...", user_uuid)
@@ -222,6 +267,9 @@ async def create_hiddify_user(
 
     # ساخت لینک سابسکریپشن با الگوی .../sub/ (بدون asn)
     sub_host = _strip_scheme(random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN)
+    if not sub_host:
+        # هم‌راستا با fallback در _get_base_url
+        sub_host = "localhost"
     client_secret = str(PANEL_SECRET_UUID or "").strip().strip("/")
 
     if not client_secret:
@@ -257,42 +305,40 @@ async def _try_set_unlimited(user_uuid: str, exact_days: int) -> Optional[Dict[s
         if c not in candidates:
             candidates.append(c)
 
-    now_ts = _now_ts()
+    now_sec = _now_ts()
+    time_variants = [
+        ("last_reset_time", now_sec),
+        ("start_date", now_sec),
+        ("last_reset_time", int(now_sec * 1000)),
+        ("start_date", int(now_sec * 1000)),
+    ]
+
     for idx, cand in enumerate(candidates, start=1):
-        payload = {"package_days": exact_days, "current_usage_GB": 0, "last_reset_time": now_ts}
-        if cand != "OMIT":
-            payload["usage_limit_GB"] = cand
-            show = "null" if cand is None else str(cand)
-        else:
-            show = "OMIT"
-
-        logger.info("Trying unlimited strategy %d/%d: usage_limit_GB=%s", idx, len(candidates), show)
-        resp = await _make_request("patch", endpoint, json=payload)
-
-        # تلاش دوم با start_date اگر اولی ناموفق بود
-        if resp is None or resp.get("_not_found"):
-            payload = {"package_days": exact_days, "current_usage_GB": 0, "start_date": now_ts}
+        show = "OMIT" if cand == "OMIT" else ("null" if cand is None else str(cand))
+        for tf, tv in time_variants:
+            payload = {"package_days": exact_days, "current_usage_GB": 0, tf: tv}
             if cand != "OMIT":
                 payload["usage_limit_GB"] = cand
+            logger.info("Trying unlimited strategy %d/%d (%s=%s, usage_limit_GB=%s)", idx, len(candidates), tf, tv, show)
             resp = await _make_request("patch", endpoint, json=payload)
-            if resp is None or resp.get("_not_found"):
-                logger.warning("Unlimited strategy %s: PATCH failed (skipping).", show)
+            if resp is None or (isinstance(resp, dict) and resp.get("_not_found")):
                 continue
 
-        for attempt in range(VERIFICATION_RETRIES):
-            await asyncio.sleep(VERIFICATION_DELAY)
-            after_info = await get_user_info(user_uuid)
-            if not after_info:
-                continue
+            ref_ts = _to_sec_ts(tv) or now_sec
+            for attempt in range(VERIFICATION_RETRIES):
+                await asyncio.sleep(VERIFICATION_DELAY)
+                after_info = await get_user_info(user_uuid)
+                if not after_info:
+                    continue
 
-            after_days = int(after_info.get("package_days", -1))
-            after_gb_raw = after_info.get("usage_limit_GB", None)
+                after_days = int(after_info.get("package_days", -1))
+                after_gb_raw = after_info.get("usage_limit_GB", None)
 
-            if after_days == exact_days and _is_unlimited_value(after_gb_raw):
-                logger.info("Unlimited strategy '%s' verified on attempt %d.", show, attempt + 1)
-                return after_info
+                if after_days == exact_days and _is_unlimited_value(after_gb_raw) and _is_reset_applied(after_info, exact_days, ref_ts):
+                    logger.info("Unlimited verified (tf=%s) on attempt %d.", tf, attempt + 1)
+                    return after_info
 
-        logger.warning("Unlimited strategy '%s' did not verify; trying next.", show)
+            logger.warning("Unlimited verify failed for (tf=%s). Trying next variant.", tf)
 
     logger.error("All unlimited strategies failed for user %s.", user_uuid)
     return None
@@ -304,38 +350,39 @@ async def _set_large_quota(user_uuid: str, exact_days: int, large_gb: float) -> 
     """
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
     large_gb = float(large_gb)
-    now_ts = _now_ts()
+    now_sec = _now_ts()
+    time_variants = [
+        ("last_reset_time", now_sec),
+        ("start_date", now_sec),
+        ("last_reset_time", int(now_sec * 1000)),
+        ("start_date", int(now_sec * 1000)),
+    ]
 
-    payload = {"package_days": exact_days, "usage_limit_GB": large_gb, "current_usage_GB": 0, "last_reset_time": now_ts}
-    resp = await _make_request("patch", endpoint, json=payload)
-    
-    # تلاش دوم با start_date
-    if resp is None or resp.get("_not_found"):
-        payload = {"package_days": exact_days, "usage_limit_GB": large_gb, "current_usage_GB": 0, "start_date": now_ts}
+    for tf, tv in time_variants:
+        payload = {"package_days": exact_days, "usage_limit_GB": large_gb, "current_usage_GB": 0, tf: tv}
         resp = await _make_request("patch", endpoint, json=payload)
-        if resp is None or resp.get("_not_found"):
-            logger.error("Large-quota PATCH failed for UUID %s", user_uuid)
-            return None
-
-
-    for attempt in range(VERIFICATION_RETRIES):
-        await asyncio.sleep(VERIFICATION_DELAY)
-        after_info = await get_user_info(user_uuid)
-        if not after_info:
+        if resp is None or (isinstance(resp, dict) and resp.get("_not_found")):
             continue
 
-        after_days = int(after_info.get("package_days", -1))
-        after_gb_raw = after_info.get("usage_limit_GB", None)
-        try:
-            after_gb = float(after_gb_raw)
-        except Exception:
-            after_gb = None
+        ref_ts = _to_sec_ts(tv) or now_sec
+        for attempt in range(VERIFICATION_RETRIES):
+            await asyncio.sleep(VERIFICATION_DELAY)
+            after_info = await get_user_info(user_uuid)
+            if not after_info:
+                continue
 
-        if after_days == exact_days and (
-            _is_unlimited_value(after_gb_raw) or (after_gb is not None and abs(after_gb - large_gb) < 1e-6)
-        ):
-            logger.info("Large-quota unlimited (%.0f GB) verified for UUID %s on attempt %d.", large_gb, user_uuid, attempt + 1)
-            return after_info
+            after_days = int(after_info.get("package_days", -1))
+            after_gb_raw = after_info.get("usage_limit_GB", None)
+            try:
+                after_gb = float(after_gb_raw)
+            except Exception:
+                after_gb = None
+
+            if after_days == exact_days and (
+                _is_unlimited_value(after_gb_raw) or (after_gb is not None and abs(after_gb - large_gb) < 1e-6)
+            ) and _is_reset_applied(after_info, exact_days, ref_ts):
+                logger.info("Large-quota (%.0f GB) verified (tf=%s) on attempt %d.", large_gb, tf, attempt + 1)
+                return after_info
 
     logger.error("Large-quota unlimited verification failed for UUID %s", user_uuid)
     return None
@@ -353,42 +400,41 @@ async def _apply_and_verify_plan(user_uuid: str, plan_days: int, plan_gb: float)
 
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
     usage_limit_gb = float(plan_gb)
-    now_ts = _now_ts()
+    now_sec = _now_ts()
+    time_variants = [
+        ("last_reset_time", now_sec),
+        ("start_date", now_sec),
+        ("last_reset_time", int(now_sec * 1000)),
+        ("start_date", int(now_sec * 1000)),
+    ]
 
-    payload = {"package_days": exact_days, "usage_limit_GB": usage_limit_gb, "current_usage_GB": 0, "last_reset_time": now_ts}
-    response = await _make_request("patch", endpoint, json=payload)
-
-    # تلاش دوم با start_date
-    if response is None or response.get("_not_found"):
-        payload = {"package_days": exact_days, "usage_limit_GB": usage_limit_gb, "current_usage_GB": 0, "start_date": now_ts}
+    for tf, tv in time_variants:
+        payload = {"package_days": exact_days, "usage_limit_GB": usage_limit_gb, "current_usage_GB": 0, tf: tv}
         response = await _make_request("patch", endpoint, json=payload)
-        if response is None or response.get("_not_found"):
-            logger.error("Renew/update PATCH request failed for UUID %s", user_uuid)
-            return None
-
-    for attempt in range(VERIFICATION_RETRIES):
-        await asyncio.sleep(VERIFICATION_DELAY)
-        after_info = await get_user_info(user_uuid)
-        if not after_info:
+        if response is None or (isinstance(response, dict) and response.get("_not_found")):
             continue
 
-        after_days = int(after_info.get("package_days", -1))
-        after_gb_raw = after_info.get("usage_limit_GB", None)
-        try:
-            after_gb = float(after_gb_raw)
-        except Exception:
-            after_gb = None
+        ref_ts = _to_sec_ts(tv) or now_sec
+        for attempt in range(VERIFICATION_RETRIES):
+            await asyncio.sleep(VERIFICATION_DELAY)
+            after_info = await get_user_info(user_uuid)
+            if not after_info:
+                continue
 
-        if after_days == exact_days and after_gb is not None and abs(after_gb - usage_limit_gb) < 1e-6:
-            logger.info("Update for UUID %s verified successfully on attempt %d.", user_uuid, attempt + 1)
-            return after_info
+            after_days = int(after_info.get("package_days", -1))
+            after_gb_raw = after_info.get("usage_limit_GB", None)
+            try:
+                after_gb = float(after_gb_raw)
+            except Exception:
+                after_gb = None
 
-        logger.warning(
-            "Verification attempt %d for UUID %s failed. Expected (days:%s, gb:%s), Got (days:%s, gb:%s)",
-            attempt + 1, user_uuid, exact_days, usage_limit_gb, after_days, after_gb_raw
-        )
+            if after_days == exact_days and after_gb is not None and abs(after_gb - usage_limit_gb) < 1e-6 and _is_reset_applied(after_info, exact_days, ref_ts):
+                logger.info("Update verified for %s (tf=%s) on attempt %d.", user_uuid, tf, attempt + 1)
+                return after_info
 
-    logger.error("Verification failed for UUID %s after %d attempts.", user_uuid, VERIFICATION_RETRIES)
+        logger.warning("Verification for %s failed with time field '%s'. Trying next variant.", user_uuid, tf)
+
+    logger.error("Verification failed for UUID %s after trying all time variants.", user_uuid)
     return None
 
 
