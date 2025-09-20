@@ -39,10 +39,6 @@ VERIFICATION_DELAY = 1.0
 
 
 def _normalize_host(host: str) -> str:
-    """
-    - اگر scheme ندارد، https:// اضافه می‌کنیم
-    - اسلش پایانی را حذف می‌کنیم
-    """
     h = (host or "").strip()
     if not h:
         return ""
@@ -61,9 +57,6 @@ def _strip_scheme(host: str) -> str:
 
 
 def _normalize_subdomains(sd):
-    """
-    SUB_DOMAINS ممکن است رشته یا لیست باشد؛ خروجی لیست hostname بدون scheme
-    """
     if isinstance(sd, str):
         parts = [p.strip() for p in sd.split(",") if p.strip()]
     else:
@@ -75,10 +68,6 @@ SUB_DOMAINS = _normalize_subdomains(SUB_DOMAINS)
 
 
 def _get_base_url() -> str:
-    """
-    URL پایه API. PANEL_DOMAIN را در config ست کنید.
-    اگر خالی بود، سعی با SUB_DOMAINS[0]؛ در نهایت فقط برای جلوگیری از کرش به localhost می‌افتد.
-    """
     base = _normalize_host(PANEL_DOMAIN)
     if not base:
         alt = _normalize_host(SUB_DOMAINS[0] if SUB_DOMAINS else "")
@@ -172,79 +161,6 @@ async def _make_request(method: str, url: str, **kwargs) -> Optional[Dict[str, A
     return None
 
 
-# --------- Helpers for fallback reset ---------
-def _now_ts() -> int:
-    return int(time.time())
-
-def _to_float_ts(x) -> Optional[float]:
-    try:
-        v = float(x)
-        return v/1000.0 if v > 1e12 else v
-    except Exception:
-        return None
-
-def _calc_start_ts(info: Dict[str, Any]) -> Optional[int]:
-    """
-    تلاش برای به‌دست‌آوردن زمان شروع دوره از پاسخ پنل:
-    - last_reset_time
-    - start_date
-    - یا از روی expire - package_days*86400
-    """
-    for key in ("last_reset_time", "start_date"):
-        v = _to_float_ts(info.get(key))
-        if v is not None:
-            return int(v)
-    exp = _to_float_ts(info.get("expire"))
-    try:
-        pkg_days = int(float(info.get("package_days") or 0))
-    except Exception:
-        pkg_days = 0
-    if exp is not None and pkg_days > 0:
-        return int(exp - pkg_days * 86400)
-    return None
-
-async def _bump_days_to_now(user_uuid: str, plan_days: int, plan_gb: Optional[float]) -> Optional[Dict[str, Any]]:
-    """
-    اگر پنل start/last_reset را تغییر نداد، با بزرگ کردن package_days کاری می‌کنیم
-    که expiry ≈ now + plan_days شود.
-    """
-    try:
-        info = await get_user_info(user_uuid)
-        if not info:
-            return None
-        start_ts = _calc_start_ts(info)
-        if start_ts is None:
-            return None
-        now = _now_ts()
-        elapsed = max(0, now - start_ts)
-        elapsed_days = int(elapsed // 86400)
-        if elapsed_days <= 0:
-            return None
-        target_days = int(plan_days) + elapsed_days
-
-        endpoint = f"{_get_base_url()}user/{user_uuid}/"
-        payload = {"package_days": target_days}
-        if plan_gb is not None:
-            try:
-                payload["usage_limit_GB"] = float(plan_gb)
-            except Exception:
-                pass
-
-        resp = await _make_request("patch", endpoint, json=payload)
-        if resp is None or resp.get("_not_found"):
-            return None
-
-        # verify
-        after = await get_user_info(user_uuid)
-        if after and int(after.get("package_days", -1)) >= target_days:
-            logger.info("Package days bumped to %s for %s to simulate reset-from-now.", target_days, user_uuid)
-            return after
-    except Exception as e:
-        logger.warning("bump_days_to_now failed for %s: %s", user_uuid, e)
-    return None
-# ----------------------------------------------
-
-
 async def create_hiddify_user(
     plan_days: int,
     plan_gb: float,
@@ -285,7 +201,7 @@ async def create_hiddify_user(
 
     # مرحله ۲: اعمال پلن
     logger.info("User %s created. Now applying plan details via PATCH...", user_uuid)
-    update_success = await _apply_and_verify_plan(user_uuid, plan_days, plan_gb)
+    update_success = await _apply_and_verify_plan(user_uuid, plan_days, plan_gb, is_new_user=True)
     if not update_success:
         logger.error("create_hiddify_user (step 2 - PATCH): Failed to apply plan details to user %s. Deleting user.", user_uuid)
         await delete_user_from_panel(user_uuid)
@@ -309,159 +225,93 @@ async def get_user_info(user_uuid: str, server_name: Optional[str] = None, **kwa
     return await _make_request("get", endpoint)
 
 
-async def _try_set_unlimited(user_uuid: str, exact_days: int) -> Optional[Dict[str, Any]]:
-    """
-    حالت auto: چند استراتژی مختلف برای نامحدود واقعی.
-    """
+async def _apply_and_verify_plan(user_uuid: str, plan_days: int, plan_gb: float, is_new_user: bool = False) -> Optional[Dict[str, Any]]:
     endpoint = f"{_get_base_url()}user/{user_uuid}/"
-    pref = _normalize_unlimited_value(HIDDIFY_UNLIMITED_VALUE)
-
-    candidates = []
-    if pref == "OMIT":
-        candidates.append("OMIT")
-    elif pref is None:
-        candidates.append(None)
-    elif isinstance(pref, (int, float)):
-        candidates.append(float(pref))
-
-    for c in [None, 0.0, -1.0, "OMIT"]:
-        if c not in candidates:
-            candidates.append(c)
-
-    for idx, cand in enumerate(candidates, start=1):
-        payload = {"package_days": exact_days, "current_usage_GB": 0}
-        if cand != "OMIT":
-            payload["usage_limit_GB"] = cand
-            show = "null" if cand is None else str(cand)
-        else:
-            show = "OMIT"
-
-        logger.info("Trying unlimited strategy %d/%d: usage_limit_GB=%s", idx, len(candidates), show)
-        resp = await _make_request("patch", endpoint, json=payload)
-        if resp is None or resp.get("_not_found"):
-            logger.warning("Unlimited strategy %s: PATCH failed (skipping).", show)
-            continue
-
-        for attempt in range(VERIFICATION_RETRIES):
-            await asyncio.sleep(VERIFICATION_DELAY)
-            after_info = await get_user_info(user_uuid)
-            if not after_info:
-                continue
-
-            after_days = int(after_info.get("package_days", -1))
-            after_gb_raw = after_info.get("usage_limit_GB", None)
-
-            if after_days == exact_days and _is_unlimited_value(after_gb_raw):
-                logger.info("Unlimited strategy '%s' verified on attempt %d.", show, attempt + 1)
-                return after_info
-
-        logger.warning("Unlimited strategy '%s' did not verify; trying next.", show)
-
-    # Fallback: بزرگ‌کردن روزها تا expiry ≈ now + days
-    logger.info("Unlimited fallback: bumping package_days to simulate reset-from-now.")
-    bumped = await _bump_days_to_now(user_uuid, exact_days, None)
-    if bumped:
-        return bumped
-
-    logger.error("All unlimited strategies failed for user %s.", user_uuid)
-    return None
-
-
-async def _set_large_quota(user_uuid: str, exact_days: int, large_gb: float) -> Optional[Dict[str, Any]]:
-    """
-    نامحدود به‌صورت سقف حجمی بزرگ (مثلاً 1000GB).
-    """
-    endpoint = f"{_get_base_url()}user/{user_uuid}/"
-    large_gb = float(large_gb)
-    payload = {
-        "package_days": exact_days,
-        "usage_limit_GB": large_gb,
-        "current_usage_GB": 0,
-    }
-    resp = await _make_request("patch", endpoint, json=payload)
-    if resp is None or resp.get("_not_found"):
-        logger.error("Large-quota PATCH failed for UUID %s", user_uuid)
-        # Fallback
-        bumped = await _bump_days_to_now(user_uuid, exact_days, large_gb)
-        return bumped
-
-    for attempt in range(VERIFICATION_RETRIES):
-        await asyncio.sleep(VERIFICATION_DELAY)
-        after_info = await get_user_info(user_uuid)
-        if not after_info:
-            continue
-
-        after_days = int(after_info.get("package_days", -1))
-        after_gb_raw = after_info.get("usage_limit_GB", None)
-        try:
-            after_gb = float(after_gb_raw)
-        except Exception:
-            after_gb = None
-
-        if after_days == exact_days and (
-            _is_unlimited_value(after_gb_raw) or (after_gb is not None and abs(after_gb - large_gb) < 1e-6)
-        ):
-            logger.info("Large-quota unlimited (%.0f GB) verified for UUID %s on attempt %d.", large_gb, user_uuid, attempt + 1)
-            return after_info
-
-    # Fallback: bump days
-    logger.info("Large-quota fallback: bumping package_days to simulate reset-from-now.")
-    return await _bump_days_to_now(user_uuid, exact_days, large_gb)
-
-
-async def _apply_and_verify_plan(user_uuid: str, plan_days: int, plan_gb: float) -> Optional[Dict[str, Any]]:
     exact_days = int(plan_days)
 
+    # Payload پایه برای حجم و مصرف
+    payload = {"current_usage_GB": 0}
     if plan_gb is None or float(plan_gb) <= 0.0:
-        if str(HIDDIFY_UNLIMITED_STRATEGY).lower() == "auto":
-            info = await _try_set_unlimited(user_uuid, exact_days)
-            if info:
-                return info
-        return await _set_large_quota(user_uuid, exact_days, HIDDIFY_UNLIMITED_LARGE_GB)
+        # استراتژی نامحدود
+        payload["usage_limit_GB"] = float(HIDDIFY_UNLIMITED_LARGE_GB)
+    else:
+        # استراتژی حجمی
+        payload["usage_limit_GB"] = float(plan_gb)
+    
+    # محاسبه package_days جدید برای ریست کردن تاریخ
+    if is_new_user:
+        # برای کاربر جدید، فقط روزهای پلن کافیست
+        payload["package_days"] = exact_days
+    else:
+        # برای تمدید، روزهای سپری شده را اضافه میکنیم
+        current_info = await get_user_info(user_uuid)
+        if not current_info:
+            logger.error("Cannot fetch current user info to calculate elapsed days for renewal.")
+            return None
+        
+        start_ts = None
+        for key in ("last_reset_time", "start_date"):
+            val = current_info.get(key)
+            if val:
+                try:
+                    ts = float(val)
+                    if ts > 1e12: ts /= 1000.0 # ms to sec
+                    start_ts = int(ts)
+                    break
+                except (ValueError, TypeError):
+                    continue
 
-    endpoint = f"{_get_base_url()}user/{user_uuid}/"
-    usage_limit_gb = float(plan_gb)
-    payload = {
-        "package_days": exact_days,
-        "usage_limit_GB": usage_limit_gb,
-        "current_usage_GB": 0,
-    }
+        if not start_ts:
+            logger.warning("Could not determine start_date for user %s. Renewing without day reset.", user_uuid)
+            payload["package_days"] = exact_days
+        else:
+            now_ts = int(time.time())
+            elapsed_seconds = max(0, now_ts - start_ts)
+            elapsed_days = int(elapsed_seconds / 86400)
+            
+            new_package_days = exact_days + elapsed_days
+            payload["package_days"] = new_package_days
+            logger.info("Renewing user %s: plan_days=%d, elapsed_days=%d, new_package_days=%d", user_uuid, exact_days, elapsed_days, new_package_days)
 
+    # ارسال درخواست نهایی به پنل
     response = await _make_request("patch", endpoint, json=payload)
     if response is None or response.get("_not_found"):
         logger.error("Renew/update PATCH request failed for UUID %s", user_uuid)
-        # Fallback bump
-        return await _bump_days_to_now(user_uuid, exact_days, usage_limit_gb)
+        return None
 
+    # تایید نهایی با خواندن اطلاعات جدید
     for attempt in range(VERIFICATION_RETRIES):
         await asyncio.sleep(VERIFICATION_DELAY)
         after_info = await get_user_info(user_uuid)
         if not after_info:
             continue
-
+        
+        # فقط چک میکنیم که مقادیر حجم و مصرف درست ست شده باشند
         after_days = int(after_info.get("package_days", -1))
         after_gb_raw = after_info.get("usage_limit_GB", None)
         try:
             after_gb = float(after_gb_raw)
         except Exception:
             after_gb = None
+        
+        # در تمدید، after_days برابر با new_package_days خواهد بود
+        expected_days_check = after_days >= payload["package_days"] if not is_new_user else after_days == payload["package_days"]
 
-        if after_days == exact_days and after_gb is not None and abs(after_gb - usage_limit_gb) < 1e-6:
+        if expected_days_check and after_gb is not None and abs(after_gb - payload["usage_limit_GB"]) < 1e-6:
             logger.info("Update for UUID %s verified successfully on attempt %d.", user_uuid, attempt + 1)
             return after_info
 
         logger.warning(
             "Verification attempt %d for UUID %s failed. Expected (days:%s, gb:%s), Got (days:%s, gb:%s)",
-            attempt + 1, user_uuid, exact_days, usage_limit_gb, after_days, after_gb_raw
+            attempt + 1, user_uuid, payload["package_days"], payload["usage_limit_GB"], after_days, after_gb_raw
         )
 
-    # Fallback: bump days
-    logger.info("Volume fallback: bumping package_days to simulate reset-from-now.")
-    return await _bump_days_to_now(user_uuid, exact_days, usage_limit_gb)
+    logger.error("Verification failed for UUID %s after %d attempts.", user_uuid, VERIFICATION_RETRIES)
+    return None
 
 
 async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float) -> Optional[Dict[str, Any]]:
-    return await _apply_and_verify_plan(user_uuid, plan_days, plan_gb)
+    return await _apply_and_verify_plan(user_uuid, plan_days, plan_gb, is_new_user=False)
 
 
 async def delete_user_from_panel(user_uuid: str) -> bool:
