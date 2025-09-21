@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import logging
+import asyncio
 from datetime import datetime
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -9,6 +10,7 @@ from telegram.error import BadRequest
 from telegram.constants import ParseMode
 
 import database as db
+import hiddify_api
 from bot.keyboards import get_main_menu_keyboard, get_admin_menu_keyboard
 from bot.constants import ADMIN_MENU
 from bot.handlers.charge import _get_payment_info_text
@@ -62,6 +64,44 @@ async def _send_long_text(
             parse_mode=parse_mode,
             disable_web_page_preview=disable_web_page_preview
         )
+
+# --- Helpers for accurate total usage ---
+async def _get_service_usage_gb(sub_uuid: str) -> float:
+    try:
+        info = await hiddify_api.get_user_info(sub_uuid)
+        if info and isinstance(info, dict):
+            val = info.get("current_usage_GB")
+            try:
+                return float(val or 0.0)
+            except Exception:
+                return 0.0
+    except Exception:
+        return 0.0
+    return 0.0
+
+async def _compute_total_usage_gb(user_id: int) -> float:
+    """
+    مجموع مصرف واقعی کاربر را با فراخوانی پنل برای هر سرویس فعال محاسبه می‌کند.
+    در صورت عدم دسترسی به پنل، به مقدار اسنپ‌شات DB (user_traffic) برمی‌گردد.
+    """
+    services = db.get_user_services(user_id) or []
+    if not services:
+        return 0.0
+    coros = [_get_service_usage_gb(s["sub_uuid"]) for s in services if s.get("sub_uuid")]
+    if not coros:
+        return 0.0
+    results = await asyncio.gather(*coros, return_exceptions=True)
+    total = 0.0
+    for r in results:
+        if isinstance(r, (int, float)):
+            total += float(r)
+    if total > 0.0:
+        return total
+    # Fallback به اسنپ‌شات دیتابیس
+    try:
+        return db.get_total_user_traffic(user_id)
+    except Exception:
+        return 0.0
 
 # --- End helpers ---
 
@@ -128,9 +168,9 @@ async def show_account_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     referral_count = db.get_user_referral_count(user_id)
     join_date = user.get('join_date', 'N/A')
 
-    # مصرف کل کاربر (بر اساس اسنپ‌شات‌های دوره‌ای)
+    # مصرف کل کاربر: ابتدا از پنل (دقیق)، در صورت عدم دسترسی fallback به اسنپ‌شات DB
     try:
-        total_usage_gb = db.get_total_user_traffic(user_id)
+        total_usage_gb = await _compute_total_usage_gb(user_id)
     except Exception:
         total_usage_gb = 0.0
 
@@ -153,7 +193,7 @@ async def show_account_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     keyboard = [
-        [btn("📊 مصرف من", "acc_usage"), btn("💳 شارژ حساب", "acc_start_charge")],  # تغییر به acc_start_charge
+        [btn("📊 مصرف من", "acc_usage"), btn("💳 شارژ حساب", "acc_start_charge")],
         [btn("📜 سوابق خرید", "acc_purchase_history"), btn("💸 سوابق شارژ", "acc_charge_history")],
         [btn("🤝 انتقال موجودی", "acc_transfer_start"), btn("🎁 ساخت کد هدیه", "acc_gift_from_balance_start")],
         [btn("📚 منوی راهنما", "guide_back_to_menu")],
@@ -201,7 +241,6 @@ async def show_purchase_history_callback(update: Update, context: ContextTypes.D
 
     msg = "\n".join(lines)
 
-    # Delete old message and send in chunks if needed
     try:
         await q.message.delete()
     except BadRequest:
@@ -246,7 +285,6 @@ async def show_charge_history_callback(update: Update, context: ContextTypes.DEF
 
     msg = "\n".join(lines)
 
-    # Delete old message and send in chunks if needed
     try:
         await q.message.delete()
     except BadRequest:
