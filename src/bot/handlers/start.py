@@ -22,6 +22,49 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# --- Helpers for long messages ---
+MAX_TG_TEXT = 4096
+
+def _split_text(text: str, limit: int = 3900) -> list[str]:
+    """
+    Split text into chunks <= limit, keeping line boundaries where possible.
+    Keep some margin under Telegram's 4096 limit.
+    """
+    if not text:
+        return [""]
+    parts, buf, blen = [], [], 0
+    for line in text.splitlines(keepends=True):
+        ln = len(line)
+        if blen + ln > limit and buf:
+            parts.append("".join(buf))
+            buf, blen = [line], ln
+        else:
+            buf.append(line)
+            blen += ln
+    if buf:
+        parts.append("".join(buf))
+    return parts
+
+async def _send_long_text(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    text: str,
+    reply_markup=None,
+    parse_mode: str | None = None,
+    disable_web_page_preview: bool = True
+):
+    chunks = _split_text(text)
+    for i, chunk in enumerate(chunks):
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=chunk,
+            reply_markup=(reply_markup if i == len(chunks) - 1 else None),
+            parse_mode=parse_mode,
+            disable_web_page_preview=disable_web_page_preview
+        )
+
+# --- End helpers ---
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -130,19 +173,19 @@ async def show_account_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_purchase_history_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    history = db.get_user_sales_history(q.from_user.id)
+    user_id = q.from_user.id
+    history = db.get_user_sales_history(user_id)
 
-    # همیشه پیام کامل با دکمه بازگشت نشان بده (حتی اگر خالی باشد)
+    kb = [nav_row(back_cb="acc_back_to_main", home_cb="home_menu")]
     if not history:
         msg = "🛍️ **سوابق خرید شما:**\n\n⛔️ سابقه‌ای یافت نشد."
-        kb = [nav_row(back_cb="acc_back_to_main", home_cb="home_menu")]
         try:
             await q.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
         except BadRequest:
-            await context.bot.send_message(chat_id=q.from_user.id, text=msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+            await context.bot.send_message(chat_id=user_id, text=msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
         return
 
-    msg = "🛍️ **سوابق خرید شما:**\n\n"
+    lines = ["🛍️ **سوابق خرید شما:**\n"]
     for sale in history:
         try:
             sale_date = datetime.strptime(sale['sale_date'], '%Y-%m-%d %H:%M:%S').strftime('%Y/%m/%d')
@@ -153,30 +196,41 @@ async def show_purchase_history_callback(update: Update, context: ContextTypes.D
             price_val = int(float(price_val or 0))
         except Exception:
             price_val = 0
-        name = sale.get('plan_name') or 'پلن حذف شده'  # اصلاح f-string
-        msg += f"🔹 {name} | {price_val:.0f} تومان | {sale_date}\n"
+        name = sale.get('plan_name') or 'پلن حذف شده'
+        lines.append(f"🔹 {name} | {price_val:,} تومان | {sale_date}")
 
-    kb = [nav_row(back_cb="acc_back_to_main", home_cb="home_menu")]
+    msg = "\n".join(lines)
+
+    # Delete old message and send in chunks if needed
     try:
-        await q.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+        await q.message.delete()
     except BadRequest:
-        await context.bot.send_message(chat_id=q.from_user.id, text=msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+        pass
+    await _send_long_text(
+        context,
+        user_id,
+        msg,
+        reply_markup=InlineKeyboardMarkup(kb),
+        parse_mode=ParseMode.MARKDOWN
+    )
 
 
 async def show_charge_history_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    history = db.get_user_charge_history(q.from_user.id)
+    user_id = q.from_user.id
+    history = db.get_user_charge_history(user_id)
+
+    kb = [nav_row(back_cb="acc_back_to_main", home_cb="home_menu")]
     if not history:
         msg = "💸 **سوابق شارژ موفق شما:**\n\nشما تاکنون سابقه شارژ موفقی نداشته‌اید."
-        kb = [nav_row(back_cb="acc_back_to_main", home_cb="home_menu")]
         try:
             await q.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
         except BadRequest:
-            await context.bot.send_message(chat_id=q.from_user.id, text=msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+            await context.bot.send_message(chat_id=user_id, text=msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
         return
 
-    msg = "💸 **سوابق شارژ موفق شما:**\n\n"
+    lines = ["💸 **سوابق شارژ موفق شما:**\n"]
     for ch in history:
         try:
             charge_date = datetime.strptime(ch['created_at'], '%Y-%m-%d %H:%M:%S').strftime('%Y/%m/%d')
@@ -187,13 +241,23 @@ async def show_charge_history_callback(update: Update, context: ContextTypes.DEF
             amount_val = int(float(amount_val or 0))
         except Exception:
             amount_val = 0
-        msg += f"🔹 {amount_val:.0f} تومان | {charge_date}\n"
+        type_s = str(ch.get('type') or 'charge')
+        lines.append(f"🔹 {charge_date} | {type_s} | {amount_val:,} تومان")
 
-    kb = [nav_row(back_cb="acc_back_to_main", home_cb="home_menu")]
+    msg = "\n".join(lines)
+
+    # Delete old message and send in chunks if needed
     try:
-        await q.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+        await q.message.delete()
     except BadRequest:
-        await context.bot.send_message(chat_id=q.from_user.id, text=msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+        pass
+    await _send_long_text(
+        context,
+        user_id,
+        msg,
+        reply_markup=InlineKeyboardMarkup(kb),
+        parse_mode=ParseMode.MARKDOWN
+    )
 
 
 async def show_charging_guide_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
