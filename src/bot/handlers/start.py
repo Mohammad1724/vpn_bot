@@ -5,7 +5,7 @@ import logging
 import asyncio
 from datetime import datetime
 from telegram.ext import ContextTypes, ConversationHandler
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardMarkup
 from telegram.error import BadRequest
 from telegram.constants import ParseMode
 
@@ -65,7 +65,7 @@ async def _send_long_text(
             disable_web_page_preview=disable_web_page_preview
         )
 
-# --- Helpers for accurate total usage ---
+# --- Helpers for accurate total usage (live from panel) ---
 async def _get_service_usage_gb(sub_uuid: str) -> float:
     try:
         info = await hiddify_api.get_user_info(sub_uuid)
@@ -163,6 +163,9 @@ async def admin_conv_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_account_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    # راهنما اگر از این صفحه باز شود، باید بتواند به همین‌جا برگردد
+    context.user_data['guide_origin'] = 'account'
+
     user = db.get_or_create_user(user_id)
     services_count = len(db.get_user_services(user_id))
     referral_count = db.get_user_referral_count(user_id)
@@ -196,7 +199,7 @@ async def show_account_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [btn("📊 مصرف من", "acc_usage"), btn("💳 شارژ حساب", "acc_start_charge")],
         [btn("📜 سوابق خرید", "acc_purchase_history"), btn("💸 سوابق شارژ", "acc_charge_history")],
         [btn("🤝 انتقال موجودی", "acc_transfer_start"), btn("🎁 ساخت کد هدیه", "acc_gift_from_balance_start")],
-        [btn("📚 منوی راهنما", "guide_back_to_menu")],
+        [btn("📚 منوی راهنما", "guide_back_to_menu")],  # از اینجا باز شود، باید Back به همین صفحه داشته باشد
         nav_row(home_cb="home_menu")
     ]
 
@@ -310,6 +313,11 @@ async def show_charging_guide_callback(update: Update, context: ContextTypes.DEF
 
 
 async def show_guide(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    وقتی از منوی اصلی وارد راهنما می‌شویم.
+    """
+    context.user_data['guide_origin'] = 'main'
+
     buttons = [
         btn("📱 راهنمای اتصال", "guide_connection"),
         btn("💳 راهنمای شارژ حساب", "guide_charging"),
@@ -370,13 +378,21 @@ async def back_to_guide_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except Exception:
         pass
 
+    origin = context.user_data.get('guide_origin')  # 'account' یا 'main'
+
     buttons = [
         btn("📱 راهنمای اتصال", "guide_connection"),
         btn("💳 راهنمای شارژ حساب", "guide_charging"),
         btn("🛍️ راهنمای خرید از ربات", "guide_buying"),
     ]
     rows = chunk(buttons, cols=2)
-    rows.append(nav_row(home_cb="home_menu"))
+
+    # اگر از صفحه اطلاعات حساب آمده‌ایم، دکمه «بازگشت» به همانجا را اضافه کنیم
+    if origin == 'account':
+        rows.append(nav_row(back_cb="acc_back_to_main", home_cb="home_menu"))
+    else:
+        rows.append(nav_row(home_cb="home_menu"))
+
     await context.bot.send_message(
         chat_id=q.from_user.id,
         text="📚 لطفاً موضوع راهنمای مورد نظر خود را انتخاب کنید:",
