@@ -9,22 +9,24 @@ import logging
 import types
 import time
 from typing import Optional, Dict, Any
-from datetime import datetime, timezone
+from datetime import datetime
 
-# --- Robust config loader ---
+from bot import panels as pnl
+
+# --- Robust config loader (fallbacks for single-panel setups) ---
 try:
     import config as _cfg
 except Exception:
     _cfg = types.SimpleNamespace()
 
+# Legacy single-panel fallbacks
 PANEL_DOMAIN = getattr(_cfg, "PANEL_DOMAIN", "")
 ADMIN_PATH = getattr(_cfg, "ADMIN_PATH", "")
 API_KEY = getattr(_cfg, "API_KEY", "")
-SUB_DOMAINS = getattr(_cfg, "SUB_DOMAINS", []) or []
-SUB_PATH = getattr(_cfg, "SUB_PATH", "sub")
-PANEL_SECRET_UUID = getattr(_cfg, "PANEL_SECRET_UUID", "")
-HIDDIFY_API_VERIFY_SSL = getattr(_cfg, "HIDDIFY_API_VERIFY_SSL", True)
-DEFAULT_ASN = getattr(_cfg, "DEFAULT_ASN", "MCI")
+SUB_DOMAINS_GLOBAL = getattr(_cfg, "SUB_DOMAINS", []) or []
+SUB_PATH_GLOBAL = getattr(_cfg, "SUB_PATH", "sub")
+PANEL_SECRET_UUID_GLOBAL = getattr(_cfg, "PANEL_SECRET_UUID", "")
+HIDDIFY_API_VERIFY_SSL_GLOBAL = getattr(_cfg, "HIDDIFY_API_VERIFY_SSL", True)
 
 # Unlimited strategy
 HIDDIFY_UNLIMITED_STRATEGY = getattr(_cfg, "HIDDIFY_UNLIMITED_STRATEGY", "large_quota")  # "large_quota" | "auto"
@@ -37,18 +39,7 @@ MAX_RETRIES = 3
 BASE_RETRY_DELAY = 1.0
 VERIFICATION_RETRIES = 5
 VERIFICATION_DELAY = 1.0
-
-# زمان مجاز برای نزدیک بودن reset به «الان»
 RESET_TOLERANCE_SEC = 6 * 3600  # 6 hours
-
-
-def _normalize_host(host: str) -> str:
-    h = (host or "").strip()
-    if not h:
-        return ""
-    if not (h.startswith("http://") or h.startswith("https://")):
-        h = "https://" + h
-    return h.rstrip("/")
 
 
 def _strip_scheme(host: str) -> str:
@@ -60,44 +51,57 @@ def _strip_scheme(host: str) -> str:
     return h.strip("/")
 
 
-def _normalize_subdomains(sd):
-    if isinstance(sd, str):
-        parts = [p.strip() for p in sd.split(",") if p.strip()]
-    else:
-        parts = [str(x).strip() for x in (sd or []) if str(x).strip()]
-    return [_strip_scheme(p) for p in parts]
+def _norm_host(h: str) -> str:
+    return _strip_scheme(h or "").lower()
 
 
-SUB_DOMAINS = _normalize_subdomains(SUB_DOMAINS)
+def _get_panel_value(panel: Optional[Dict], key: str, fallback=None):
+    if panel and key in panel:
+        return panel.get(key)
+    # fallback به کانفیگ تک‌پنلی
+    mapping = {
+        "panel_domain": PANEL_DOMAIN,
+        "admin_path": ADMIN_PATH,
+        "api_key": API_KEY,
+        "sub_domains": SUB_DOMAINS_GLOBAL,
+        "sub_path": SUB_PATH_GLOBAL,
+        "panel_secret_uuid": PANEL_SECRET_UUID_GLOBAL,
+        "verify_ssl": HIDDIFY_API_VERIFY_SSL_GLOBAL,
+    }
+    return mapping.get(key, fallback)
 
 
-def _get_base_url() -> str:
-    base = _normalize_host(PANEL_DOMAIN)
+def _get_base_url(panel: Optional[Dict]) -> str:
+    base = str(_get_panel_value(panel, "panel_domain") or "").strip()
     if not base:
-        alt = _normalize_host(SUB_DOMAINS[0] if SUB_DOMAINS else "")
-        if alt:
-            logger.warning("PANEL_DOMAIN is empty; falling back to %s for API base URL", alt)
-            base = alt
+        # تلاش با sub_domains
+        sds = _get_panel_value(panel, "sub_domains") or []
+        if sds:
+            base = "https://" + _norm_host(sds[0])
         else:
-            logger.error("PANEL_DOMAIN and SUB_DOMAINS are empty. Please set PANEL_DOMAIN in config.py.")
+            logger.error("Panel base not set; falling back to localhost")
             base = "https://localhost"
-
-    clean_admin = str(ADMIN_PATH or "").strip().strip("/")
-    if clean_admin:
-        return f"{base}/{clean_admin}/api/v2/admin/"
+    if not (base.startswith("http://") or base.startswith("https://")):
+        base = "https://" + base
+    base = base.rstrip("/")
+    admin_path = str(_get_panel_value(panel, "admin_path") or "").strip().strip("/")
+    if admin_path:
+        return f"{base}/{admin_path}/api/v2/admin/"
     return f"{base}/api/v2/admin/"
 
 
-def _get_api_headers() -> dict:
+def _get_api_headers(panel: Optional[Dict]) -> dict:
+    key = _get_panel_value(panel, "api_key") or ""
     return {
-        "Hiddify-API-Key": API_KEY,
+        "Hiddify-API-Key": key,
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
 
 
-async def _make_client(timeout: float = 20.0) -> httpx.AsyncClient:
-    return httpx.AsyncClient(timeout=timeout, verify=HIDDIFY_API_VERIFY_SSL, follow_redirects=True)
+async def _make_client(panel: Optional[Dict], timeout: float = 20.0) -> httpx.AsyncClient:
+    verify = bool(_get_panel_value(panel, "verify_ssl", True))
+    return httpx.AsyncClient(timeout=timeout, verify=verify, follow_redirects=True)
 
 
 def _normalize_unlimited_value(val):
@@ -128,14 +132,6 @@ def _is_unlimited_value(x) -> bool:
         return False
 
 
-def _compensate_days(days: int) -> int:
-    return int(days)
-
-
-def _now_ts() -> int:
-    return int(time.time())
-
-
 def _now_local_strings():
     """
     خروجی:
@@ -160,7 +156,6 @@ def _to_sec_ts(v) -> Optional[int]:
                 val = val / 1000.0
             return int(val)
         s = str(v).strip()
-        # اگر عددی بود
         try:
             val = float(s)
             if val > 1e12:
@@ -168,20 +163,16 @@ def _to_sec_ts(v) -> Optional[int]:
             return int(val)
         except Exception:
             pass
-        # تلاش برای ISO
+        iso = s.replace("Z", "+00:00")
         try:
-            iso = s.replace("Z", "+00:00")
             dt = datetime.fromisoformat(iso)
-            if dt.tzinfo is None:
-                return int(time.mktime(dt.timetuple()))
             return int(dt.timestamp())
         except Exception:
             pass
-        # فرمت‌های رایج
         for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
             try:
-                dt = datetime.strptime(s, fmt)
-                return int(time.mktime(dt.timetuple()))
+                dt2 = datetime.strptime(s, fmt)
+                return int(dt2.timestamp())
             except Exception:
                 continue
     except Exception:
@@ -212,12 +203,12 @@ def _is_reset_applied(after_info: Dict[str, Any], exact_days: int, ref_ts_sec: i
     return False
 
 
-async def _make_request(method: str, url: str, **kwargs) -> Optional[Dict[str, Any]]:
-    headers = kwargs.pop("headers", _get_api_headers())
+async def _make_request(method: str, url: str, panel: Optional[Dict], **kwargs) -> Optional[Dict[str, Any]]:
+    headers = kwargs.pop("headers", _get_api_headers(panel))
     delay = BASE_RETRY_DELAY
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            async with await _make_client(timeout=kwargs.get("timeout", 20.0)) as client:
+            async with await _make_client(panel, timeout=kwargs.get("timeout", 20.0)) as client:
                 resp = await getattr(client, method.lower())(url, headers=headers, **kwargs)
                 resp.raise_for_status()
                 try:
@@ -250,20 +241,16 @@ async def create_hiddify_user(
     user_telegram_id: str,
     custom_name: str = "",
     server_name: Optional[str] = None,
+    panel: Optional[Dict] = None,
     **kwargs,
 ) -> Optional[Dict[str, Any]]:
 
-    endpoint = _get_base_url() + "user/"
+    endpoint = _get_base_url(panel) + "user/"
 
     # ساخت نام: custom_name > server_name > tg-id
     random_suffix = uuid.uuid4().hex[:4]
     tg_part = (user_telegram_id or "").split(":")[-1] or "user"
-    if custom_name:
-        base_name = str(custom_name)
-    elif server_name:
-        base_name = str(server_name)
-    else:
-        base_name = f"tg-{tg_part}"
+    base_name = str(custom_name or server_name or f"tg-{tg_part}")
     unique_user_name = f"{base_name}-{random_suffix}"
 
     # کامنت: اطلاعات تلگرام + سرور
@@ -275,11 +262,11 @@ async def create_hiddify_user(
 
     # مرحله ۱: ساخت کاربر
     payload_create = {"name": unique_user_name, "comment": comment}
-    data = await _make_request("post", endpoint, json=payload_create)
+    data = await _make_request("post", endpoint, panel, json=payload_create)
     if not data:
         logger.error("create_hiddify_user (step 1 - POST): request failed (no data)")
         return None
-    # برخی پنل‌ها uuid را داخل کلید user برمی‌گردانند
+    # برخی پنل‌ها uuid را داخل کلید 'user' برمی‌گردانند
     user_uuid = data.get("uuid") if isinstance(data, dict) else None
     if not user_uuid and isinstance(data, dict):
         user_uuid = (data.get("user") or {}).get("uuid")
@@ -287,39 +274,40 @@ async def create_hiddify_user(
         logger.error("create_hiddify_user (step 1 - POST): UUID missing in response: %s", data)
         return None
 
-    # مرحله ۲: اعمال پلن
+    # مرحله ۲: اعمال پلن (با تأیید ریست زمانی)
     logger.info("User %s created. Now applying plan details via PATCH...", user_uuid)
-    update_success = await _apply_and_verify_plan(user_uuid, plan_days, plan_gb)
+    update_success = await _apply_and_verify_plan(user_uuid, plan_days, plan_gb, panel=panel)
     if not update_success:
         logger.error("create_hiddify_user (step 2 - PATCH): Failed to apply plan details to user %s. Deleting user.", user_uuid)
-        await delete_user_from_panel(user_uuid)
+        await delete_user_from_panel(user_uuid, panel=panel)
         return None
 
-    # ساخت لینک سابسکریپشن با الگوی .../sub/ (بدون asn)
-    sub_host = _strip_scheme(random.choice(SUB_DOMAINS) if SUB_DOMAINS else PANEL_DOMAIN)
-    if not sub_host:
-        sub_host = "localhost"
-    client_secret = str(PANEL_SECRET_UUID or "").strip().strip("/")
+    # ساخت لینک سابسکریپشن
+    sub_domains = _get_panel_value(panel, "sub_domains") or []
+    panel_domain = _get_panel_value(panel, "panel_domain") or ""
+    sub_host = _norm_host(random.choice(sub_domains) if sub_domains else panel_domain) or "localhost"
 
-    if not client_secret:
-        sub_path = str(SUB_PATH or "sub").strip().strip("/")
-        full_link = f"https://{sub_host}/{sub_path}/{user_uuid}/"
-    else:
+    client_secret = str(_get_panel_value(panel, "panel_secret_uuid") or "").strip().strip("/")
+    sub_path = str(_get_panel_value(panel, "sub_path") or "sub").strip().strip("/")
+
+    if client_secret:
         full_link = f"https://{sub_host}/{client_secret}/{user_uuid}/sub/"
+    else:
+        full_link = f"https://{sub_host}/{sub_path}/{user_uuid}/"
 
     return {"full_link": full_link, "uuid": user_uuid, "name": unique_user_name}
 
 
-async def get_user_info(user_uuid: str, server_name: Optional[str] = None, **kwargs) -> Optional[Dict[str, Any]]:
-    endpoint = f"{_get_base_url()}user/{user_uuid}/"
-    return await _make_request("get", endpoint)
+async def get_user_info(user_uuid: str, panel: Optional[Dict] = None, **kwargs) -> Optional[Dict[str, Any]]:
+    endpoint = f"{_get_base_url(panel)}user/{user_uuid}/"
+    return await _make_request("get", endpoint, panel)
 
 
-async def _try_set_unlimited(user_uuid: str, exact_days: int) -> Optional[Dict[str, Any]]:
+async def _try_set_unlimited(user_uuid: str, exact_days: int, panel: Optional[Dict]) -> Optional[Dict[str, Any]]:
     """
     حالت auto: چند استراتژی مختلف برای نامحدود واقعی.
     """
-    endpoint = f"{_get_base_url()}user/{user_uuid}/"
+    endpoint = f"{_get_base_url(panel)}user/{user_uuid}/"
     pref = _normalize_unlimited_value(HIDDIFY_UNLIMITED_VALUE)
 
     candidates = []
@@ -335,11 +323,10 @@ async def _try_set_unlimited(user_uuid: str, exact_days: int) -> Optional[Dict[s
             candidates.append(c)
 
     date_str, dt_str, now_sec = _now_local_strings()
-    # فقط قالب‌های معتبر برای پنل: start_date = YYYY-MM-DD و last_reset_time = "YYYY-MM-DD HH:MM:SS"
     time_variants = [
         ("last_reset_time", dt_str),
         ("start_date", date_str),
-        ("last_reset_time", now_sec),  # برخی پنل‌ها timestamp را هم قبول می‌کنند
+        ("last_reset_time", now_sec),
     ]
 
     for idx, cand in enumerate(candidates, start=1):
@@ -349,14 +336,14 @@ async def _try_set_unlimited(user_uuid: str, exact_days: int) -> Optional[Dict[s
             if cand != "OMIT":
                 payload["usage_limit_GB"] = cand
             logger.info("Trying unlimited strategy %d/%d (%s=%s, usage_limit_GB=%s)", idx, len(candidates), tf, tv, show)
-            resp = await _make_request("patch", endpoint, json=payload)
+            resp = await _make_request("patch", endpoint, panel, json=payload)
             if resp is None or (isinstance(resp, dict) and resp.get("_not_found")):
                 continue
 
             ref_ts = _to_sec_ts(tv) or now_sec
             for attempt in range(VERIFICATION_RETRIES):
                 await asyncio.sleep(VERIFICATION_DELAY)
-                after_info = await get_user_info(user_uuid)
+                after_info = await get_user_info(user_uuid, panel=panel)
                 if not after_info:
                     continue
 
@@ -373,11 +360,11 @@ async def _try_set_unlimited(user_uuid: str, exact_days: int) -> Optional[Dict[s
     return None
 
 
-async def _set_large_quota(user_uuid: str, exact_days: int, large_gb: float) -> Optional[Dict[str, Any]]:
+async def _set_large_quota(user_uuid: str, exact_days: int, large_gb: float, panel: Optional[Dict]) -> Optional[Dict[str, Any]]:
     """
     نامحدود به‌صورت سقف حجمی بزرگ (مثلاً 1000GB).
     """
-    endpoint = f"{_get_base_url()}user/{user_uuid}/"
+    endpoint = f"{_get_base_url(panel)}user/{user_uuid}/"
     large_gb = float(large_gb)
     date_str, dt_str, now_sec = _now_local_strings()
     time_variants = [
@@ -388,14 +375,14 @@ async def _set_large_quota(user_uuid: str, exact_days: int, large_gb: float) -> 
 
     for tf, tv in time_variants:
         payload = {"package_days": exact_days, "usage_limit_GB": large_gb, "current_usage_GB": 0, tf: tv}
-        resp = await _make_request("patch", endpoint, json=payload)
+        resp = await _make_request("patch", endpoint, panel, json=payload)
         if resp is None or (isinstance(resp, dict) and resp.get("_not_found")):
             continue
 
         ref_ts = _to_sec_ts(tv) or now_sec
         for attempt in range(VERIFICATION_RETRIES):
             await asyncio.sleep(VERIFICATION_DELAY)
-            after_info = await get_user_info(user_uuid)
+            after_info = await get_user_info(user_uuid, panel=panel)
             if not after_info:
                 continue
 
@@ -416,17 +403,17 @@ async def _set_large_quota(user_uuid: str, exact_days: int, large_gb: float) -> 
     return None
 
 
-async def _apply_and_verify_plan(user_uuid: str, plan_days: int, plan_gb: float) -> Optional[Dict[str, Any]]:
+async def _apply_and_verify_plan(user_uuid: str, plan_days: int, plan_gb: float, panel: Optional[Dict]) -> Optional[Dict[str, Any]]:
     exact_days = int(plan_days)
 
     if plan_gb is None or float(plan_gb) <= 0.0:
         if str(HIDDIFY_UNLIMITED_STRATEGY).lower() == "auto":
-            info = await _try_set_unlimited(user_uuid, exact_days)
+            info = await _try_set_unlimited(user_uuid, exact_days, panel=panel)
             if info:
                 return info
-        return await _set_large_quota(user_uuid, exact_days, HIDDIFY_UNLIMITED_LARGE_GB)
+        return await _set_large_quota(user_uuid, exact_days, HIDDIFY_UNLIMITED_LARGE_GB, panel=panel)
 
-    endpoint = f"{_get_base_url()}user/{user_uuid}/"
+    endpoint = f"{_get_base_url(panel)}user/{user_uuid}/"
     usage_limit_gb = float(plan_gb)
     date_str, dt_str, now_sec = _now_local_strings()
     time_variants = [
@@ -437,14 +424,14 @@ async def _apply_and_verify_plan(user_uuid: str, plan_days: int, plan_gb: float)
 
     for tf, tv in time_variants:
         payload = {"package_days": exact_days, "usage_limit_GB": usage_limit_gb, "current_usage_GB": 0, tf: tv}
-        response = await _make_request("patch", endpoint, json=payload)
+        response = await _make_request("patch", endpoint, panel, json=payload)
         if response is None or (isinstance(response, dict) and response.get("_not_found")):
             continue
 
         ref_ts = _to_sec_ts(tv) or now_sec
         for attempt in range(VERIFICATION_RETRIES):
             await asyncio.sleep(VERIFICATION_DELAY)
-            after_info = await get_user_info(user_uuid)
+            after_info = await get_user_info(user_uuid, panel=panel)
             if not after_info:
                 continue
 
@@ -465,28 +452,28 @@ async def _apply_and_verify_plan(user_uuid: str, plan_days: int, plan_gb: float)
     return None
 
 
-async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float) -> Optional[Dict[str, Any]]:
-    return await _apply_and_verify_plan(user_uuid, plan_days, plan_gb)
+async def renew_user_subscription(user_uuid: str, plan_days: int, plan_gb: float, panel: Optional[Dict] = None) -> Optional[Dict[str, Any]]:
+    return await _apply_and_verify_plan(user_uuid, plan_days, plan_gb, panel=panel)
 
 
-async def delete_user_from_panel(user_uuid: str) -> bool:
-    endpoint = f"{_get_base_url()}user/{user_uuid}/"
-    data = await _make_request("delete", endpoint)
+async def delete_user_from_panel(user_uuid: str, panel: Optional[Dict] = None) -> bool:
+    endpoint = f"{_get_base_url(panel)}user/{user_uuid}/"
+    data = await _make_request("delete", endpoint, panel)
     if data == {}:
         return True
     if isinstance(data, dict) and data.get("_not_found"):
         return True
     if data is None:
-        probe = await get_user_info(user_uuid)
+        probe = await get_user_info(user_uuid, panel=panel)
         if isinstance(probe, dict) and probe.get("_not_found"):
             return True
     return False
 
 
-async def check_api_connection() -> bool:
+async def check_api_connection(panel: Optional[Dict] = None) -> bool:
     try:
-        endpoint = _get_base_url() + "user/?page=1&per_page=1"
-        response = await _make_request("get", endpoint)
+        endpoint = _get_base_url(panel) + "user/?page=1&per_page=1"
+        response = await _make_request("get", endpoint, panel)
         return response is not None
     except Exception:
         return False
