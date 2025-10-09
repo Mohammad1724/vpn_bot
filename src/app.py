@@ -24,6 +24,8 @@ from bot.handlers.admin import (
     settings as admin_settings, backup as admin_backup, users as admin_users,
     gift_codes as admin_gift
 )
+# NEW: Admin panels manager
+from bot.handlers.admin import panels_admin
 import bot.handlers.admin.trial_settings_ui as trial_ui
 from bot.handlers.trial import get_trial_service as trial_get_trial_service
 from bot.handlers.admin.trial_settings import set_trial_days, set_trial_gb
@@ -239,63 +241,44 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # --------- ADMIN: TRIAL SETTINGS (nested conv) ----------
-    trial_settings_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(trial_ui.trial_menu, pattern=r"^settings_trial$")],
-        states={
-            trial_ui.TRIAL_MENU: [
-                CallbackQueryHandler(trial_ui.ask_days, pattern=r"^trial_set_days$"),
-                CallbackQueryHandler(trial_ui.ask_gb, pattern=r"^trial_set_gb$"),
-                CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^back_to_settings$"),
-            ],
-            trial_ui.WAIT_DAYS: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, trial_ui.days_received),
-                CommandHandler('cancel', trial_ui.cancel),
-            ],
-            trial_ui.WAIT_GB: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, trial_ui.gb_received),
-                CommandHandler('cancel', trial_ui.cancel),
-            ],
-        },
-        fallbacks=[CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^back_to_settings$")],
-        map_to_parent={constants.ADMIN_SETTINGS_MENU: constants.ADMIN_SETTINGS_MENU, ConversationHandler.END: constants.ADMIN_SETTINGS_MENU},
-        per_user=True, per_chat=True, allow_reentry=True
-    )
-
-    # --------- ADMIN: BROADCAST (Inline) ----------
-    broadcast_conv = ConversationHandler(
+    # --------- ADMIN: PANELS MANAGER (nested conv) ----------
+    panels_admin_conv = ConversationHandler(
         entry_points=[
-            MessageHandler(filters.Regex(r'^📩 ارسال پیام$') & admin_filter, admin_users.broadcast_menu),
+            MessageHandler(filters.Regex(r'^🧩 مدیریت پنل‌ها$') & admin_filter, panels_admin.panels_menu),
+            CallbackQueryHandler(panels_admin.panels_menu, pattern=r'^admin_panels$'),
         ],
         states={
-            constants.BROADCAST_MENU: [
-                CallbackQueryHandler(admin_users.broadcast_to_all_start, pattern=r'^bcast_all$'),
-                CallbackQueryHandler(admin_users.broadcast_to_user_start, pattern=r'^bcast_user$'),
-                CallbackQueryHandler(admin_users.broadcast_menu_cb, pattern=r'^bcast_menu$'),
-                CallbackQueryHandler(admin_c.admin_entry, pattern=r'^admin_panel$'),
+            panels_admin.PANELS_MENU: [
+                CallbackQueryHandler(panels_admin.add_panel_start, pattern=r'^panel_add$'),
+                CallbackQueryHandler(panels_admin.edit_panel_start, pattern=r'^panel_edit_'),
+                CallbackQueryHandler(panels_admin.delete_panel_ask, pattern=r'^panel_del_(?!yes_)'),
+                CallbackQueryHandler(panels_admin.delete_panel_confirm, pattern=r'^panel_del_yes_'),
+                CallbackQueryHandler(admin_plans.plan_management_menu, pattern=r'^admin_plans$'),
             ],
-            constants.BROADCAST_MESSAGE: [
-                MessageHandler(~filters.COMMAND & admin_filter, admin_users.broadcast_to_all_confirm),
-                CallbackQueryHandler(admin_users.broadcast_cancel_cb, pattern=r'^bcast_menu$'),
-                CallbackQueryHandler(admin_c.admin_entry, pattern=r'^admin_panel$'),
+            panels_admin.ADD_ID: [MessageHandler(filters.TEXT & admin_filter, panels_admin.add_panel_receive_id)],
+            panels_admin.ADD_NAME: [MessageHandler(filters.TEXT & admin_filter, panels_admin.add_panel_receive_name)],
+            panels_admin.ADD_DOMAIN: [MessageHandler(filters.TEXT & admin_filter, panels_admin.add_panel_receive_domain)],
+            panels_admin.ADD_ADMIN_PATH: [MessageHandler(filters.TEXT & admin_filter, panels_admin.add_panel_receive_admin_path)],
+            panels_admin.ADD_API_KEY: [MessageHandler(filters.TEXT & admin_filter, panels_admin.add_panel_receive_api_key)],
+            panels_admin.ADD_SUBDOMAINS: [MessageHandler(filters.TEXT & admin_filter, panels_admin.add_panel_receive_subdomains)],
+            panels_admin.ADD_SUBPATH: [MessageHandler(filters.TEXT & admin_filter, panels_admin.add_panel_receive_subpath)],
+            panels_admin.ADD_SECRET: [MessageHandler(filters.TEXT & admin_filter, panels_admin.add_panel_receive_secret)],
+            panels_admin.ADD_VERIFY: [
+                CallbackQueryHandler(panels_admin.add_panel_receive_verify_cb, pattern=r'^panel_add_ssl_(yes|no)$'),
             ],
-            constants.BROADCAST_CONFIRM: [
-                CallbackQueryHandler(admin_users.broadcast_confirm_callback, pattern=r'^broadcast_confirm_(yes|no)$'),
-                CallbackQueryHandler(admin_users.broadcast_cancel_cb, pattern=r'^bcast_menu$'),
+            panels_admin.EDIT_MENU: [
+                CallbackQueryHandler(panels_admin.edit_panel_choose_field, pattern=r'^panel_edit_field_'),
+                CallbackQueryHandler(panels_admin.edit_panel_back, pattern=r'^panel_edit_back$'),
             ],
-            constants.BROADCAST_TO_USER_ID: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_users.broadcast_to_user_id_received),
-                CallbackQueryHandler(admin_users.broadcast_cancel_cb, pattern=r'^bcast_menu$'),
-                CallbackQueryHandler(admin_c.admin_entry, pattern=r'^admin_panel$'),
-            ],
-            constants.BROADCAST_TO_USER_MESSAGE: [
-                MessageHandler(~filters.COMMAND & admin_filter, admin_users.broadcast_to_user_message_received),
-                CallbackQueryHandler(admin_users.broadcast_cancel_cb, pattern=r'^bcast_menu$'),
-                CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
+            panels_admin.EDIT_AWAIT_VALUE: [
+                MessageHandler(filters.TEXT & admin_filter, panels_admin.edit_panel_receive_value),
             ],
         },
-        fallbacks=[CommandHandler('cancel', admin_c.admin_generic_cancel)],
-        map_to_parent={ConversationHandler.END: constants.ADMIN_MENU},
+        fallbacks=[
+            CallbackQueryHandler(admin_plans.plan_management_menu, pattern=r'^admin_plans$'),
+            CommandHandler('cancel', admin_plans.cancel_add_plan),
+        ],
+        map_to_parent={ConversationHandler.END: constants.PLAN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
     )
 
@@ -318,7 +301,7 @@ def build_application():
         CallbackQueryHandler(admin_gift.gift_code_management_menu, pattern=r"^admin_gift$"),
         CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^admin_settings$"),
         CallbackQueryHandler(admin_c.shutdown_bot, pattern=r"^admin_shutdown$"),
-        broadcast_conv,
+        # broadcast_conv will be appended below
     ]
 
     # PLANS MENU
@@ -335,9 +318,14 @@ def build_application():
         CallbackQueryHandler(admin_users.user_management_menu, pattern=r"^admin_users$"),
         CallbackQueryHandler(admin_gift.gift_code_management_menu, pattern=r"^admin_gift$"),
         CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^admin_settings$"),
+        # Plans list/actions
         CallbackQueryHandler(admin_plans.list_plans_admin, pattern=r'^admin_list_plans$'),
         CallbackQueryHandler(admin_plans.admin_toggle_plan_visibility_callback, pattern=r'^admin_toggle_plan_\d+$'),
         CallbackQueryHandler(admin_plans.admin_delete_plan_callback, pattern=r'^admin_delete_plan_\d+$'),
+        # NEW: Panels admin nested conversation
+        panels_admin_conv,
+        CallbackQueryHandler(panels_admin.panels_menu, pattern=r'^admin_panels$'),
+        # add_plan/edit_plan nested convs
         add_plan_conv,
         edit_plan_conv,
         CallbackQueryHandler(admin_plans.back_to_admin_cb, pattern=r"^admin_panel$"),
@@ -385,102 +373,47 @@ def build_application():
         CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
     ]
 
-    # REPORTS MENU
-    admin_states[constants.REPORTS_MENU] = [
-        MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
-        MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
-        MessageHandler(filters.Regex(r'^💾 پشتیبان‌گیری$') & admin_filter, admin_backup.backup_restore_menu),
-        MessageHandler(filters.Regex(r'^👥 مدیریت کاربران$') & admin_filter, admin_users.user_management_menu),
-        MessageHandler(filters.Regex(r'^🎁 مدیریت کد هدیه$') & admin_filter, admin_gift.gift_code_management_menu),
-        MessageHandler(filters.Regex(r'^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
-        CallbackQueryHandler(admin_reports.reports_menu, pattern=r"^rep_menu$"),
-        CallbackQueryHandler(admin_reports.show_stats_report, pattern=r"^rep_stats$"),
-        CallbackQueryHandler(admin_reports.show_daily_report, pattern=r"^rep_daily$"),
-        CallbackQueryHandler(admin_reports.show_weekly_report, pattern=r"^rep_weekly$"),
-        CallbackQueryHandler(admin_reports.show_popular_plans_report, pattern=r"^rep_popular$"),
-        CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
-    ]
+    # ADMIN: BROADCAST (Inline)
+    broadcast_conv = ConversationHandler(
+        entry_points=[
+            MessageHandler(filters.Regex(r'^📩 ارسال پیام$') & admin_filter, admin_users.broadcast_menu),
+        ],
+        states={
+            constants.BROADCAST_MENU: [
+                CallbackQueryHandler(admin_users.broadcast_to_all_start, pattern=r'^bcast_all$'),
+                CallbackQueryHandler(admin_users.broadcast_to_user_start, pattern=r'^bcast_user$'),
+                CallbackQueryHandler(admin_users.broadcast_menu_cb, pattern=r'^bcast_menu$'),
+                CallbackQueryHandler(admin_c.admin_entry, pattern=r'^admin_panel$'),
+            ],
+            constants.BROADCAST_MESSAGE: [
+                MessageHandler(~filters.COMMAND & admin_filter, admin_users.broadcast_to_all_confirm),
+                CallbackQueryHandler(admin_users.broadcast_cancel_cb, pattern=r'^bcast_menu$'),
+                CallbackQueryHandler(admin_c.admin_entry, pattern=r'^admin_panel$'),
+            ],
+            constants.BROADCAST_CONFIRM: [
+                CallbackQueryHandler(admin_users.broadcast_confirm_callback, pattern=r'^broadcast_confirm_(yes|no)$'),
+                CallbackQueryHandler(admin_users.broadcast_cancel_cb, pattern=r'^bcast_menu$'),
+            ],
+            constants.BROADCAST_TO_USER_ID: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_users.broadcast_to_user_id_received),
+                CallbackQueryHandler(admin_users.broadcast_cancel_cb, pattern=r'^bcast_menu$'),
+                CallbackQueryHandler(admin_c.admin_entry, pattern=r'^admin_panel$'),
+            ],
+            constants.BROADCAST_TO_USER_MESSAGE: [
+                MessageHandler(~filters.COMMAND & admin_filter, admin_users.broadcast_to_user_message_received),
+                CallbackQueryHandler(admin_users.broadcast_cancel_cb, pattern=r'^bcast_menu$'),
+                CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
+            ],
+        },
+        fallbacks=[CommandHandler('cancel', admin_c.admin_generic_cancel)],
+        map_to_parent={ConversationHandler.END: constants.ADMIN_MENU},
+        per_user=True, per_chat=True, allow_reentry=True
+    )
 
-    # SETTINGS MENU
-    admin_states[constants.ADMIN_SETTINGS_MENU] = [
-        MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
-        MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
-        MessageHandler(filters.Regex(r'^💾 پشتیبان‌گیری$') & admin_filter, admin_backup.backup_restore_menu),
-        MessageHandler(filters.Regex(r'^👥 مدیریت کاربران$') & admin_filter, admin_users.user_management_menu),
-        MessageHandler(filters.Regex(r'^🎁 مدیریت کد هدیه$') & admin_filter, admin_gift.gift_code_management_menu),
-        MessageHandler(filters.Regex(r'^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
-        CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^admin_settings$"),
-        CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^back_to_settings$"),
-        CallbackQueryHandler(admin_settings.maintenance_and_join_submenu, pattern=r"^settings_maint_join$"),
-        CallbackQueryHandler(admin_settings.payment_and_guides_submenu, pattern=r"^settings_payment_guides$"),
-        CallbackQueryHandler(admin_settings.payment_info_submenu, pattern=r"^payment_info_submenu$"),
-        CallbackQueryHandler(admin_settings.first_charge_promo_submenu, pattern=r"^first_charge_promo_submenu$"),
-        CallbackQueryHandler(admin_settings.service_configs_submenu, pattern=r"^settings_service_configs$"),
-        CallbackQueryHandler(admin_settings.subdomains_submenu, pattern=r"^settings_subdomains$"),
-        CallbackQueryHandler(admin_settings.reports_and_reminders_submenu, pattern=r"^settings_reports_reminders$"),
-        CallbackQueryHandler(admin_settings.usage_aggregation_submenu, pattern=r"^settings_usage_aggregation$"),
-        CallbackQueryHandler(admin_settings.toggle_usage_aggregation, pattern=r"^toggle_usage_aggregation$"),
-        CallbackQueryHandler(admin_settings.edit_default_link_start, pattern=r"^edit_default_link_type$"),
-        CallbackQueryHandler(admin_settings.set_default_link_type, pattern=r"^set_default_link_"),
-        CallbackQueryHandler(admin_settings.toggle_maintenance, pattern=r"^toggle_maintenance$"),
-        CallbackQueryHandler(admin_settings.toggle_force_join, pattern=r"^toggle_force_join$"),
-        CallbackQueryHandler(admin_settings.toggle_expiry_reminder, pattern=r"^toggle_expiry_reminder$"),
-        CallbackQueryHandler(admin_settings.toggle_report_setting, pattern=r"^toggle_report_"),
-        trial_settings_conv,
-        CallbackQueryHandler(admin_settings.edit_setting_start, pattern=r"^admin_edit_setting_"),
-        CallbackQueryHandler(admin_settings.back_to_admin_menu_cb, pattern=r"^admin_back_to_menu$"),
-        CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
-    ]
+    # attach broadcast to ADMIN_MENU
+    admin_states[constants.ADMIN_MENU].append(broadcast_conv)
 
-    # AWAIT SETTING VALUE
-    admin_states[constants.AWAIT_SETTING_VALUE] = [
-        MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, await_setting_value_router),
-    ]
-
-    # GIFT CODES MENU
-    admin_states[constants.GIFT_CODES_MENU] = [
-        MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
-        MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
-        MessageHandler(filters.Regex(r'^💾 پشتیبان‌گیری$') & admin_filter, admin_backup.backup_restore_menu),
-        MessageHandler(filters.Regex(r'^👥 مدیریت کاربران$') & admin_filter, admin_users.user_management_menu),
-        MessageHandler(filters.Regex(r'^🎁 مدیریت کد هدیه$') & admin_filter, admin_gift.gift_code_management_menu),
-        MessageHandler(filters.Regex(r'^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
-
-        CallbackQueryHandler(admin_gift.gift_code_management_menu, pattern=r'^gift_root_menu$'),
-        CallbackQueryHandler(admin_gift.gift_code_management_menu, pattern=r'^admin_gift$'),
-        CallbackQueryHandler(admin_gift.admin_gift_codes_submenu, pattern=r'^gift_menu_gift$'),
-        CallbackQueryHandler(admin_gift.admin_promo_codes_submenu, pattern=r'^gift_menu_promo$'),
-
-        # NEW: referral bonus settings
-        CallbackQueryHandler(admin_gift.ask_referral_bonus, pattern=r'^gift_referral_bonus$'),
-        CallbackQueryHandler(admin_gift.referral_cancel_cb, pattern=r'^gift_referral_cancel$'),
-
-        CallbackQueryHandler(admin_gift.create_gift_code_start, pattern=r'^gift_new_gift$'),
-        CallbackQueryHandler(admin_gift.cancel_create_gift_cb, pattern=r'^gift_create_cancel$'),
-        CallbackQueryHandler(admin_gift.list_gift_codes, pattern=r'^gift_list_gift$'),
-        CallbackQueryHandler(admin_gift.delete_gift_code_callback, pattern=r'^delete_gift_code_'),
-
-        CallbackQueryHandler(admin_gift.create_promo_start, pattern=r'^promo_new$'),
-        CallbackQueryHandler(admin_gift.promo_cancel_cb, pattern=r'^promo_cancel$'),
-        CallbackQueryHandler(admin_gift.promo_skip_expires_cb, pattern=r'^promo_skip_expires$'),
-        CallbackQueryHandler(admin_gift.list_promo_codes, pattern=r'^promo_list$'),
-        CallbackQueryHandler(admin_gift.delete_promo_code_callback, pattern=r'^delete_promo_code_'),
-        CallbackQueryHandler(admin_gift.promo_first_purchase_choice, pattern=r'^promo_first_(yes|no)$'),
-
-        CallbackQueryHandler(admin_settings.global_discount_submenu, pattern=r'^global_discount_submenu$'),
-        CallbackQueryHandler(admin_settings.toggle_global_discount, pattern=r'^toggle_global_discount$'),
-        CallbackQueryHandler(admin_settings.edit_setting_start, pattern=r'^admin_edit_setting_'),
-        CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
-    ]
-
-    # NEW: AWAIT_REFERRAL_BONUS state
-    admin_states[constants.AWAIT_REFERRAL_BONUS] = [
-        MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_gift.referral_bonus_received),
-        CallbackQueryHandler(admin_gift.referral_cancel_cb, pattern=r'^gift_referral_cancel$'),
-        CallbackQueryHandler(admin_gift.gift_code_management_menu, pattern=r'^gift_root_menu$'),
-        CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
-    ]
-
+    # --------- ADMIN ROOT CONVERSATION WRAPPER ----------
     admin_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(f'^{constants.BTN_ADMIN_PANEL}$') & admin_filter, admin_c.admin_entry),
