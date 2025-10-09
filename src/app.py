@@ -395,6 +395,44 @@ def build_application():
         CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
     ]
 
+    # ADMIN SETTINGS MENU (state-specific handlers to ensure settings callbacks work inside settings state)
+    admin_states[constants.ADMIN_SETTINGS_MENU] = [
+        MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
+        MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
+        MessageHandler(filters.Regex(r'^💾 پشتیبان‌گیری$') & admin_filter, admin_backup.backup_restore_menu),
+        MessageHandler(filters.Regex(r'^👥 مدیریت کاربران$') & admin_filter, admin_users.user_management_menu),
+        MessageHandler(filters.Regex(r'^🎁 مدیریت کد هدیه$') & admin_filter, admin_gift.gift_code_management_menu),
+        MessageHandler(filters.Regex(r'^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
+
+        CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^admin_settings$"),
+        CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^back_to_settings$"),
+        CallbackQueryHandler(admin_settings.maintenance_and_join_submenu, pattern=r"^settings_maint_join$"),
+        CallbackQueryHandler(admin_settings.payment_and_guides_submenu, pattern=r"^settings_payment_guides$"),
+        CallbackQueryHandler(admin_settings.payment_info_submenu, pattern=r"^payment_info_submenu$"),
+        CallbackQueryHandler(admin_settings.first_charge_promo_submenu, pattern=r"^first_charge_promo_submenu$"),
+        CallbackQueryHandler(admin_settings.service_configs_submenu, pattern=r"^settings_service_configs$"),
+        CallbackQueryHandler(admin_settings.subdomains_submenu, pattern=r"^settings_subdomains$"),
+        CallbackQueryHandler(admin_settings.reports_and_reminders_submenu, pattern=r"^settings_reports_reminders$"),
+        CallbackQueryHandler(admin_settings.usage_aggregation_submenu, pattern=r"^settings_usage_aggregation$"),
+        CallbackQueryHandler(admin_settings.toggle_usage_aggregation, pattern=r"^toggle_usage_aggregation$"),
+        CallbackQueryHandler(admin_settings.edit_default_link_start, pattern=r"^edit_default_link_type$"),
+        CallbackQueryHandler(admin_settings.set_default_link_type, pattern=r"^set_default_link_"),
+        CallbackQueryHandler(admin_settings.toggle_maintenance, pattern=r"^toggle_maintenance$"),
+        CallbackQueryHandler(admin_settings.toggle_force_join, pattern=r"^toggle_force_join$"),
+        CallbackQueryHandler(admin_settings.toggle_expiry_reminder, pattern=r"^toggle_expiry_reminder$"),
+        CallbackQueryHandler(admin_settings.toggle_report_setting, pattern=r"^toggle_report_"),
+
+        trial_settings_conv,
+        CallbackQueryHandler(admin_settings.edit_setting_start, pattern=r"^admin_edit_setting_"),
+        CallbackQueryHandler(admin_settings.back_to_admin_menu_cb, pattern=r"^admin_back_to_menu$"),
+        CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
+    ]
+
+    # AWAIT SETTING VALUE (text input for settings and backup target)
+    admin_states[constants.AWAIT_SETTING_VALUE] = [
+        MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, await_setting_value_router),
+    ]
+
     # PLANS MENU
     admin_states[constants.PLAN_MENU] = [
         MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
