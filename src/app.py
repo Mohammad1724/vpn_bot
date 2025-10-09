@@ -24,12 +24,12 @@ from bot.handlers.admin import (
     settings as admin_settings, backup as admin_backup, users as admin_users,
     gift_codes as admin_gift
 )
-# NEW: Admin panels manager
+# Admin: panels manager
 from bot.handlers.admin import panels_admin
 import bot.handlers.admin.trial_settings_ui as trial_ui
 from bot.handlers.trial import get_trial_service as trial_get_trial_service
 from bot.handlers.admin.trial_settings import set_trial_days, set_trial_gb
-# NEW: Multi-panel selection for buying
+# Multi-panel selection for buying
 from bot.handlers import buy_panels
 
 from config import BOT_TOKEN, ADMIN_ID
@@ -241,7 +241,7 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # --------- ADMIN: PANELS MANAGER (nested conv) ----------
+    # --------- ADMIN: PANELS MANAGER (nested conv, with Back/Cancel callbacks) ----------
     panels_admin_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(r'^🧩 مدیریت پنل‌ها$') & admin_filter, panels_admin.panels_menu),
@@ -253,25 +253,63 @@ def build_application():
                 CallbackQueryHandler(panels_admin.edit_panel_start, pattern=r'^panel_edit_'),
                 CallbackQueryHandler(panels_admin.delete_panel_ask, pattern=r'^panel_del_(?!yes_)'),
                 CallbackQueryHandler(panels_admin.delete_panel_confirm, pattern=r'^panel_del_yes_'),
+                CallbackQueryHandler(panels_admin.panel_cancel, pattern=r'^panel_cancel$'),
                 CallbackQueryHandler(admin_plans.plan_management_menu, pattern=r'^admin_plans$'),
             ],
-            panels_admin.ADD_ID: [MessageHandler(filters.TEXT & admin_filter, panels_admin.add_panel_receive_id)],
-            panels_admin.ADD_NAME: [MessageHandler(filters.TEXT & admin_filter, panels_admin.add_panel_receive_name)],
-            panels_admin.ADD_DOMAIN: [MessageHandler(filters.TEXT & admin_filter, panels_admin.add_panel_receive_domain)],
-            panels_admin.ADD_ADMIN_PATH: [MessageHandler(filters.TEXT & admin_filter, panels_admin.add_panel_receive_admin_path)],
-            panels_admin.ADD_API_KEY: [MessageHandler(filters.TEXT & admin_filter, panels_admin.add_panel_receive_api_key)],
-            panels_admin.ADD_SUBDOMAINS: [MessageHandler(filters.TEXT & admin_filter, panels_admin.add_panel_receive_subdomains)],
-            panels_admin.ADD_SUBPATH: [MessageHandler(filters.TEXT & admin_filter, panels_admin.add_panel_receive_subpath)],
-            panels_admin.ADD_SECRET: [MessageHandler(filters.TEXT & admin_filter, panels_admin.add_panel_receive_secret)],
+            panels_admin.ADD_ID: [
+                MessageHandler(filters.TEXT & admin_filter, panels_admin.add_panel_receive_id),
+                CallbackQueryHandler(panels_admin.panel_cancel, pattern=r'^panel_cancel$'),
+                CallbackQueryHandler(panels_admin.panels_menu, pattern=r'^admin_panels$'),
+            ],
+            panels_admin.ADD_NAME: [
+                MessageHandler(filters.TEXT & admin_filter, panels_admin.add_panel_receive_name),
+                CallbackQueryHandler(panels_admin.add_back_to_id_cb, pattern=r'^panel_add_back_id$'),
+                CallbackQueryHandler(panels_admin.panel_cancel, pattern=r'^panel_cancel$'),
+            ],
+            panels_admin.ADD_DOMAIN: [
+                MessageHandler(filters.TEXT & admin_filter, panels_admin.add_panel_receive_domain),
+                CallbackQueryHandler(panels_admin.add_back_to_name_cb, pattern=r'^panel_add_back_name$'),
+                CallbackQueryHandler(panels_admin.panel_cancel, pattern=r'^panel_cancel$'),
+            ],
+            panels_admin.ADD_ADMIN_PATH: [
+                MessageHandler(filters.TEXT & admin_filter, panels_admin.add_panel_receive_admin_path),
+                CallbackQueryHandler(panels_admin.add_back_to_domain_cb, pattern=r'^panel_add_back_domain$'),
+                CallbackQueryHandler(panels_admin.panel_cancel, pattern=r'^panel_cancel$'),
+            ],
+            panels_admin.ADD_API_KEY: [
+                MessageHandler(filters.TEXT & admin_filter, panels_admin.add_panel_receive_api_key),
+                CallbackQueryHandler(panels_admin.add_back_to_admin_path_cb, pattern=r'^panel_add_back_admin_path$'),
+                CallbackQueryHandler(panels_admin.panel_cancel, pattern=r'^panel_cancel$'),
+            ],
+            panels_admin.ADD_SUBDOMAINS: [
+                MessageHandler(filters.TEXT & admin_filter, panels_admin.add_panel_receive_subdomains),
+                CallbackQueryHandler(panels_admin.add_back_to_api_key_cb, pattern=r'^panel_add_back_api_key$'),
+                CallbackQueryHandler(panels_admin.panel_cancel, pattern=r'^panel_cancel$'),
+            ],
+            panels_admin.ADD_SUBPATH: [
+                MessageHandler(filters.TEXT & admin_filter, panels_admin.add_panel_receive_subpath),
+                CallbackQueryHandler(panels_admin.add_back_to_subdomains_cb, pattern=r'^panel_add_back_subdomains$'),
+                CallbackQueryHandler(panels_admin.panel_cancel, pattern=r'^panel_cancel$'),
+            ],
+            panels_admin.ADD_SECRET: [
+                MessageHandler(filters.TEXT & admin_filter, panels_admin.add_panel_receive_secret),
+                CallbackQueryHandler(panels_admin.add_back_to_subpath_cb, pattern=r'^panel_add_back_subpath$'),
+                CallbackQueryHandler(panels_admin.panel_cancel, pattern=r'^panel_cancel$'),
+            ],
             panels_admin.ADD_VERIFY: [
                 CallbackQueryHandler(panels_admin.add_panel_receive_verify_cb, pattern=r'^panel_add_ssl_(yes|no)$'),
+                CallbackQueryHandler(panels_admin.add_back_to_secret_cb, pattern=r'^panel_add_back_secret$'),
+                CallbackQueryHandler(panels_admin.panel_cancel, pattern=r'^panel_cancel$'),
             ],
             panels_admin.EDIT_MENU: [
                 CallbackQueryHandler(panels_admin.edit_panel_choose_field, pattern=r'^panel_edit_field_'),
                 CallbackQueryHandler(panels_admin.edit_panel_back, pattern=r'^panel_edit_back$'),
+                CallbackQueryHandler(panels_admin.panel_cancel, pattern=r'^panel_cancel$'),
             ],
             panels_admin.EDIT_AWAIT_VALUE: [
                 MessageHandler(filters.TEXT & admin_filter, panels_admin.edit_panel_receive_value),
+                CallbackQueryHandler(panels_admin.edit_panel_back, pattern=r'^panel_edit_back$'),
+                CallbackQueryHandler(panels_admin.panel_cancel, pattern=r'^panel_cancel$'),
             ],
         },
         fallbacks=[
@@ -301,7 +339,7 @@ def build_application():
         CallbackQueryHandler(admin_gift.gift_code_management_menu, pattern=r"^admin_gift$"),
         CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^admin_settings$"),
         CallbackQueryHandler(admin_c.shutdown_bot, pattern=r"^admin_shutdown$"),
-        # broadcast_conv will be appended below
+        # broadcast_conv appended later
     ]
 
     # PLANS MENU
@@ -322,7 +360,7 @@ def build_application():
         CallbackQueryHandler(admin_plans.list_plans_admin, pattern=r'^admin_list_plans$'),
         CallbackQueryHandler(admin_plans.admin_toggle_plan_visibility_callback, pattern=r'^admin_toggle_plan_\d+$'),
         CallbackQueryHandler(admin_plans.admin_delete_plan_callback, pattern=r'^admin_delete_plan_\d+$'),
-        # NEW: Panels admin nested conversation
+        # Panels admin nested conversation
         panels_admin_conv,
         CallbackQueryHandler(panels_admin.panels_menu, pattern=r'^admin_panels$'),
         # add_plan/edit_plan nested convs
