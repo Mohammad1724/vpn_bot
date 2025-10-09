@@ -22,6 +22,10 @@ def _plan_menu_inline() -> InlineKeyboardMarkup:
             InlineKeyboardButton("➕ افزودن پلن جدید", callback_data="admin_add_plan"),
             InlineKeyboardButton("📋 لیست پلن‌ها", callback_data="admin_list_plans"),
         ],
+        # NEW: دکمه مدیریت پنل‌ها
+        [
+            InlineKeyboardButton("🧩 مدیریت پنل‌ها", callback_data="admin_panels"),
+        ],
         [
             InlineKeyboardButton("🏠 بازگشت به منوی ادمین", callback_data="admin_panel"),
         ],
