@@ -19,6 +19,7 @@ import hiddify_api
 from bot import utils
 from bot.constants import GET_CUSTOM_NAME, CMD_CANCEL, CMD_SKIP, PROMO_CODE_ENTRY
 from bot.keyboards import get_main_menu_keyboard
+from bot import panels as pnl  # Multi-panel support
 
 logger = logging.getLogger(__name__)
 
@@ -235,6 +236,8 @@ async def cancel_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     q = update.callback_query
     await q.answer()
     _cleanup_buy_state(context)
+    # پاک کردن انتخاب پنل در صورت لغو خرید
+    context.user_data.pop('selected_panel_id', None)
     try:
         await q.message.edit_text("❌ خرید لغو شد.")
     except Exception:
@@ -389,7 +392,7 @@ async def back_to_promo_from_confirm(update: Update, context: ContextTypes.DEFAU
         pass
     await context.bot.send_message(
         chat_id=q.from_user.id,
-        text="(می‌توانید کدتخفیف را تایپ کنید یا از دکمه‌های زیر استفاده کنید)",
+        text="(می‌توانید کدنخفیف را تایپ کنید یا از دکمه‌های زیر استفاده کنید)",
         reply_markup=_kb_promo_stage()
     )
     return PROMO_CODE_ENTRY
@@ -411,6 +414,8 @@ async def cancel_purchase_callback(update: Update, context: ContextTypes.DEFAULT
     q = update.callback_query
     await q.answer()
     _cleanup_buy_state(context)
+    # پاک کردن انتخاب پنل در صورت لغو خرید
+    context.user_data.pop('selected_panel_id', None)
     try:
         await q.edit_message_text("❌ خرید لغو شد.")
     except Exception:
@@ -424,28 +429,39 @@ async def _do_purchase_confirmed(q, context: ContextTypes.DEFAULT_TYPE, custom_n
     if not data or not (plan := db.get_plan(data.get('plan_id'))):
         await q.edit_message_text("❌ پلن انتخاب‌شده نامعتبر است.")
         return
+
     txn_id = db.initiate_purchase_transaction(user_id, plan['plan_id'], data.get('final_price'))
     if not txn_id:
         await q.edit_message_text(f"❌ موجودی کافی نیست. لطفاً ابتدا حسابتان را شارژ کنید.")
         return
+
+    # پنل انتخاب‌شده توسط کاربر (Multi-panel)
+    panel_id = context.user_data.get('selected_panel_id')
+    panel = pnl.find_panel_by_id(panel_id) if panel_id else None
+
     try:
         await q.edit_message_text("⏳ در حال ایجاد و تنظیم سرویس شما... (این مرحله ممکن است چند ثانیه طول بکشد)")
         note = f"tg:@{username}|id:{user_id}" if username else f"tg:id:{user_id}"
         gb_i = int(plan['gb'])
         default_name = "سرویس نامحدود" if gb_i == 0 else f"سرویس {utils.to_persian_digits(str(gb_i))} گیگ"
+
+        # ساخت سرویس روی پنل انتخاب‌شده
         provision = await hiddify_api.create_hiddify_user(
             plan_days=plan['days'],
             plan_gb=float(plan['gb']),
             user_telegram_id=note,
-            custom_name=(custom_name or default_name)
+            custom_name=(custom_name or default_name),
+            panel=panel  # مهم: استفاده از پنل انتخاب‌شده
         )
         if not provision or not provision.get("uuid"):
             raise RuntimeError("Failed to create and configure service in panel")
 
         main_uuid, main_sublink = provision["uuid"], provision.get("full_link", "")
-        # اصلاح: اگر نام خالی بود، نام پیش‌فرض ذخیره شود
         stored_name = custom_name or default_name
         db.finalize_purchase_transaction(txn_id, main_uuid, main_sublink, stored_name)
+
+        # پس از موفقیت خرید، انتخاب پنل را پاک کنیم تا خرید بعدی از نو انتخاب شود
+        context.user_data.pop('selected_panel_id', None)
 
         if data.get('promo_code'):
             db.mark_promo_code_as_used(user_id, data['promo_code'])
@@ -462,10 +478,13 @@ async def _send_service_info_to_user(context, user_id, new_uuid, plan):
         await context.bot.send_message(chat_id=user_id, text="❌ خطای داخلی: سرویس ساخته شد اما در دیتابیس یافت نشد.")
         return
 
+    # پنل مربوط به این سرویس (از روی لینک ذخیره‌شده تشخیص داده می‌شود)
+    panel = pnl.find_panel_for_link(new_service_record.get('sub_link') or "")
+
     user_data = None
     expected_days = getattr(hiddify_api, "_compensate_days", lambda x: int(x))(int(plan['days']))
     for attempt in range(5):
-        user_data = await hiddify_api.get_user_info(new_uuid)
+        user_data = await hiddify_api.get_user_info(new_uuid, panel=panel)
         if user_data and int(user_data.get("package_days", 0)) == expected_days:
             logger.info("Panel info for %s is up-to-date on attempt %d.", new_uuid, attempt + 1)
             break
@@ -475,8 +494,8 @@ async def _send_service_info_to_user(context, user_id, new_uuid, plan):
     if user_data:
         config_name = (user_data.get('name', 'config') or 'config')
 
-        # اصلاح: توجه به نوع پلن برای انتخاب دامنه (unlimited/volume)
-        final_link = utils.build_subscription_url(new_uuid, name=config_name, plan_gb=int(plan['gb']))
+        # لینک با توجه به پنل سرویس
+        final_link = utils.build_subscription_url(new_uuid, name=config_name, plan_gb=int(plan['gb']), panel=panel)
 
         qr_bio = utils.make_qr_bytes(final_link)
         caption = utils.create_service_info_caption(
