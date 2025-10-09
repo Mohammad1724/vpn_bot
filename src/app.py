@@ -27,6 +27,9 @@ from bot.handlers.admin import (
 import bot.handlers.admin.trial_settings_ui as trial_ui
 from bot.handlers.trial import get_trial_service as trial_get_trial_service
 from bot.handlers.admin.trial_settings import set_trial_days, set_trial_gb
+# NEW: Multi-panel selection for buying
+from bot.handlers import buy_panels
+
 from config import BOT_TOKEN, ADMIN_ID
 
 warnings.filterwarnings("ignore", category=PTBUserWarning)
@@ -565,10 +568,14 @@ def build_application():
     for h in plan_category_handlers:
         application.add_handler(h)
 
+    # BUY PANEL SELECT (Multi-panel)
+    application.add_handler(CallbackQueryHandler(check_channel_membership(buy_panels.choose_panel_callback), pattern=r"^buy_select_panel_"))
+
     # MAIN MENU (user)
     main_menu_handlers = [
         CommandHandler("start", check_channel_membership(start_h.start)),
-        MessageHandler(filters.Regex(r'^🛍️ خرید سرویس$'), check_channel_membership(buy_h.buy_service_list)),
+        # Route purchase to panel selection menu first
+        MessageHandler(filters.Regex(r'^🛍️ خرید سرویس$'), check_channel_membership(buy_panels.show_panel_menu)),
         MessageHandler(filters.Regex(r'^📋 سرویس‌های من$'), check_channel_membership(us_h.list_my_services)),
         MessageHandler(filters.Regex(r'^👤 اطلاعات حساب کاربری$'), check_channel_membership(start_h.show_account_info)),
         MessageHandler(filters.Regex(r'^📚 راهنما$'), check_channel_membership(start_h.show_guide)),
