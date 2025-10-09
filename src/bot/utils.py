@@ -146,46 +146,70 @@ def _pick_domains_from_settings(plan_gb: int | None) -> list[str]:
         if g is not None and g <= 0:
             raw = db.get_setting("unlimited_sub_domains")
             if raw:
-                return _normalize_subdomains(_parse_domains_csv(raw))
+                hosts = _normalize_subdomains(_parse_domains_csv(raw))
+                hosts = [h for h in hosts if h]
+                if hosts:
+                    return hosts
         elif g is not None and g > 0:
             raw = db.get_setting("volume_based_sub_domains")
             if raw:
-                return _normalize_subdomains(_parse_domains_csv(raw))
+                hosts = _normalize_subdomains(_parse_domains_csv(raw))
+                hosts = [h for h in hosts if h]
+                if hosts:
+                    return hosts
 
     gen = db.get_setting("sub_domains")
     if gen:
-        return _normalize_subdomains(_parse_domains_csv(gen))
+        hosts = _normalize_subdomains(_parse_domains_csv(gen))
+        hosts = [h for h in hosts if h]
+        if hosts:
+            return hosts
 
-    return _normalize_subdomains(SUB_DOMAINS) or [_hostname_only(PANEL_DOMAIN)]
+    fallback = _normalize_subdomains(SUB_DOMAINS) or [_hostname_only(PANEL_DOMAIN)]
+    fallback = [h for h in fallback if h]
+    return fallback
 
 
 def build_subscription_url(
     user_uuid: str,
     link_type: str | None = None,
     name: str | None = None,
-    plan_gb: int | None = None
+    plan_gb: int | None = None,
+    panel: dict | None = None
 ) -> str:
-    domains = _pick_domains_from_settings(plan_gb)
-    host = _hostname_only(random.choice(domains) if domains else PANEL_DOMAIN)
+    """
+    اگر panel داده شود، دامنه/secret/path را از همان پنل استفاده می‌کنیم.
+    در غیر این صورت از تنظیمات عمومی/DB استفاده می‌شود.
+    """
+    if panel:
+        p_subs = panel.get("sub_domains") or []
+        panel_domain = panel.get("panel_domain") or ""
+        # انتخاب هاست از sub_domains یا خود panel_domain
+        domains = [h for h in p_subs if h] or ([_hostname_only(panel_domain)] if panel_domain else [])
+        host = _hostname_only(random.choice(domains) if domains else panel_domain)
+        client_secret = _clean_path(panel.get("panel_secret_uuid"))
+        sub_path = _clean_path(panel.get("sub_path") or "sub")
+    else:
+        domains = _pick_domains_from_settings(plan_gb)
+        host = _hostname_only(random.choice(domains) if domains else PANEL_DOMAIN)
+        client_secret = _clean_path(PANEL_SECRET_UUID)
+        sub_path = _clean_path(SUB_PATH) or "sub"
+
+    if not host:
+        # Fallbacks: try configured domains, then localhost to avoid malformed URL
+        alt_list = _normalize_subdomains(SUB_DOMAINS) + [_hostname_only(PANEL_DOMAIN)]
+        alt_list = [h for h in alt_list if h]
+        host = alt_list[0] if alt_list else "localhost"
 
     if link_type is None:
         link_type = (db.get_setting("default_sub_link_type") or "sub").strip().lower()
     lt = normalize_link_type(link_type)
 
-    client_secret = _clean_path(PANEL_SECRET_UUID)
-    sub_path = _clean_path(SUB_PATH) or "sub"
-
     if client_secret:
         base = f"https://{host}/{client_secret}/{user_uuid}"
-        if lt == "sub":
-            final_url = f"{base}/sub/"
-        else:
-            final_url = f"{base}/{lt}/"
+        final_url = f"{base}/sub/" if lt == "sub" else f"{base}/{lt}/"
     else:
-        if lt == "sub":
-            final_url = f"https://{host}/{sub_path}/{user_uuid}/"
-        else:
-            final_url = f"https://{host}/{lt}/{user_uuid}/"
+        final_url = f"https://{host}/{sub_path}/{user_uuid}/" if lt == "sub" else f"https://{host}/{lt}/{user_uuid}/"
 
     if name:
         safe_name = quote_plus(name)
@@ -313,7 +337,7 @@ def create_progress_bar(used, total, blocks=10):
 
 def create_service_info_caption(
     hiddify_user_info: dict,
-    service_db_record: dict,
+    service_db_record: dict | None,
     title: str = "اطلاعات سرویس شما",
     override_sub_url: str | None = None
 ) -> str:
@@ -325,9 +349,10 @@ def create_service_info_caption(
 
     bar, percent = create_progress_bar(current_usage, usage_limit)
 
-    name = service_db_record.get('name') or hiddify_user_info.get('name') or "سرویس"
+    srv_rec = service_db_record or {}
+    name = srv_rec.get('name') or hiddify_user_info.get('name') or "سرویس"
 
-    link = override_sub_url or service_db_record.get('sub_link')
+    link = override_sub_url or srv_rec.get('sub_link')
     safe_link_md = f"`{str(link).replace('`','\\`')}`" if link else "—"
 
     traffic_str = "نامحدود" if usage_limit <= 0 or usage_limit > UNLIMITED_DISPLAY_THRESHOLD_GB else f"{current_usage:.2f}/{int(usage_limit)} GB"
