@@ -9,7 +9,7 @@ from typing import List, Optional
 from urllib.parse import quote_plus, urlsplit, urlunsplit
 
 from telegram.ext import ContextTypes
-from telegram import Update, Message, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, Message, InputFile
 from telegram.error import BadRequest
 from telegram.constants import ParseMode
 
@@ -17,6 +17,7 @@ import database as db
 import hiddify_api
 from bot import utils
 from bot.ui import nav_row, markup, chunk, btn, confirm_row
+from bot import panels as pnl  # Multi-panel support
 
 try:
     from config import ADMIN_ID, HIDDIFY_API_VERIFY_SSL
@@ -112,7 +113,10 @@ async def send_service_details(
         return
 
     try:
-        info = await hiddify_api.get_user_info(service['sub_uuid'])
+        # پنل صحیح را از روی لینک سرویس پیدا کن
+        panel = pnl.find_panel_for_link(service.get('sub_link') or "")
+        info = await hiddify_api.get_user_info(service['sub_uuid'], panel=panel)
+
         if not info or (isinstance(info, dict) and info.get('_not_found')):
             kb = [
                 [btn("🗑️ حذف سرویس از ربات", f"delete_service_{service['service_id']}")],
@@ -131,7 +135,12 @@ async def send_service_details(
         # انتخاب دامنه بر اساس تنظیمات ادمین و نوع پلن (حجمی/نامحدود)
         plan = db.get_plan(service['plan_id']) if service.get('plan_id') else None
         plan_gb = int(plan['gb']) if plan and 'gb' in plan else None
-        preferred_url = utils.build_subscription_url(service['sub_uuid'], name=config_name, plan_gb=plan_gb)
+        preferred_url = utils.build_subscription_url(
+            service['sub_uuid'],
+            name=config_name,
+            plan_gb=plan_gb,
+            panel=panel  # Multi-panel: لینک از پنل مربوطه
+        )
 
         caption = utils.create_service_info_caption(info, service_db_record=service, title="اطلاعات سرویس شما", override_sub_url=preferred_url)
         keyboard_rows = [
@@ -212,7 +221,10 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("❌ سرویس یافت نشد یا متعلق به شما نیست.")
         return
 
-    info = await hiddify_api.get_user_info(user_uuid)
+    # Multi-panel: panel مناسب را پیدا کن
+    panel = pnl.find_panel_for_link(service.get('sub_link') or "")
+
+    info = await hiddify_api.get_user_info(user_uuid, panel=panel)
     config_name = (info.get('name', 'config') if isinstance(info, dict) else 'config') or 'config'
 
     # حالت full: مسیر …/<uuid>/all.txt (بدون suffix نوع لینک)
@@ -244,10 +256,16 @@ async def get_link_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text("❌ دریافت کانفیگ‌های تکی با خطا مواجه شد.")
         return
 
-    # سایر انواع لینک: بر اساس تنظیمات ادمین + نوع پلن
+    # سایر انواع لینک: بر اساس تنظیمات ادمین + نوع پلن و پنل صحیح
     plan = db.get_plan(service['plan_id']) if service.get('plan_id') else None
     plan_gb = int(plan['gb']) if plan and 'gb' in plan else None
-    final_link = utils.build_subscription_url(user_uuid, link_type=link_type, name=config_name, plan_gb=plan_gb)
+    final_link = utils.build_subscription_url(
+        user_uuid,
+        link_type=link_type,
+        name=config_name,
+        plan_gb=plan_gb,
+        panel=panel  # مهم برای چند-پنلی
+    )
 
     try:
         await q.message.delete()
@@ -329,9 +347,11 @@ async def delete_service_callback(update: Update, context: ContextTypes.DEFAULT_
     except BadRequest:
         pass
     try:
-        success = await hiddify_api.delete_user_from_panel(service['sub_uuid'])
+        # پنل صحیح را پیدا کن
+        panel = pnl.find_panel_for_link(service.get('sub_link') or "")
+        success = await hiddify_api.delete_user_from_panel(service['sub_uuid'], panel=panel)
         if not success:
-            probe = await hiddify_api.get_user_info(service['sub_uuid'])
+            probe = await hiddify_api.get_user_info(service['sub_uuid'], panel=panel)
             if isinstance(probe, dict) and probe.get("_not_found"):
                 success = True
         if not success:
@@ -368,7 +388,11 @@ async def renew_service_handler(update: Update, context: ContextTypes.DEFAULT_TY
     if user['balance'] < plan['price']:
         await context.bot.send_message(chat_id=user_id, text=f"موجودی کافی نیست! (نیاز به {int(plan['price']):,} تومان)")
         return
-    info = await hiddify_api.get_user_info(service['sub_uuid'])
+
+    # Multi-panel: پنل این سرویس
+    panel = pnl.find_panel_for_link(service.get('sub_link') or "")
+
+    info = await hiddify_api.get_user_info(service['sub_uuid'], panel=panel)
     if not info:
         await context.bot.send_message(chat_id=user_id, text="❌ دریافت اطلاعات از پنل ممکن نیست.")
         return
@@ -426,11 +450,15 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
         await _send_renewal_error(original_message, "❌ مشکلی در شروع تمدید پیش آمد (مثلاً عدم موجودی).")
         return
 
+    # پنل مربوط به این سرویس
+    panel = pnl.find_panel_for_link(service.get('sub_link') or "")
+
     try:
         new_info = await hiddify_api.renew_user_subscription(
             user_uuid=service['sub_uuid'],
             plan_days=int(plan['days']),
-            plan_gb=float(plan['gb'])
+            plan_gb=float(plan['gb']),
+            panel=panel
         )
 
         if not new_info:
@@ -450,7 +478,7 @@ async def proceed_with_renewal(update: Update, context: ContextTypes.DEFAULT_TYP
     except Exception as e:
         logger.error("Service renewal failed for UUID %s: %s", service['sub_uuid'], e, exc_info=True)
         db.cancel_renewal_transaction(txn_id)
-        panel_data_after_fail = await hiddify_api.get_user_info(service['sub_uuid'])
+        panel_data_after_fail = await hiddify_api.get_user_info(service['sub_uuid'], panel=panel)
         logger.info("DEBUG: Panel data after failed renewal for UUID %s -> %s", service['sub_uuid'], panel_data_after_fail)
         await _send_renewal_error(original_message, "❌ تمدید در پنل اعمال نشد. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.")
     finally:
