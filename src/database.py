@@ -7,6 +7,13 @@ import json
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
+# NEW: for admin notifications
+import httpx
+try:
+    from config import BOT_TOKEN, ADMIN_ID
+except Exception:
+    BOT_TOKEN, ADMIN_ID = "", ""
+
 DB_NAME = "vpn_bot.db"
 logger = logging.getLogger(__name__)
 _db_connection = None
@@ -85,6 +92,107 @@ def _remove_device_limit_alert_column_if_exists(conn: sqlite3.Connection):
             logger.info("Rebuild completed; device_limit_alert_sent removed.")
     except Exception as e:
         logger.warning(f"Couldn't remove device_limit_alert_sent column: {e}")
+
+# ===== Admin notifications (helpers) =====
+def _escape_html(s) -> str:
+    try:
+        t = str(s)
+    except Exception:
+        t = ""
+    return t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+def _iter_admin_chat_ids():
+    ids = []
+    raw = ADMIN_ID
+    if raw is None:
+        return ids
+    if isinstance(raw, (list, tuple, set)):
+        seq = list(raw)
+    else:
+        s = str(raw).strip()
+        if not s:
+            seq = []
+        else:
+            # allow comma/semicolon separated
+            seq = [p.strip() for p in s.replace(";", ",").split(",") if p.strip()]
+    for item in seq:
+        try:
+            ids.append(int(item))
+        except Exception:
+            ids.append(item)
+    return ids
+
+def _send_admin_message(text: str):
+    """
+    Sends a message to configured ADMIN_ID(s) via Telegram Bot API.
+    Safe: ignores errors and never raises.
+    """
+    if not BOT_TOKEN:
+        return
+    admin_ids = _iter_admin_chat_ids()
+    if not admin_ids:
+        return
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload_base = {"parse_mode": "HTML", "disable_web_page_preview": True}
+    try:
+        with httpx.Client(timeout=7.0, follow_redirects=True) as client:
+            for chat_id in admin_ids:
+                data = {"chat_id": chat_id, "text": text}
+                data.update(payload_base)
+                try:
+                    client.post(url, json=data)
+                except Exception as e:
+                    logger.warning("Admin notify failed for chat_id=%s: %s", chat_id, e)
+    except Exception as e:
+        logger.warning("Admin notify batch failed: %s", e)
+
+def _notify_purchase(user_id: int, plan_name: str, amount: float, custom_name: str, sub_uuid: str):
+    ulink = f'<a href="tg://user?id={user_id}">{user_id}</a>'
+    amt = 0
+    try:
+        amt = int(round(float(amount or 0)))
+    except Exception:
+        pass
+    text = (
+        "✅ <b>خرید جدید انجام شد</b>\n"
+        f"• کاربر: {ulink}\n"
+        f"• پلن: {_escape_html(plan_name) if plan_name else '-'}\n"
+        f"• مبلغ: {amt:,} تومان\n"
+        f"• نام سرویس: {_escape_html(custom_name)}\n"
+        f"• UUID: <code>{_escape_html(sub_uuid)}</code>\n"
+        f"• زمان: {_escape_html(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))}"
+    )
+    _send_admin_message(text)
+
+def _notify_renewal(user_id: int, service_id: int, plan_name: str, amount: float):
+    ulink = f'<a href="tg://user?id={user_id}">{user_id}</a>'
+    amt = 0
+    try:
+        amt = int(round(float(amount or 0)))
+    except Exception:
+        pass
+    text = (
+        "🔁 <b>تمدید سرویس انجام شد</b>\n"
+        f"• کاربر: {ulink}\n"
+        f"• سرویس: #{service_id}\n"
+        f"• پلن: {_escape_html(plan_name) if plan_name else '-'}\n"
+        f"• مبلغ: {amt:,} تومان\n"
+        f"• زمان: {_escape_html(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))}"
+    )
+    _send_admin_message(text)
+
+def _notify_trial_used(user_id: int):
+    days = (get_setting("trial_days") or "-")
+    gb = (get_setting("trial_gb") or "-")
+    ulink = f'<a href="tg://user?id={user_id}">{user_id}</a>'
+    text = (
+        "🧪 <b>سرویس تست فعال شد</b>\n"
+        f"• کاربر: {ulink}\n"
+        f"• شرایط: {gb} GB | {days} روز\n"
+        f"• زمان: {_escape_html(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))}"
+    )
+    _send_admin_message(text)
+# =========================================
 
 
 def init_db():
@@ -292,9 +400,22 @@ def set_user_ban_status(user_id: int, is_banned: bool):
     conn.commit()
 
 def set_user_trial_used(user_id: int):
+    """
+    علامت‌گذاری استفاده از سرویس تست.
+    تنها در صورتی که قبلاً 0 بوده به 1 تغییر می‌دهیم و سپس به ادمین اطلاع می‌دهیم.
+    """
     conn = _connect_db()
+    cur = conn.cursor()
+    cur.execute("SELECT has_used_trial FROM users WHERE user_id = ?", (user_id,))
+    row = cur.fetchone()
+    if row and int(row[0] or 0) == 1:
+        return
     conn.execute("UPDATE users SET has_used_trial = 1 WHERE user_id = ?", (user_id,))
     conn.commit()
+    try:
+        _notify_trial_used(user_id)
+    except Exception as e:
+        logger.warning("Failed to notify trial used for user %s: %s", user_id, e)
 
 def reset_user_trial(user_id: int):
     conn = _connect_db()
@@ -509,6 +630,13 @@ def finalize_purchase_transaction(transaction_id: int, sub_uuid: str, sub_link: 
         cursor.execute("UPDATE transactions SET status = 'completed', updated_at = ? WHERE transaction_id = ?", (now_str, transaction_id))
         conn.commit()
         logger.info(f"Purchase transaction {transaction_id} successfully finalized")
+        # Admin notify (safe, post-commit)
+        try:
+            plan_row = get_plan(int(txn['plan_id'])) if txn['plan_id'] is not None else None
+            plan_name = plan_row.get('name') if plan_row else None
+            _notify_purchase(int(txn['user_id']), plan_name or "", float(txn['amount']), str(custom_name or ""), str(sub_uuid or ""))
+        except Exception as e:
+            logger.warning("Notify purchase failed for txn %s: %s", transaction_id, e)
     except Exception as e:
         logger.error(f"Error finalizing purchase {transaction_id}: {e}", exc_info=True)
         conn.rollback()
@@ -587,6 +715,13 @@ def finalize_renewal_transaction(transaction_id: int, new_plan_id: int):
         cursor.execute("UPDATE transactions SET status = 'completed', updated_at = ? WHERE transaction_id = ?", (now_str, transaction_id))
         conn.commit()
         logger.info(f"Renewal transaction {transaction_id} successfully finalized (plan {plan_to_apply})")
+        # Admin notify (safe, post-commit)
+        try:
+            plan_row = get_plan(int(plan_to_apply)) if plan_to_apply else None
+            plan_name = plan_row.get('name') if plan_row else None
+            _notify_renewal(int(txn['user_id']), int(txn['service_id']), plan_name or "", float(txn['amount']))
+        except Exception as e:
+            logger.warning("Notify renewal failed for txn %s: %s", transaction_id, e)
     except Exception as e:
         logger.error(f"Error finalizing renewal {transaction_id}: {e}", exc_info=True)
         conn.rollback()
@@ -812,7 +947,10 @@ def confirm_charge_request(charge_id: int) -> bool:
     conn = _connect_db()
     try:
         with conn:
-            req = conn.execute("SELECT * FROM transactions WHERE transaction_id = ? AND status = 'pending'", (charge_id,)).fetchone()
+            req = conn.execute(
+                "SELECT * FROM transactions WHERE transaction_id = ? AND type = 'charge' AND status = 'pending'",
+                (charge_id,)
+            ).fetchone()
             if not req:
                 return False
             user_id = req['user_id']
@@ -828,7 +966,10 @@ def reject_charge_request(charge_id: int) -> bool:
     conn = _connect_db()
     try:
         with conn:
-            res = conn.execute("UPDATE transactions SET status = 'rejected', updated_at = ? WHERE transaction_id = ? AND status = 'pending'", (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), charge_id))
+            res = conn.execute(
+                "UPDATE transactions SET status = 'rejected', updated_at = ? WHERE transaction_id = ? AND type = 'charge' AND status = 'pending'",
+                (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), charge_id)
+            )
             return res.rowcount > 0
     except sqlite3.Error as e:
         logger.error(f"Failed to reject charge request {charge_id}: {e}")
