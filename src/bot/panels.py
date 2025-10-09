@@ -2,11 +2,11 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import json
 from typing import List, Dict, Optional
 from urllib.parse import urlparse
 
-# اگر در آینده بخواهید از DB بخوانید، این ایمپورت حاضر است؛ فعلاً فقط از config می‌خوانیم.
-import database as db  # noqa: F401
+import database as db  # برای خواندن/ذخیره تنظیمات پنل‌ها از DB
 
 try:
     import config as _cfg
@@ -45,6 +45,36 @@ def _norm_subdomains(sd) -> List[str]:
     return vals
 
 
+def _normalize_panels(items: List[Dict]) -> List[Dict]:
+    """
+    نرمال‌سازی ساختار پنل‌ها (برای ذخیره/خواندن از DB)
+    - اطمینان از وجود کلیدها و تایپ صحیح
+    - یکتا کردن id ها
+    """
+    out: List[Dict] = []
+    for it in items or []:
+        out.append({
+            "id": str((it.get("id") or "")).strip(),
+            "name": str((it.get("name") or "")).strip(),
+            "panel_domain": str((it.get("panel_domain") or "")).strip(),
+            "admin_path": str((it.get("admin_path") or "")).strip(),
+            "api_key": str((it.get("api_key") or "")).strip(),
+            "sub_domains": _norm_subdomains(it.get("sub_domains")),
+            "sub_path": str((it.get("sub_path") or "sub")).strip() or "sub",
+            "panel_secret_uuid": str((it.get("panel_secret_uuid") or "")).strip(),
+            "verify_ssl": bool(it.get("verify_ssl", True)),
+        })
+    # یکتا بودن id
+    seen = set()
+    uniq: List[Dict] = []
+    for p in out:
+        pid = p["id"] or ""
+        if pid and pid not in seen:
+            seen.add(pid)
+            uniq.append(p)
+    return uniq
+
+
 def _load_from_config() -> List[Dict]:
     """
     بارگذاری پنل‌ها از config.PANELS.
@@ -67,42 +97,30 @@ def _load_from_config() -> List[Dict]:
         return [base]
 
     # Normalize لیست چندپنلی
-    res: List[Dict] = []
-    for p in panels:
-        res.append({
-            "id": str(p.get("id") or ""),
-            "name": str(p.get("name") or ""),
-            "panel_domain": str(p.get("panel_domain") or ""),
-            "admin_path": str(p.get("admin_path") or ""),
-            "api_key": str(p.get("api_key") or ""),
-            "sub_domains": _norm_subdomains(p.get("sub_domains")),
-            "sub_path": str(p.get("sub_path") or "sub"),
-            "panel_secret_uuid": str(p.get("panel_secret_uuid") or ""),
-            "verify_ssl": bool(p.get("verify_ssl", True)),
-        })
-    return res
+    return _normalize_panels(panels)
 
 
 def load_panels() -> List[Dict]:
     """
-    فعلاً از config.PANELS می‌خوانیم.
-    اگر خواستید مدیریت از داخل ربات باشد، می‌توان از settings (مثلاً panels_json) هم خواند.
+    ترتیب اولویت:
+    1) اگر در DB (settings.panels_json) پنلی ذخیره شده، همان را برگردان.
+    2) در غیر این صورت از config بخوان.
     """
-    # نمونه پیاده‌سازی خواندن از DB در آینده:
-    # raw = db.get_setting("panels_json")
-    # if raw:
-    #     try:
-    #         data = json.loads(raw)
-    #         ... (normalize مشابه _load_from_config)
-    #         return normalized_list
-    #     except Exception:
-    #         pass
+    raw = db.get_setting("panels_json")
+    if raw:
+        try:
+            data = json.loads(raw)
+            if isinstance(data, list) and data:
+                return _normalize_panels(data)
+        except Exception:
+            # اگر DB خراب بود، به config برگردیم
+            pass
     return _load_from_config()
 
 
 def find_panel_by_id(pid: str) -> Optional[Dict]:
     """
-    جستجو بر اساس شناسه‌ی تعریف‌شده در config (کلید 'id').
+    جستجو بر اساس شناسه‌ی تعریف‌شده در config/DB (کلید 'id').
     """
     pid = str(pid or "").strip()
     for p in load_panels():
