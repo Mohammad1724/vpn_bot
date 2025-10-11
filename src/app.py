@@ -346,7 +346,7 @@ def build_application():
     # --------- ADMIN ROOT CONVERSATION ----------
     admin_states = {}
 
-    # ADMIN MENU (include settings and reports handlers here to ensure inline buttons always work)
+    # ADMIN MENU (include settings, reports, gift-code handlers for robustness)
     admin_states[constants.ADMIN_MENU] = [
         # Text entries
         MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
@@ -363,11 +363,9 @@ def build_application():
         CallbackQueryHandler(admin_users.user_management_menu, pattern=r"^admin_users$"),
         CallbackQueryHandler(admin_gift.gift_code_management_menu, pattern=r"^admin_gift$"),
 
-        # Settings root + back
+        # Settings
         CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^admin_settings$"),
         CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^back_to_settings$"),
-
-        # Settings submenus/toggles (also in ADMIN_MENU for robustness)
         CallbackQueryHandler(admin_settings.maintenance_and_join_submenu, pattern=r"^settings_maint_join$"),
         CallbackQueryHandler(admin_settings.payment_and_guides_submenu, pattern=r"^settings_payment_guides$"),
         CallbackQueryHandler(admin_settings.payment_info_submenu, pattern=r"^payment_info_submenu$"),
@@ -384,23 +382,42 @@ def build_application():
         CallbackQueryHandler(admin_settings.toggle_expiry_reminder, pattern=r"^toggle_expiry_reminder$"),
         CallbackQueryHandler(admin_settings.toggle_report_setting, pattern=r"^toggle_report_"),
 
-        # Reports menu and its inline buttons (registered here too)
+        # Reports
         CallbackQueryHandler(admin_reports.reports_menu, pattern=r"^rep_menu$"),
         CallbackQueryHandler(admin_reports.show_stats_report, pattern=r"^rep_stats$"),
         CallbackQueryHandler(admin_reports.show_daily_report, pattern=r"^rep_daily$"),
         CallbackQueryHandler(admin_reports.show_weekly_report, pattern=r"^rep_weekly$"),
         CallbackQueryHandler(admin_reports.show_popular_plans_report, pattern=r"^rep_popular$"),
 
-        # Trial settings nested conversation available from here, too
+        # Gift-codes root and actions (also in ADMIN_MENU)
+        CallbackQueryHandler(admin_gift.gift_code_management_menu, pattern=r'^gift_root_menu$'),
+        CallbackQueryHandler(admin_gift.admin_gift_codes_submenu, pattern=r'^gift_menu_gift$'),
+        CallbackQueryHandler(admin_gift.admin_promo_codes_submenu, pattern=r'^gift_menu_promo$'),
+        CallbackQueryHandler(admin_gift.ask_referral_bonus, pattern=r'^gift_referral_bonus$'),
+        CallbackQueryHandler(admin_gift.referral_cancel_cb, pattern=r'^gift_referral_cancel$'),
+        CallbackQueryHandler(admin_gift.create_gift_code_start, pattern=r'^gift_new_gift$'),
+        CallbackQueryHandler(admin_gift.cancel_create_gift_cb, pattern=r'^gift_create_cancel$'),
+        CallbackQueryHandler(admin_gift.list_gift_codes, pattern=r'^gift_list_gift$'),
+        CallbackQueryHandler(admin_gift.delete_gift_code_callback, pattern=r'^delete_gift_code_'),
+        CallbackQueryHandler(admin_gift.create_promo_start, pattern=r'^promo_new$'),
+        CallbackQueryHandler(admin_gift.promo_cancel_cb, pattern=r'^promo_cancel$'),
+        CallbackQueryHandler(admin_gift.promo_skip_expires_cb, pattern=r'^promo_skip_expires$'),
+        CallbackQueryHandler(admin_gift.list_promo_codes, pattern=r'^promo_list$'),
+        CallbackQueryHandler(admin_gift.delete_promo_code_callback, pattern=r'^delete_promo_code_'),
+        CallbackQueryHandler(admin_gift.promo_first_purchase_choice, pattern=r'^promo_first_(yes|no)$'),
+        CallbackQueryHandler(admin_settings.global_discount_submenu, pattern=r'^global_discount_submenu$'),
+        CallbackQueryHandler(admin_settings.toggle_global_discount, pattern=r'^toggle_global_discount$'),
+
+        # Trial settings nested conv
         trial_settings_conv,
 
-        # Edit setting and back to admin
+        # Back to admin
         CallbackQueryHandler(admin_settings.edit_setting_start, pattern=r"^admin_edit_setting_"),
         CallbackQueryHandler(admin_settings.back_to_admin_menu_cb, pattern=r"^admin_back_to_menu$"),
         CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
     ]
 
-    # REPORTS MENU (keep dedicated handlers too)
+    # REPORTS MENU (state-specific)
     admin_states[constants.REPORTS_MENU] = [
         MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
         MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
@@ -416,7 +433,50 @@ def build_application():
         CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
     ]
 
-    # ADMIN SETTINGS MENU (state-specific handlers)
+    # GIFT CODES MENU (state-specific handlers)
+    admin_states[constants.GIFT_CODES_MENU] = [
+        MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
+        MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
+        MessageHandler(filters.Regex(r'^💾 پشتیبان‌گیری$') & admin_filter, admin_backup.backup_restore_menu),
+        MessageHandler(filters.Regex(r'^👥 مدیریت کاربران$') & admin_filter, admin_users.user_management_menu),
+        MessageHandler(filters.Regex(r'^🎁 مدیریت کد هدیه$') & admin_filter, admin_gift.gift_code_management_menu),
+        MessageHandler(filters.Regex(r'^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
+
+        CallbackQueryHandler(admin_gift.gift_code_management_menu, pattern=r'^gift_root_menu$'),
+        CallbackQueryHandler(admin_gift.gift_code_management_menu, pattern=r'^admin_gift$'),
+        CallbackQueryHandler(admin_gift.admin_gift_codes_submenu, pattern=r'^gift_menu_gift$'),
+        CallbackQueryHandler(admin_gift.admin_promo_codes_submenu, pattern=r'^gift_menu_promo$'),
+
+        CallbackQueryHandler(admin_gift.ask_referral_bonus, pattern=r'^gift_referral_bonus$'),
+        CallbackQueryHandler(admin_gift.referral_cancel_cb, pattern=r'^gift_referral_cancel$'),
+
+        CallbackQueryHandler(admin_gift.create_gift_code_start, pattern=r'^gift_new_gift$'),
+        CallbackQueryHandler(admin_gift.cancel_create_gift_cb, pattern=r'^gift_create_cancel$'),
+        CallbackQueryHandler(admin_gift.list_gift_codes, pattern=r'^gift_list_gift$'),
+        CallbackQueryHandler(admin_gift.delete_gift_code_callback, pattern=r'^delete_gift_code_'),
+
+        CallbackQueryHandler(admin_gift.create_promo_start, pattern=r'^promo_new$'),
+        CallbackQueryHandler(admin_gift.promo_cancel_cb, pattern=r'^promo_cancel$'),
+        CallbackQueryHandler(admin_gift.promo_skip_expires_cb, pattern=r'^promo_skip_expires$'),
+        CallbackQueryHandler(admin_gift.list_promo_codes, pattern=r'^promo_list$'),
+        CallbackQueryHandler(admin_gift.delete_promo_code_callback, pattern=r'^delete_promo_code_'),
+        CallbackQueryHandler(admin_gift.promo_first_purchase_choice, pattern=r'^promo_first_(yes|no)$'),
+
+        CallbackQueryHandler(admin_settings.global_discount_submenu, pattern=r'^global_discount_submenu$'),
+        CallbackQueryHandler(admin_settings.toggle_global_discount, pattern=r'^toggle_global_discount$'),
+        CallbackQueryHandler(admin_settings.edit_setting_start, pattern=r'^admin_edit_setting_'),
+        CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
+    ]
+
+    # Await referral bonus amount (text input)
+    admin_states[constants.AWAIT_REFERRAL_BONUS] = [
+        MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_gift.referral_bonus_received),
+        CallbackQueryHandler(admin_gift.referral_cancel_cb, pattern=r'^gift_referral_cancel$'),
+        CallbackQueryHandler(admin_gift.gift_code_management_menu, pattern=r'^gift_root_menu$'),
+        CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
+    ]
+
+    # ADMIN SETTINGS MENU (state-specific)
     admin_states[constants.ADMIN_SETTINGS_MENU] = [
         MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
         MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
@@ -447,7 +507,7 @@ def build_application():
         CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
     ]
 
-    # AWAIT SETTING VALUE
+    # AWAIT SETTING VALUE (text input for settings and backup target)
     admin_states[constants.AWAIT_SETTING_VALUE] = [
         MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, await_setting_value_router),
     ]
