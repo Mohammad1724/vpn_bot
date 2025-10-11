@@ -264,7 +264,7 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # --------- ADMIN: PANELS MANAGER (nested conv, with Back/Cancel callbacks) ----------
+    # --------- ADMIN: PANELS MANAGER ----------
     panels_admin_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(r'^🧩 مدیریت پنل‌ها$') & admin_filter, panels_admin.panels_menu),
@@ -346,7 +346,7 @@ def build_application():
     # --------- ADMIN ROOT CONVERSATION ----------
     admin_states = {}
 
-    # ADMIN MENU (includes settings handlers too to ensure inline buttons work)
+    # ADMIN MENU (include settings and reports handlers here to ensure inline buttons always work)
     admin_states[constants.ADMIN_MENU] = [
         # Text entries
         MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
@@ -367,7 +367,7 @@ def build_application():
         CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^admin_settings$"),
         CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^back_to_settings$"),
 
-        # Settings submenus in ADMIN_MENU to ensure inline buttons work
+        # Settings submenus/toggles (also in ADMIN_MENU for robustness)
         CallbackQueryHandler(admin_settings.maintenance_and_join_submenu, pattern=r"^settings_maint_join$"),
         CallbackQueryHandler(admin_settings.payment_and_guides_submenu, pattern=r"^settings_payment_guides$"),
         CallbackQueryHandler(admin_settings.payment_info_submenu, pattern=r"^payment_info_submenu$"),
@@ -376,8 +376,6 @@ def build_application():
         CallbackQueryHandler(admin_settings.subdomains_submenu, pattern=r"^settings_subdomains$"),
         CallbackQueryHandler(admin_settings.reports_and_reminders_submenu, pattern=r"^settings_reports_reminders$"),
         CallbackQueryHandler(admin_settings.usage_aggregation_submenu, pattern=r"^settings_usage_aggregation$"),
-
-        # Settings toggles/actions
         CallbackQueryHandler(admin_settings.toggle_usage_aggregation, pattern=r"^toggle_usage_aggregation$"),
         CallbackQueryHandler(admin_settings.edit_default_link_start, pattern=r"^edit_default_link_type$"),
         CallbackQueryHandler(admin_settings.set_default_link_type, pattern=r"^set_default_link_"),
@@ -385,6 +383,13 @@ def build_application():
         CallbackQueryHandler(admin_settings.toggle_force_join, pattern=r"^toggle_force_join$"),
         CallbackQueryHandler(admin_settings.toggle_expiry_reminder, pattern=r"^toggle_expiry_reminder$"),
         CallbackQueryHandler(admin_settings.toggle_report_setting, pattern=r"^toggle_report_"),
+
+        # Reports menu and its inline buttons (registered here too)
+        CallbackQueryHandler(admin_reports.reports_menu, pattern=r"^rep_menu$"),
+        CallbackQueryHandler(admin_reports.show_stats_report, pattern=r"^rep_stats$"),
+        CallbackQueryHandler(admin_reports.show_daily_report, pattern=r"^rep_daily$"),
+        CallbackQueryHandler(admin_reports.show_weekly_report, pattern=r"^rep_weekly$"),
+        CallbackQueryHandler(admin_reports.show_popular_plans_report, pattern=r"^rep_popular$"),
 
         # Trial settings nested conversation available from here, too
         trial_settings_conv,
@@ -395,7 +400,23 @@ def build_application():
         CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
     ]
 
-    # ADMIN SETTINGS MENU (state-specific handlers to ensure settings callbacks work inside settings state)
+    # REPORTS MENU (keep dedicated handlers too)
+    admin_states[constants.REPORTS_MENU] = [
+        MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
+        MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
+        MessageHandler(filters.Regex(r'^💾 پشتیبان‌گیری$') & admin_filter, admin_backup.backup_restore_menu),
+        MessageHandler(filters.Regex(r'^👥 مدیریت کاربران$') & admin_filter, admin_users.user_management_menu),
+        MessageHandler(filters.Regex(r'^🎁 مدیریت کد هدیه$') & admin_filter, admin_gift.gift_code_management_menu),
+        MessageHandler(filters.Regex(r'^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
+        CallbackQueryHandler(admin_reports.reports_menu, pattern=r"^rep_menu$"),
+        CallbackQueryHandler(admin_reports.show_stats_report, pattern=r"^rep_stats$"),
+        CallbackQueryHandler(admin_reports.show_daily_report, pattern=r"^rep_daily$"),
+        CallbackQueryHandler(admin_reports.show_weekly_report, pattern=r"^rep_weekly$"),
+        CallbackQueryHandler(admin_reports.show_popular_plans_report, pattern=r"^rep_popular$"),
+        CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
+    ]
+
+    # ADMIN SETTINGS MENU (state-specific handlers)
     admin_states[constants.ADMIN_SETTINGS_MENU] = [
         MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
         MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
@@ -403,7 +424,6 @@ def build_application():
         MessageHandler(filters.Regex(r'^👥 مدیریت کاربران$') & admin_filter, admin_users.user_management_menu),
         MessageHandler(filters.Regex(r'^🎁 مدیریت کد هدیه$') & admin_filter, admin_gift.gift_code_management_menu),
         MessageHandler(filters.Regex(r'^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
-
         CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^admin_settings$"),
         CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^back_to_settings$"),
         CallbackQueryHandler(admin_settings.maintenance_and_join_submenu, pattern=r"^settings_maint_join$"),
@@ -421,14 +441,13 @@ def build_application():
         CallbackQueryHandler(admin_settings.toggle_force_join, pattern=r"^toggle_force_join$"),
         CallbackQueryHandler(admin_settings.toggle_expiry_reminder, pattern=r"^toggle_expiry_reminder$"),
         CallbackQueryHandler(admin_settings.toggle_report_setting, pattern=r"^toggle_report_"),
-
         trial_settings_conv,
         CallbackQueryHandler(admin_settings.edit_setting_start, pattern=r"^admin_edit_setting_"),
         CallbackQueryHandler(admin_settings.back_to_admin_menu_cb, pattern=r"^admin_back_to_menu$"),
         CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
     ]
 
-    # AWAIT SETTING VALUE (text input for settings and backup target)
+    # AWAIT SETTING VALUE
     admin_states[constants.AWAIT_SETTING_VALUE] = [
         MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, await_setting_value_router),
     ]
@@ -441,23 +460,19 @@ def build_application():
         MessageHandler(filters.Regex(r'^👥 مدیریت کاربران$') & admin_filter, admin_users.user_management_menu),
         MessageHandler(filters.Regex(r'^🎁 مدیریت کد هدیه$') & admin_filter, admin_gift.gift_code_management_menu),
         MessageHandler(filters.Regex(r'^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
-
         CallbackQueryHandler(admin_plans.plan_management_menu, pattern=r"^admin_plans$"),
         CallbackQueryHandler(admin_reports.reports_menu, pattern=r"^admin_reports$"),
         CallbackQueryHandler(admin_backup.backup_restore_menu, pattern=r"^admin_backup$"),
         CallbackQueryHandler(admin_users.user_management_menu, pattern=r"^admin_users$"),
         CallbackQueryHandler(admin_gift.gift_code_management_menu, pattern=r"^admin_gift$"),
         CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^admin_settings$"),
-
         # Plans list/actions
         CallbackQueryHandler(admin_plans.list_plans_admin, pattern=r'^admin_list_plans$'),
         CallbackQueryHandler(admin_plans.admin_toggle_plan_visibility_callback, pattern=r'^admin_toggle_plan_\d+$'),
         CallbackQueryHandler(admin_plans.admin_delete_plan_callback, pattern=r'^admin_delete_plan_\d+$'),
-
         # Panels admin nested conversation
         panels_admin_conv,
         CallbackQueryHandler(panels_admin.panels_menu, pattern=r'^admin_panels$'),
-
         # add_plan/edit_plan nested convs
         add_plan_conv,
         edit_plan_conv,
@@ -472,12 +487,10 @@ def build_application():
         MessageHandler(filters.Regex(r'^👥 مدیریت کاربران$') & admin_filter, admin_users.user_management_menu),
         MessageHandler(filters.Regex(r'^🎁 مدیریت کد هدیه$') & admin_filter, admin_gift.gift_code_management_menu),
         MessageHandler(filters.Regex(r'^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
-
         # Users list (paged)
         CallbackQueryHandler(admin_users.list_users_start, pattern=r"^admin_users_list$"),
         CallbackQueryHandler(admin_users.list_users_page_cb, pattern=r"^admin_users_list_page_\d+$"),
         CallbackQueryHandler(admin_users.open_user_from_list_cb, pattern=r"^admin_user_open_\d+$"),
-
         CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
         CallbackQueryHandler(admin_users.ask_user_id_cb, pattern=r"^admin_users_ask_id$"),
         CallbackQueryHandler(admin_users.user_management_menu_cb, pattern=r"^admin_users$"),
