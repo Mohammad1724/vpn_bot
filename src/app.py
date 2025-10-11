@@ -334,7 +334,7 @@ def build_application():
                 CallbackQueryHandler(panels_admin.edit_panel_back, pattern=r'^panel_edit_back$'),
                 CallbackQueryHandler(panels_admin.panel_cancel, pattern=r'^panel_cancel$'),
             ],
-        },
+        ],
         fallbacks=[
             CallbackQueryHandler(admin_plans.plan_management_menu, pattern=r'^admin_plans$'),
             CommandHandler('cancel', admin_plans.cancel_add_plan),
@@ -346,7 +346,7 @@ def build_application():
     # --------- ADMIN ROOT CONVERSATION ----------
     admin_states = {}
 
-    # ADMIN MENU (include settings, reports, gift-code handlers for robustness)
+    # ADMIN MENU (include settings, reports, gift-code, backup handlers for robustness)
     admin_states[constants.ADMIN_MENU] = [
         # Text entries
         MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
@@ -389,7 +389,7 @@ def build_application():
         CallbackQueryHandler(admin_reports.show_weekly_report, pattern=r"^rep_weekly$"),
         CallbackQueryHandler(admin_reports.show_popular_plans_report, pattern=r"^rep_popular$"),
 
-        # Gift-codes root and actions (also in ADMIN_MENU)
+        # Gift-codes root and actions
         CallbackQueryHandler(admin_gift.gift_code_management_menu, pattern=r'^gift_root_menu$'),
         CallbackQueryHandler(admin_gift.admin_gift_codes_submenu, pattern=r'^gift_menu_gift$'),
         CallbackQueryHandler(admin_gift.admin_promo_codes_submenu, pattern=r'^gift_menu_promo$'),
@@ -407,6 +407,18 @@ def build_application():
         CallbackQueryHandler(admin_gift.promo_first_purchase_choice, pattern=r'^promo_first_(yes|no)$'),
         CallbackQueryHandler(admin_settings.global_discount_submenu, pattern=r'^global_discount_submenu$'),
         CallbackQueryHandler(admin_settings.toggle_global_discount, pattern=r'^toggle_global_discount$'),
+
+        # Backup root and actions (registered here too)
+        CallbackQueryHandler(admin_backup.backup_restore_menu, pattern=r"^admin_backup$"),
+        CallbackQueryHandler(admin_backup.backup_restore_menu, pattern=r"^back_to_backup_menu$"),
+        CallbackQueryHandler(admin_backup.send_backup_file, pattern=r"^backup_download$"),
+        CallbackQueryHandler(admin_backup.restore_start, pattern=r"^backup_restore$"),
+        CallbackQueryHandler(admin_backup.edit_auto_backup_start, pattern=r"^edit_auto_backup$"),
+        CallbackQueryHandler(admin_backup.edit_backup_interval_start, pattern=r"^edit_backup_interval$"),
+        CallbackQueryHandler(admin_backup.set_backup_interval, pattern=r"^set_backup_interval_\d+$"),
+        CallbackQueryHandler(admin_backup.edit_backup_target_start, pattern=r"^edit_backup_target$"),
+        CallbackQueryHandler(admin_backup.admin_confirm_restore_callback, pattern=r"^admin_confirm_restore$"),
+        CallbackQueryHandler(admin_backup.admin_cancel_restore_callback, pattern=r"^admin_cancel_restore$"),
 
         # Trial settings nested conv
         trial_settings_conv,
@@ -468,11 +480,32 @@ def build_application():
         CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
     ]
 
-    # Await referral bonus amount (text input)
-    admin_states[constants.AWAIT_REFERRAL_BONUS] = [
-        MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_gift.referral_bonus_received),
-        CallbackQueryHandler(admin_gift.referral_cancel_cb, pattern=r'^gift_referral_cancel$'),
-        CallbackQueryHandler(admin_gift.gift_code_management_menu, pattern=r'^gift_root_menu$'),
+    # BACKUP MENU (state-specific)
+    admin_states[constants.BACKUP_MENU] = [
+        MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
+        MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
+        MessageHandler(filters.Regex(r'^💾 پشتیبان‌گیری$') & admin_filter, admin_backup.backup_restore_menu),
+        MessageHandler(filters.Regex(r'^👥 مدیریت کاربران$') & admin_filter, admin_users.user_management_menu),
+        MessageHandler(filters.Regex(r'^🎁 مدیریت کد هدیه$') & admin_filter, admin_gift.gift_code_management_menu),
+        MessageHandler(filters.Regex(r'^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
+
+        CallbackQueryHandler(admin_backup.backup_restore_menu, pattern=r"^back_to_backup_menu$"),
+        CallbackQueryHandler(admin_backup.send_backup_file, pattern=r"^backup_download$"),
+        CallbackQueryHandler(admin_backup.restore_start, pattern=r"^backup_restore$"),
+        CallbackQueryHandler(admin_backup.edit_auto_backup_start, pattern=r"^edit_auto_backup$"),
+        CallbackQueryHandler(admin_backup.edit_backup_interval_start, pattern=r"^edit_backup_interval$"),
+        CallbackQueryHandler(admin_backup.set_backup_interval, pattern=r"^set_backup_interval_\d+$"),
+        CallbackQueryHandler(admin_backup.edit_backup_target_start, pattern=r"^edit_backup_target$"),
+        CallbackQueryHandler(admin_backup.admin_confirm_restore_callback, pattern=r"^admin_confirm_restore$"),
+        CallbackQueryHandler(admin_backup.admin_cancel_restore_callback, pattern=r"^admin_cancel_restore$"),
+        CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
+    ]
+
+    # RESTORE UPLOAD (awaiting document)
+    admin_states[constants.RESTORE_UPLOAD] = [
+        MessageHandler(filters.Document.ALL & admin_filter, admin_backup.restore_receive_file),
+        CallbackQueryHandler(admin_backup.admin_cancel_restore_callback, pattern=r"^admin_cancel_restore$"),
+        CallbackQueryHandler(admin_backup.backup_restore_menu, pattern=r"^back_to_backup_menu$"),
         CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
     ]
 
