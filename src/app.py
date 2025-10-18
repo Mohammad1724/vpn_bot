@@ -29,12 +29,20 @@ import bot.handlers.admin.trial_settings_ui as trial_ui
 from bot.handlers.trial import get_trial_service as trial_get_trial_service
 from bot.handlers.admin.trial_settings import set_trial_days, set_trial_gb
 from bot.handlers import buy_panels
-from bot import webapp_stats  # Mini-app web server
 
 from config import BOT_TOKEN, ADMIN_ID
 
 warnings.filterwarnings("ignore", category=PTBUserWarning)
 logger = logging.getLogger(__name__)
+
+# Mini-app: import optionally (so lack of aiohttp won't crash the bot)
+try:
+    from bot import webapp_stats  # Mini-app web server (aiohttp)
+    _MINIAPP_AVAILABLE = True
+except Exception as e:
+    webapp_stats = None
+    _MINIAPP_AVAILABLE = False
+    logger.warning("Mini-app غیرفعال شد (احتمالاً aiohttp نصب نیست): %s", e)
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -47,10 +55,17 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.error("آپدیت مربوطه: %s", update)
 
 
-# Mini-app: open overview (rep_stats) as WebApp
+# Mini-app: open overview (rep_stats) as WebApp, with graceful fallback
 async def show_overview_webapp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer()
+    if q:
+        await q.answer()
+    # اگر مینی‌اپ در دسترس نیست، گزارش متنی نشان بده
+    if not _MINIAPP_AVAILABLE:
+        try:
+            return await admin_reports.show_stats_report(update, context)
+        except Exception:
+            pass
     try:
         import config as _cfg
         base = getattr(_cfg, "WEBAPP_BASE_URL", f"http://localhost:{getattr(_cfg, 'WEBAPP_PORT', 8081)}")
@@ -62,9 +77,12 @@ async def show_overview_webapp(update: Update, context: ContextTypes.DEFAULT_TYP
         [InlineKeyboardButton("⬅️ بازگشت", callback_data="rep_menu")]
     ])
     try:
-        await q.edit_message_text("برای مشاهده آمار کلی، دکمه زیر را بزنید:", reply_markup=kb)
+        if q:
+            await q.edit_message_text("برای مشاهده آمار کلی، دکمه زیر را بزنید:", reply_markup=kb)
+        else:
+            await context.bot.send_message(chat_id=update.effective_user.id, text="برای مشاهده آمار کلی، دکمه زیر را بزنید:", reply_markup=kb)
     except Exception:
-        await context.bot.send_message(chat_id=q.from_user.id, text="برای مشاهده آمار کلی، دکمه زیر را بزنید:", reply_markup=kb)
+        await context.bot.send_message(chat_id=update.effective_user.id, text="برای مشاهده آمار کلی، دکمه زیر را بزنید:", reply_markup=kb)
 
 
 def build_application():
@@ -80,8 +98,9 @@ def build_application():
     )
     application.add_error_handler(error_handler)
 
-    # Start the miniapp web server (aiohttp)
-    application.create_task(webapp_stats.start_webapp())
+    # Start the miniapp web server (aiohttp) only if available
+    if _MINIAPP_AVAILABLE:
+        application.create_task(webapp_stats.start_webapp())
 
     # Filters
     try:
@@ -365,11 +384,12 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-        # --------- ADMIN STATES DICT ----------
+    # --------- ADMIN STATES DICT ----------
     admin_states = {}
 
-    # ADMIN MENU: include Settings, Reports, Gift-code, Backup for robustness
+    # ADMIN MENU
     admin_states[constants.ADMIN_MENU] = [
+        # Main admin entry by messages
         MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
         MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
         MessageHandler(filters.Regex(r'^💾 پشتیبان‌گیری$') & admin_filter, admin_backup.backup_restore_menu),
@@ -377,6 +397,7 @@ def build_application():
         MessageHandler(filters.Regex(r'^🎁 مدیریت کد هدیه$') & admin_filter, admin_gift.gift_code_management_menu),
         MessageHandler(filters.Regex(r'^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
 
+        # Inline navigation among main sections
         CallbackQueryHandler(admin_plans.plan_management_menu, pattern=r"^admin_plans$"),
         CallbackQueryHandler(admin_reports.reports_menu, pattern=r"^admin_reports$"),
         CallbackQueryHandler(admin_backup.backup_restore_menu, pattern=r"^admin_backup$"),
