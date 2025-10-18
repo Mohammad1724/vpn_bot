@@ -5,6 +5,10 @@ import logging
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes
+from telegram.constants import ParseMode  # اضافه شد ✅
+
+from config import ADMIN_ID  # اضافه شد ✅
+from bot.constants import REPORTS_MENU  # اضافه شد ✅
 
 import database as db
 
@@ -39,10 +43,12 @@ async def reports_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "📈 گزارش‌ها و آمار"
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("📊 آمار کلی", callback_data="rep_stats")],
-        [InlineKeyboardButton("🗓 گزارش روزانه", callback_data="rep_daily"),
-         InlineKeyboardButton("🗓 گزارش هفتگی", callback_data="rep_weekly")],
+        [
+            InlineKeyboardButton("🗓 گزارش روزانه", callback_data="rep_daily"),
+            InlineKeyboardButton("🗓 گزارش هفتگی", callback_data="rep_weekly")
+        ],
         [InlineKeyboardButton("⭐️ پلن‌های محبوب", callback_data="rep_popular")],
-        # این خط جدید است:
+        # زیرمنوی تنظیمات Mini App
         [InlineKeyboardButton("⚙️ مینی‌اپ: پورت/ساب‌دامین", callback_data="rep_miniapp")],
         [InlineKeyboardButton("🏠 منوی ادمین", callback_data="admin_panel")],
     ])
@@ -60,13 +66,13 @@ async def show_stats_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = getattr(update, "callback_query", None)
     if q:
         await q.answer()
-    stats = db.get_stats()
+    stats = db.get_stats() or {}
     text = (
         "📊 آمار کلی ربات\n\n"
-        f"👥 تعداد کاربران: {stats.get('total_users', 0):,}\n"
-        f"✅ سرویس‌های فعال: {stats.get('active_services', 0):,}\n"
+        f"👥 تعداد کاربران: {int(stats.get('total_users', 0)):,}\n"
+        f"✅ سرویس‌های فعال: {int(stats.get('active_services', 0)):,}\n"
         f"💰 مجموع فروش: {float(stats.get('total_revenue', 0.0)):,.0f} تومان\n"
-        f"🚫 کاربران مسدود: {stats.get('banned_users', 0):,}"
+        f"🚫 کاربران مسدود: {int(stats.get('banned_users', 0)):,}"
     )
     kb = _back_to_reports_kb()
     try:
@@ -144,7 +150,7 @@ async def show_popular_plans_report(update: Update, context: ContextTypes.DEFAUL
         await update.effective_message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
     return REPORTS_MENU
 
-# --- Scheduled Report Functions (unchanged) ---
+# --- Scheduled Report Functions ---
 async def send_daily_summary(context: ContextTypes.DEFAULT_TYPE):
     logger.info("Job: sending daily summary to admin...")
     sales_today = db.get_sales_report(days=1) or []
