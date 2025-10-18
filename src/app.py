@@ -365,7 +365,7 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # --------- ADMIN STATES DICT ----------
+        # --------- ADMIN STATES DICT ----------
     admin_states = {}
 
     # ADMIN MENU: include Settings, Reports, Gift-code, Backup for robustness
@@ -412,7 +412,6 @@ def build_application():
         # NEW: Mini App settings under Reports menu
         CallbackQueryHandler(admin_reports.miniapp_settings_menu, pattern=r"^rep_miniapp$"),
         CallbackQueryHandler(admin_settings.edit_setting_start, pattern=r"^admin_edit_setting_mini_app_(port|subdomain)$"),
-    ]
 
         # Gift codes (inline)
         CallbackQueryHandler(admin_gift.gift_code_management_menu, pattern=r'^gift_root_menu$'),
