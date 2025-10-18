@@ -2,12 +2,11 @@
 # -*- coding: utf-8 -*-
 
 import logging
-from telegram.ext import ContextTypes
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.constants import ParseMode
-from bot.constants import REPORTS_MENU
+from telegram.error import BadRequest
+from telegram.ext import ContextTypes
+
 import database as db
-from config import ADMIN_ID
 
 logger = logging.getLogger(__name__)
 
@@ -166,3 +165,39 @@ async def send_weekly_summary(context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=ADMIN_ID, text=text, parse_mode=ParseMode.HTML)
     except Exception as e:
         logger.error(f"Failed to send weekly summary: {e}")
+
+async def miniapp_settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    زیرمنو ویرایش پورت و ساب‌دامین مخصوص Mini App داخل منوی «گزارش‌ها و آمار».
+    از فلو عمومی تنظیمات استفاده می‌کند: admin_settings.edit_setting_start
+    """
+    q = update.callback_query
+    if q:
+        await q.answer()
+
+    # مقادیر فعلی
+    port = db.get_setting("mini_app_port") or "—"
+    subd = db.get_setting("mini_app_subdomain") or "—"
+
+    text = (
+        "⚙️ تنظیمات مینی‌اپ (پورت و ساب‌دامین)\n\n"
+        f"• پورت فعلی: {port}\n"
+        f"• ساب‌دامین فعلی: {subd}\n\n"
+        "با دکمه‌های زیر مقدار جدید را وارد کنید."
+    )
+
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🛠️ ویرایش پورت", callback_data="admin_edit_setting_mini_app_port"),
+            InlineKeyboardButton("🌐 ویرایش ساب‌دامین", callback_data="admin_edit_setting_mini_app_subdomain"),
+        ],
+        [InlineKeyboardButton("⬅️ بازگشت", callback_data="rep_menu")],
+    ])
+
+    try:
+        if q and q.message:
+            await q.message.edit_text(text, reply_markup=kb)
+        else:
+            await context.bot.send_message(chat_id=update.effective_user.id, text=text, reply_markup=kb)
+    except BadRequest:
+        await context.bot.send_message(chat_id=update.effective_user.id, text=text, reply_markup=kb)
