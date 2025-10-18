@@ -409,6 +409,11 @@ def build_application():
         CallbackQueryHandler(admin_reports.show_weekly_report, pattern=r"^rep_weekly$"),
         CallbackQueryHandler(admin_reports.show_popular_plans_report, pattern=r"^rep_popular$"),
 
+        # NEW: Mini App settings under Reports menu
+        CallbackQueryHandler(admin_reports.miniapp_settings_menu, pattern=r"^rep_miniapp$"),
+        CallbackQueryHandler(admin_settings.edit_setting_start, pattern=r"^admin_edit_setting_mini_app_(port|subdomain)$"),
+    ]
+
         # Gift codes (inline)
         CallbackQueryHandler(admin_gift.gift_code_management_menu, pattern=r'^gift_root_menu$'),
         CallbackQueryHandler(admin_gift.admin_gift_codes_submenu, pattern=r'^gift_menu_gift$'),
