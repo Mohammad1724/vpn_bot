@@ -77,42 +77,40 @@ def _promo_expires_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("❌ لغو", callback_data="promo_cancel")]
     ])
 
-def _send_or_edit_text(update: Update, text: str, reply_markup=None, parse_mode: ParseMode | None = ParseMode.HTML):
+async def _send_or_edit_text(update: Update, text: str, reply_markup=None, parse_mode: ParseMode | None = ParseMode.HTML):
     """
     Helper همسان برای ارسال/ویرایش پیام‌ها با مدیریت خطاهای پارس مارک‌داون/HTML
     """
-    async def _inner():
-        q = getattr(update, "callback_query", None)
-        if q:
-            try: await q.answer()
-            except Exception: pass
-            try:
-                await q.edit_message_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
-            except BadRequest as e:
-                emsg = str(e).lower()
-                if "can't parse entities" in emsg or "can't find end of the entity" in emsg:
+    q = getattr(update, "callback_query", None)
+    if q:
+        try: await q.answer()
+        except Exception: pass
+        try:
+            await q.edit_message_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+        except BadRequest as e:
+            emsg = str(e).lower()
+            if "can't parse entities" in emsg or "can't find end of the entity" in emsg:
+                try:
+                    await q.edit_message_text(text, reply_markup=reply_markup, parse_mode=None)
+                except Exception:
                     try:
-                        await q.edit_message_text(text, reply_markup=reply_markup, parse_mode=None)
+                        await q.message.reply_text(text, reply_markup=reply_markup, parse_mode=None)
                     except Exception:
-                        try:
-                            await q.message.reply_text(text, reply_markup=reply_markup, parse_mode=None)
-                        except Exception:
-                            pass
-                else:
-                    try:
-                        await q.message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
-                    except BadRequest as e2:
-                        emsg2 = str(e2).lower()
-                        if "can't parse entities" in emsg2 or "can't find end of the entity" in emsg2:
-                            await q.message.reply_text(text, reply_markup=reply_markup, parse_mode=None)
-        else:
-            try:
-                await update.effective_message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
-            except BadRequest as e:
-                emsg = str(e).lower()
-                if "can't parse entities" in emsg or "can't find end of the entity" in emsg:
-                    await update.effective_message.reply_text(text, reply_markup=reply_markup, parse_mode=None)
-    return _inner()
+                        pass
+            else:
+                try:
+                    await q.message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+                except BadRequest as e2:
+                    emsg2 = str(e2).lower()
+                    if "can't parse entities" in emsg2 or "can't find end of the entity" in emsg2:
+                        await q.message.reply_text(text, reply_markup=reply_markup, parse_mode=None)
+    else:
+        try:
+            await update.effective_message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+        except BadRequest as e:
+            emsg = str(e).lower()
+            if "can't parse entities" in emsg or "can't find end of the entity" in emsg:
+                await update.effective_message.reply_text(text, reply_markup=reply_markup, parse_mode=None)
 
 # ---------------- Root menu ----------------
 async def gift_code_management_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -372,3 +370,54 @@ async def referral_bonus_received(update: Update, context: ContextTypes.DEFAULT_
         reply_markup=_gift_root_kb()
     )
     return GIFT_CODES_MENU
+
+
+# ====================== Router (catch-all) ======================
+# این روتر عمومی باعث می‌شود دکمه‌های مدیریت کد هدیه/تخفیف
+# حتی اگر state کانورسیشن mismatch باشد، کار کنند.
+async def gift_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    data = q.data
+
+    # ریشه
+    if data in ("admin_gift", "gift_root_menu"):
+        return await gift_code_management_menu(update, context)
+
+    # زیرمنوها
+    if data in ("gift_menu_gift",):
+        return await admin_gift_codes_submenu(update, context)
+    if data in ("gift_menu_promo",):
+        return await admin_promo_codes_submenu(update, context)
+
+    # کد هدیه
+    if data == "gift_new_gift":
+        return await create_gift_code_start(update, context)
+    if data == "gift_create_cancel":
+        return await cancel_create_gift_cb(update, context)
+    if data == "gift_list_gift":
+        return await list_gift_codes(update, context)
+    if data.startswith("delete_gift_code_"):
+        return await delete_gift_code_callback(update, context)
+
+    # کد تخفیف
+    if data == "promo_new":
+        return await create_promo_start(update, context)
+    if data == "promo_cancel":
+        return await promo_cancel_cb(update, context)
+    if data == "promo_skip_expires":
+        return await promo_skip_expires_cb(update, context)
+    if data == "promo_list":
+        return await list_promo_codes(update, context)
+    if data.startswith("delete_promo_code_"):
+        return await delete_promo_code_callback(update, context)
+    if data.startswith("promo_first_"):
+        return await promo_first_purchase_choice(update, context)
+
+    # پاداش معرفی
+    if data == "gift_referral_bonus":
+        return await ask_referral_bonus(update, context)
+    if data == "gift_referral_cancel":
+        return await referral_cancel_cb(update, context)
+
+    # ناشناخته
+    await q.answer("دکمه نامعتبر یا پشتیبانی‌نشده است.", show_alert=True)
