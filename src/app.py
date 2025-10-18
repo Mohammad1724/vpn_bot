@@ -8,7 +8,7 @@ from telegram.ext import (
     ApplicationBuilder, ConversationHandler, MessageHandler, CallbackQueryHandler,
     CommandHandler, filters, ContextTypes
 )
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.request import HTTPXRequest
 from telegram.error import NetworkError
 
@@ -29,6 +29,7 @@ import bot.handlers.admin.trial_settings_ui as trial_ui
 from bot.handlers.trial import get_trial_service as trial_get_trial_service
 from bot.handlers.admin.trial_settings import set_trial_days, set_trial_gb
 from bot.handlers import buy_panels
+from bot import webapp_stats  # Mini-app web server
 
 from config import BOT_TOKEN, ADMIN_ID
 
@@ -46,6 +47,26 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.error("آپدیت مربوطه: %s", update)
 
 
+# Mini-app: open overview (rep_stats) as WebApp
+async def show_overview_webapp(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    try:
+        import config as _cfg
+        base = getattr(_cfg, "WEBAPP_BASE_URL", f"http://localhost:{getattr(_cfg, 'WEBAPP_PORT', 8081)}")
+    except Exception:
+        base = "http://localhost:8081"
+    url = f"{base}/miniapp/stats"
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🌐 نمایش آمار کلی (وب)", web_app=WebAppInfo(url=url))],
+        [InlineKeyboardButton("⬅️ بازگشت", callback_data="rep_menu")]
+    ])
+    try:
+        await q.edit_message_text("برای مشاهده آمار کلی، دکمه زیر را بزنید:", reply_markup=kb)
+    except Exception:
+        await context.bot.send_message(chat_id=q.from_user.id, text="برای مشاهده آمار کلی، دکمه زیر را بزنید:", reply_markup=kb)
+
+
 def build_application():
     request = HTTPXRequest(connect_timeout=15.0, read_timeout=75.0, write_timeout=30.0, pool_timeout=90.0)
 
@@ -58,6 +79,9 @@ def build_application():
         .build()
     )
     application.add_error_handler(error_handler)
+
+    # Start the miniapp web server (aiohttp)
+    application.create_task(webapp_stats.start_webapp())
 
     # Filters
     try:
@@ -138,7 +162,7 @@ def build_application():
                 CallbackQueryHandler(charge_h.charge_menu_start, pattern=r"^charge_menu_main$"),
             ],
             constants.AWAIT_CUSTOM_AMOUNT: [
-                MessageHandler(filters.Regex(r'^\s*[\د۰-۹ ,]+\s*$'), charge_h.charge_amount_received),
+                MessageHandler(filters.Regex(r'^\s*[\d۰-۹ ,]+\s*$'), charge_h.charge_amount_received),
                 CallbackQueryHandler(charge_h.charge_start_payment, pattern=r"^charge_start_payment_back$"),
             ],
             constants.CHARGE_RECEIPT: [
@@ -239,7 +263,7 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # --------- ADMIN: TRIAL SETTINGS ----------
+    # --------- ADMIN: TRIAL SETTINGS (nested conv) ----------
     trial_settings_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(trial_ui.trial_menu, pattern=r"^settings_trial$")],
         states={
@@ -262,7 +286,7 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # --------- ADMIN: PANELS MANAGER ----------
+    # --------- ADMIN: PANELS MANAGER (nested conv) ----------
     panels_admin_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(r'^🧩 مدیریت پنل‌ها$') & admin_filter, panels_admin.panels_menu),
@@ -341,7 +365,7 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # --------- ADMIN ROOT STATES ----------
+    # --------- ADMIN STATES DICT ----------
     admin_states = {}
 
     # ADMIN MENU: include Settings, Reports, Gift-code, Backup for robustness
@@ -378,9 +402,9 @@ def build_application():
         CallbackQueryHandler(admin_settings.toggle_expiry_reminder, pattern=r"^toggle_expiry_reminder$"),
         CallbackQueryHandler(admin_settings.toggle_report_setting, pattern=r"^toggle_report_"),
 
-        # Reports (inline)
+        # Reports (inline) - rep_stats opens WebApp
+        CallbackQueryHandler(show_overview_webapp, pattern=r"^rep_stats$"),
         CallbackQueryHandler(admin_reports.reports_menu, pattern=r"^rep_menu$"),
-        CallbackQueryHandler(admin_reports.show_stats_report, pattern=r"^rep_stats$"),
         CallbackQueryHandler(admin_reports.show_daily_report, pattern=r"^rep_daily$"),
         CallbackQueryHandler(admin_reports.show_weekly_report, pattern=r"^rep_weekly$"),
         CallbackQueryHandler(admin_reports.show_popular_plans_report, pattern=r"^rep_popular$"),
@@ -424,7 +448,7 @@ def build_application():
         CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
     ]
 
-    # REPORTS MENU
+    # REPORTS MENU (state-specific; rep_stats opens WebApp here too)
     admin_states[constants.REPORTS_MENU] = [
         MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
         MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
@@ -432,8 +456,9 @@ def build_application():
         MessageHandler(filters.Regex(r'^👥 مدیریت کاربران$') & admin_filter, admin_users.user_management_menu),
         MessageHandler(filters.Regex(r'^🎁 مدیریت کد هدیه$') & admin_filter, admin_gift.gift_code_management_menu),
         MessageHandler(filters.Regex(r'^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
+
+        CallbackQueryHandler(show_overview_webapp, pattern=r"^rep_stats$"),
         CallbackQueryHandler(admin_reports.reports_menu, pattern=r"^rep_menu$"),
-        CallbackQueryHandler(admin_reports.show_stats_report, pattern=r"^rep_stats$"),
         CallbackQueryHandler(admin_reports.show_daily_report, pattern=r"^rep_daily$"),
         CallbackQueryHandler(admin_reports.show_weekly_report, pattern=r"^rep_weekly$"),
         CallbackQueryHandler(admin_reports.show_popular_plans_report, pattern=r"^rep_popular$"),
@@ -448,6 +473,7 @@ def build_application():
         MessageHandler(filters.Regex(r'^👥 مدیریت کاربران$') & admin_filter, admin_users.user_management_menu),
         MessageHandler(filters.Regex(r'^🎁 مدیریت کد هدیه$') & admin_filter, admin_gift.gift_code_management_menu),
         MessageHandler(filters.Regex(r'^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
+
         CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^admin_settings$"),
         CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^back_to_settings$"),
         CallbackQueryHandler(admin_settings.maintenance_and_join_submenu, pattern=r"^settings_maint_join$"),
@@ -465,6 +491,7 @@ def build_application():
         CallbackQueryHandler(admin_settings.toggle_force_join, pattern=r"^toggle_force_join$"),
         CallbackQueryHandler(admin_settings.toggle_expiry_reminder, pattern=r"^toggle_expiry_reminder$"),
         CallbackQueryHandler(admin_settings.toggle_report_setting, pattern=r"^toggle_report_"),
+
         trial_settings_conv,
         CallbackQueryHandler(admin_settings.edit_setting_start, pattern=r"^admin_edit_setting_"),
         CallbackQueryHandler(admin_settings.back_to_admin_menu_cb, pattern=r"^admin_back_to_menu$"),
@@ -513,17 +540,21 @@ def build_application():
         MessageHandler(filters.Regex(r'^👥 مدیریت کاربران$') & admin_filter, admin_users.user_management_menu),
         MessageHandler(filters.Regex(r'^🎁 مدیریت کد هدیه$') & admin_filter, admin_gift.gift_code_management_menu),
         MessageHandler(filters.Regex(r'^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
+
         CallbackQueryHandler(admin_plans.plan_management_menu, pattern=r"^admin_plans$"),
         CallbackQueryHandler(admin_reports.reports_menu, pattern=r"^admin_reports$"),
         CallbackQueryHandler(admin_backup.backup_restore_menu, pattern=r"^admin_backup$"),
         CallbackQueryHandler(admin_users.user_management_menu, pattern=r"^admin_users$"),
         CallbackQueryHandler(admin_gift.gift_code_management_menu, pattern=r"^admin_gift$"),
         CallbackQueryHandler(admin_settings.settings_menu, pattern=r"^admin_settings$"),
+
         CallbackQueryHandler(admin_plans.list_plans_admin, pattern=r'^admin_list_plans$'),
         CallbackQueryHandler(admin_plans.admin_toggle_plan_visibility_callback, pattern=r'^admin_toggle_plan_\d+$'),
         CallbackQueryHandler(admin_plans.admin_delete_plan_callback, pattern=r'^admin_delete_plan_\d+$'),
+
         panels_admin_conv,
         CallbackQueryHandler(panels_admin.panels_menu, pattern=r'^admin_panels$'),
+
         add_plan_conv,
         edit_plan_conv,
         CallbackQueryHandler(admin_plans.back_to_admin_cb, pattern=r"^admin_panel$"),
@@ -537,9 +568,11 @@ def build_application():
         MessageHandler(filters.Regex(r'^👥 مدیریت کاربران$') & admin_filter, admin_users.user_management_menu),
         MessageHandler(filters.Regex(r'^🎁 مدیریت کد هدیه$') & admin_filter, admin_gift.gift_code_management_menu),
         MessageHandler(filters.Regex(r'^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
+
         CallbackQueryHandler(admin_users.list_users_start, pattern=r"^admin_users_list$"),
         CallbackQueryHandler(admin_users.list_users_page_cb, pattern=r"^admin_users_list_page_\d+$"),
         CallbackQueryHandler(admin_users.open_user_from_list_cb, pattern=r"^admin_user_open_\d+$"),
+
         CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
         CallbackQueryHandler(admin_users.ask_user_id_cb, pattern=r"^admin_users_ask_id$"),
         CallbackQueryHandler(admin_users.user_management_menu_cb, pattern=r"^admin_users$"),
@@ -568,7 +601,7 @@ def build_application():
         CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
     ]
 
-    # BROADCAST
+    # BROADCAST (Inline)
     broadcast_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(r'^📩 ارسال پیام$') & admin_filter, admin_users.broadcast_menu),
@@ -606,7 +639,7 @@ def build_application():
     )
     admin_states[constants.ADMIN_MENU].append(broadcast_conv)
 
-    # --------- REGISTER ADMIN ROOT ----------
+    # --------- ADMIN ROOT WRAPPER ----------
     admin_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex(f'^{constants.BTN_ADMIN_PANEL}$') & admin_filter, admin_c.admin_entry),
@@ -629,8 +662,11 @@ def build_application():
     application.add_handler(support_conv, group=0)
     application.add_handler(admin_conv, group=0)
 
-    # Gift management catch-all: کار کند حتی خارج از state مخصوص
-    application.add_handler(CallbackQueryHandler(admin_gift.gift_router, pattern=r'^(admin_gift$|gift_.*|promo_.*)$'), group=1)
+    # Gift management catch-all: از هر state
+    application.add_handler(
+        CallbackQueryHandler(admin_gift.gift_router, pattern=r'^(admin_gift$|gift_.*|promo_.*)$'),
+        group=1
+    )
 
     # Admin settings commands
     application.add_handler(CommandHandler("set_trial_days", set_trial_days, filters=admin_filter))
@@ -656,7 +692,7 @@ def build_application():
     application.add_handler(CallbackQueryHandler(admin_users.admin_confirm_charge_callback, pattern=r'^admin_confirm_charge_'), group=1)
     application.add_handler(CallbackQueryHandler(admin_users.admin_reject_charge_callback, pattern=r'^admin_reject_charge_'), group=1)
 
-    # User services
+    # USER SERVICES (user side)
     for h in [
         CallbackQueryHandler(check_channel_membership(us_h.view_service_callback), pattern=r"^view_service_"),
         CallbackQueryHandler(check_channel_membership(us_h.back_to_services_callback), pattern=r"^back_to_services$"),
@@ -670,7 +706,7 @@ def build_application():
     ]:
         application.add_handler(h, group=2)
 
-    # Account info
+    # ACCOUNT INFO
     for h in [
         CallbackQueryHandler(check_channel_membership(start_h.show_purchase_history_callback), pattern=r"^acc_purchase_history$"),
         CallbackQueryHandler(check_channel_membership(start_h.show_charge_history_callback), pattern=r"^acc_charge_history$"),
@@ -679,24 +715,24 @@ def build_application():
     ]:
         application.add_handler(h, group=2)
 
-    # Guides
+    # GUIDES
     for h in [
         CallbackQueryHandler(check_channel_membership(start_h.show_guide_content), pattern=r"^guide_(connection|charging|buying)$"),
         CallbackQueryHandler(check_channel_membership(start_h.back_to_guide_menu), pattern=r"^guide_back_to_menu$"),
     ]:
         application.add_handler(h)
 
-    # Plans (user browsing)
+    # PLANS (User browsing)
     for h in [
         CallbackQueryHandler(check_channel_membership(buy_h.show_plans_in_category), pattern=r"^user_cat_"),
         CallbackQueryHandler(check_channel_membership(buy_h.buy_service_list), pattern=r"^back_to_cats$"),
     ]:
         application.add_handler(h)
 
-    # Buy panel select
+    # BUY PANEL SELECT (Multi-panel)
     application.add_handler(CallbackQueryHandler(check_channel_membership(buy_panels.choose_panel_callback), pattern=r"^buy_select_panel_"))
 
-    # Main menu (user)
+    # MAIN MENU (user)
     for h in [
         CommandHandler("start", check_channel_membership(start_h.start)),
         MessageHandler(filters.Regex(r'^🛍️ خرید سرویس$'), check_channel_membership(buy_panels.show_panel_menu)),
