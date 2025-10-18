@@ -32,17 +32,28 @@ def _back_to_reports_kb() -> InlineKeyboardMarkup:
 
 # ---------- Views ----------
 async def reports_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = getattr(update, "callback_query", None)
-    text = "بخش گزارش‌ها و آمار"
-    kb = _reports_menu_inline_kb()
+    q = update.callback_query
     if q:
         await q.answer()
-        try:
-            await q.edit_message_text(text, reply_markup=kb)
-        except Exception:
-            await q.message.reply_text(text, reply_markup=kb)
-    else:
-        await update.effective_message.reply_text(text, reply_markup=kb)
+
+    text = "📈 گزارش‌ها و آمار"
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 آمار کلی", callback_data="rep_stats")],
+        [InlineKeyboardButton("🗓 گزارش روزانه", callback_data="rep_daily"),
+         InlineKeyboardButton("🗓 گزارش هفتگی", callback_data="rep_weekly")],
+        [InlineKeyboardButton("⭐️ پلن‌های محبوب", callback_data="rep_popular")],
+        # این خط جدید است:
+        [InlineKeyboardButton("⚙️ مینی‌اپ: پورت/ساب‌دامین", callback_data="rep_miniapp")],
+        [InlineKeyboardButton("🏠 منوی ادمین", callback_data="admin_panel")],
+    ])
+
+    try:
+        if q and q.message:
+            await q.message.edit_text(text, reply_markup=kb)
+        else:
+            await context.bot.send_message(chat_id=update.effective_user.id, text=text, reply_markup=kb)
+    except BadRequest:
+        await context.bot.send_message(chat_id=update.effective_user.id, text=text, reply_markup=kb)
     return REPORTS_MENU
 
 async def show_stats_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
