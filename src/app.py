@@ -69,11 +69,15 @@ async def show_overview_webapp(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         import config as _cfg
         base = getattr(_cfg, "WEBAPP_BASE_URL", f"http://localhost:{getattr(_cfg, 'WEBAPP_PORT', 8081)}")
+        access_key = getattr(_cfg, "MINIAPP_ACCESS_KEY", None)
     except Exception:
         base = "http://localhost:8081"
+        access_key = None
     url = f"{base}/miniapp/stats"
+    fallback_url = f"{url}?key={access_key}" if access_key else url
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🌐 نمایش آمار کلی (وب)", web_app=WebAppInfo(url=url))],
+        [InlineKeyboardButton("🔗 بازکردن در مرورگر", url=fallback_url)],
         [InlineKeyboardButton("⬅️ بازگشت", callback_data="rep_menu")]
     ])
     try:
@@ -98,9 +102,7 @@ def build_application():
     )
     application.add_error_handler(error_handler)
 
-    # Start the miniapp web server (aiohttp) only if available
-    if _MINIAPP_AVAILABLE:
-        application.create_task(webapp_stats.start_webapp())
+    # توجه: استارت مینی‌اپ اکنون در jobs.post_init انجام می‌شود
 
     # Filters
     try:
@@ -276,7 +278,7 @@ def build_application():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_category_received),
                 CommandHandler('skip', admin_plans.skip_edit_plan_category)
             ],
-        },
+        ],
         fallbacks=[CommandHandler('cancel', admin_plans.cancel_edit_plan)],
         map_to_parent={ConversationHandler.END: constants.PLAN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
@@ -473,7 +475,7 @@ def build_application():
         CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
     ]
 
-    # REPORTS MENU (state-specific; rep_stats opens WebApp here too)
+    # REPORTS MENU (state-specific; added rep_miniapp + edit_setting handlers)
     admin_states[constants.REPORTS_MENU] = [
         MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
         MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
@@ -487,6 +489,8 @@ def build_application():
         CallbackQueryHandler(admin_reports.show_daily_report, pattern=r"^rep_daily$"),
         CallbackQueryHandler(admin_reports.show_weekly_report, pattern=r"^rep_weekly$"),
         CallbackQueryHandler(admin_reports.show_popular_plans_report, pattern=r"^rep_popular$"),
+        CallbackQueryHandler(admin_reports.miniapp_settings_menu, pattern=r"^rep_miniapp$"),
+        CallbackQueryHandler(admin_settings.edit_setting_start, pattern=r"^admin_edit_setting_mini_app_(port|subdomain)$"),
         CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
     ]
 
