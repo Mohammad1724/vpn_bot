@@ -278,7 +278,7 @@ def build_application():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_category_received),
                 CommandHandler('skip', admin_plans.skip_edit_plan_category)
             ],
-        ],
+        },
         fallbacks=[CommandHandler('cancel', admin_plans.cancel_edit_plan)],
         map_to_parent={ConversationHandler.END: constants.PLAN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
