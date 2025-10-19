@@ -424,6 +424,20 @@ async def post_init(app: Application):
             )
             logger.info("Usage aggregation job scheduled every %d minutes.", interval_min)
 
+        # Mini-app start (optional, non-blocking)
+        try:
+            from bot import webapp_stats as _ws
+        except Exception as e:
+            logger.warning("Mini-app در دسترس نیست (احتمالاً aiohttp نصب نیست): %s", e)
+        else:
+            async def _start_ws(context: ContextTypes.DEFAULT_TYPE):
+                try:
+                    await _ws.start_webapp()
+                    logger.info("Mini-app started on %s:%s", _ws.WEBAPP_HOST, _ws.WEBAPP_PORT)
+                except Exception as e:
+                    logger.error("Mini-app start failed: %s", e, exc_info=True)
+            jq.run_once(_start_ws, when=timedelta(seconds=1), name="miniapp_start")
+
         logger.info("JobQueue: jobs scheduled.")
     except Exception as e:
         logger.error("JobQueue scheduling failed: %s", e, exc_info=True)
@@ -434,3 +448,9 @@ async def post_shutdown(app: Application):
     Called by ApplicationBuilder.post_shutdown in app.py
     """
     logger.info("Jobs shutdown.")
+    # Stop mini-app gracefully (if running)
+    try:
+        from bot import webapp_stats as _ws
+        await _ws.stop_webapp()
+    except Exception:
+        pass
