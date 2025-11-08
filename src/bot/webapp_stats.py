@@ -5,6 +5,7 @@ import os
 import hmac
 import json
 import hashlib
+import asyncio
 from typing import Dict, Any, Optional
 
 from aiohttp import web
@@ -18,9 +19,55 @@ except Exception:
     _cfg = _C()
 
 WEBAPP_HOST = getattr(_cfg, "WEBAPP_HOST", "0.0.0.0")
-WEBAPP_PORT = int(getattr(_cfg, "WEBAPP_PORT", 8081))
-WEBAPP_BASE_URL = getattr(_cfg, "WEBAPP_BASE_URL", f"http://localhost:{WEBAPP_PORT}")
+DEFAULT_WEBAPP_PORT = int(getattr(_cfg, "WEBAPP_PORT", 8081))
+DEFAULT_WEBAPP_BASE_URL = getattr(_cfg, "WEBAPP_BASE_URL", f"http://localhost:{DEFAULT_WEBAPP_PORT}")
 BOT_TOKEN = getattr(_cfg, "BOT_TOKEN", "")
+
+# ---------- helpers for effective runtime config ----------
+def _get_effective_port() -> int:
+    try:
+        v = db.get_setting("mini_app_port")
+        if v is None or str(v).strip() == "":
+            return DEFAULT_WEBAPP_PORT
+        p = int(str(v).strip())
+        if 1 <= p <= 65535:
+            return p
+    except Exception:
+        pass
+    return DEFAULT_WEBAPP_PORT
+
+def _resolve_base_url(port: int) -> str:
+    """
+    اولویت:
+      1) mini_app_base_url از DB (اگر با http(s) شروع نشود، https:// را اضافه می‌کنیم)
+      2) mini_app_subdomain از DB اگر داده شده باشد (به عنوان hostname کامل؛ https:// را اضافه می‌کنیم)
+      3) WEBAPP_BASE_URL از config.py
+      4) http://localhost:{port}
+    """
+    try:
+        b = db.get_setting("mini_app_base_url")
+        if b:
+            b = str(b).strip().rstrip("/")
+            if b.startswith("http://") or b.startswith("https://"):
+                return b
+            return f"https://{b}"
+    except Exception:
+        pass
+    try:
+        sub = db.get_setting("mini_app_subdomain")
+        if sub:
+            sub = str(sub).strip().rstrip("/")
+            if sub.startswith("http://") or sub.startswith("https://"):
+                return sub
+            # فرض می‌کنیم hostname کامل است
+            return f"https://{sub}"
+    except Exception:
+        pass
+    try:
+        cfg_base = getattr(_cfg, "WEBAPP_BASE_URL", "") or DEFAULT_WEBAPP_BASE_URL
+        return str(cfg_base).rstrip("/")
+    except Exception:
+        return f"http://localhost:{port}"
 
 # ---------- Telegram WebApp initData verification ----------
 def _verify_init_data(init_data: str) -> bool:
@@ -61,7 +108,6 @@ def _get_stats_payload() -> Dict[str, Any]:
             users_no_orders = 0
     # Total traffic used (GB)
     try:
-        # snapshot of user_traffic table
         import sqlite3
         conn = db._connect_db()
         cur = conn.cursor()
@@ -159,7 +205,6 @@ STATS_HTML = """<!doctype html>
       set('banned_users', data.banned_users);
       set('active_services', data.active_services);
       set('total_traffic_gb', (data.total_traffic_gb || 0).toFixed(2));
-      // نمایش تومان بدون اعشار
       set('total_revenue', (data.total_revenue || 0).toLocaleString('fa-IR'));
       set('revenue_24h', (data.revenue_24h || 0).toLocaleString('fa-IR'));
     } catch (e) {
@@ -177,6 +222,7 @@ STATS_HTML = """<!doctype html>
 _app: Optional[web.Application] = None
 _runner: Optional[web.AppRunner] = None
 _site: Optional[web.TCPSite] = None
+_lock = asyncio.Lock()
 
 async def _handle_stats_page(request: web.Request) -> web.Response:
     return web.Response(text=STATS_HTML, content_type="text/html; charset=utf-8")
@@ -190,29 +236,37 @@ async def _handle_stats_api(request: web.Request) -> web.Response:
 
 async def start_webapp() -> None:
     """
-    راه‌اندازی وب‌سرور مینی‌اپ روی پورت مشخص‌شده.
+    راه‌اندازی وب‌سرور مینی‌اپ روی پورت مشخص‌شده (از DB یا config).
+    اگر از قبل روشن باشد، ابتدا stop شده و سپس با پورت جدید بالا می‌آید.
     """
     global _app, _runner, _site
-    if _app is not None:
-        return
-    _app = web.Application()
-    _app.router.add_get("/miniapp/stats", _handle_stats_page)
-    _app.router.add_get("/miniapp/api/stats", _handle_stats_api)
+    async with _lock:
+        # Restart if already running
+        if _app is not None:
+            await stop_webapp()
 
-    _runner = web.AppRunner(_app)
-    await _runner.setup()
-    _site = web.TCPSite(_runner, WEBAPP_HOST, WEBAPP_PORT)
-    await _site.start()
-    print(f"[webapp] started on {WEBAPP_HOST}:{WEBAPP_PORT} (base: {WEBAPP_BASE_URL})")
+        port = _get_effective_port()
+        _app = web.Application()
+        _app.router.add_get("/miniapp/stats", _handle_stats_page)
+        _app.router.add_get("/miniapp/api/stats", _handle_stats_api)
+
+        _runner = web.AppRunner(_app)
+        await _runner.setup()
+        _site = web.TCPSite(_runner, WEBAPP_HOST, port)
+        await _site.start()
+
+        base = _resolve_base_url(port)
+        print(f"[webapp] started on {WEBAPP_HOST}:{port} (base: {base})")
 
 async def stop_webapp() -> None:
     global _app, _runner, _site
-    try:
-        if _site:
-            await _site.stop()
-        if _runner:
-            await _runner.cleanup()
-    finally:
-        _site = None
-        _runner = None
-        _app = None
+    async with _lock:
+        try:
+            if _site:
+                await _site.stop()
+            if _runner:
+                await _runner.cleanup()
+        finally:
+            _site = None
+            _runner = None
+            _app = None
