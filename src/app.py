@@ -55,38 +55,66 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.error("آپدیت مربوطه: %s", update)
 
 
-# Mini-app: open overview (rep_stats) as WebApp, with graceful fallback
+# Mini-app: open overview (rep_stats) as WebApp, with group/PM handling and URL fallback
 async def show_overview_webapp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     if q:
-        await q.answer()
-    # اگر مینی‌اپ در دسترس نیست، گزارش متنی نشان بده
-    if not _MINIAPP_AVAILABLE:
         try:
-            return await admin_reports.show_stats_report(update, context)
+            await q.answer()
         except Exception:
             pass
+
+    # Build URL from config
     try:
         import config as _cfg
         base = getattr(_cfg, "WEBAPP_BASE_URL", f"http://localhost:{getattr(_cfg, 'WEBAPP_PORT', 8081)}")
-        access_key = getattr(_cfg, "MINIAPP_ACCESS_KEY", None)
     except Exception:
         base = "http://localhost:8081"
-        access_key = None
     url = f"{base}/miniapp/stats"
-    fallback_url = f"{url}?key={access_key}" if access_key else url
+
+    # Keyboard: WebApp + direct URL + back
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🌐 نمایش آمار کلی (وب)", web_app=WebAppInfo(url=url))],
-        [InlineKeyboardButton("🔗 بازکردن در مرورگر", url=fallback_url)],
+        [InlineKeyboardButton("🔗 بازکردن در مرورگر", url=url)],
         [InlineKeyboardButton("⬅️ بازگشت", callback_data="rep_menu")]
     ])
+    back_kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ بازگشت", callback_data="rep_menu")]])
+
+    # If clicked from a group/supergroup, send button to PM (WebApp buttons don’t render in groups)
+    chat = q.message.chat if (q and getattr(q, "message", None)) else update.effective_chat
+    is_private = getattr(chat, "type", "private") == "private"
+
+    text = "برای مشاهده آمار کلی، دکمه زیر را بزنید:"
+
+    if not is_private:
+        # Try sending to user's private chat
+        try:
+            await context.bot.send_message(chat_id=update.effective_user.id, text=text, reply_markup=kb)
+            # Inform in group
+            if q and q.message:
+                await q.message.edit_text("لینک مینی‌اپ به صورت پیام خصوصی برای شما ارسال شد.", reply_markup=back_kb)
+            else:
+                await context.bot.send_message(chat_id=chat.id, text="لینک مینی‌اپ به صورت پیام خصوصی برای شما ارسال شد.", reply_markup=back_kb)
+        except Exception:
+            # Could not PM (user hasn’t started the bot). Show info in group.
+            msg = "برای دریافت لینک مینی‌اپ، ابتدا در پی‌وی به ربات /start بفرستید."
+            try:
+                if q and q.message:
+                    await q.message.edit_text(msg, reply_markup=back_kb)
+                else:
+                    await context.bot.send_message(chat_id=chat.id, text=msg, reply_markup=back_kb)
+            except Exception:
+                pass
+        return
+
+    # Private chat: show WebApp button here
     try:
-        if q:
-            await q.edit_message_text("برای مشاهده آمار کلی، دکمه زیر را بزنید:", reply_markup=kb)
+        if q and q.message:
+            await q.message.edit_text(text, reply_markup=kb)
         else:
-            await context.bot.send_message(chat_id=update.effective_user.id, text="برای مشاهده آمار کلی، دکمه زیر را بزنید:", reply_markup=kb)
+            await context.bot.send_message(chat_id=update.effective_user.id, text=text, reply_markup=kb)
     except Exception:
-        await context.bot.send_message(chat_id=update.effective_user.id, text="برای مشاهده آمار کلی، دکمه زیر را بزنید:", reply_markup=kb)
+        await context.bot.send_message(chat_id=update.effective_user.id, text=text, reply_markup=kb)
 
 
 def build_application():
@@ -102,7 +130,7 @@ def build_application():
     )
     application.add_error_handler(error_handler)
 
-    # توجه: استارت مینی‌اپ اکنون در jobs.post_init انجام می‌شود
+    # توجه: استارت مینی‌اپ در jobs.post_init انجام می‌شود (نه اینجا)
 
     # Filters
     try:
@@ -278,7 +306,7 @@ def build_application():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_category_received),
                 CommandHandler('skip', admin_plans.skip_edit_plan_category)
             ],
-        },
+        ],
         fallbacks=[CommandHandler('cancel', admin_plans.cancel_edit_plan)],
         map_to_parent={ConversationHandler.END: constants.PLAN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
