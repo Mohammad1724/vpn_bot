@@ -147,10 +147,57 @@ def build_application():
     admin_filter = filters.User(user_id=admin_id_int)
     user_filter = ~admin_filter
 
-    # Router for AWAIT_SETTING_VALUE (settings vs backup target)
+    # Router for AWAIT_SETTING_VALUE (settings vs backup target vs miniapp settings)
     async def await_setting_value_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        # Backup restore target
         if context.user_data.get('awaiting_backup_target'):
             return await admin_backup.backup_target_received(update, context)
+
+        # Miniapp settings (port/subdomain) - handle locally and return to reports submenu
+        if context.user_data.get('awaiting_miniapp_setting'):
+            key = context.user_data.pop('awaiting_miniapp_setting')
+            text_val = (update.effective_message.text or "").strip()
+
+            # Persian to English digits (for port)
+            P2E = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
+
+            if key == "mini_app_port":
+                try:
+                    port = int(text_val.translate(P2E))
+                    if not (1 <= port <= 65535):
+                        raise ValueError()
+                except Exception:
+                    await update.effective_message.reply_text("پورت نامعتبر است. یک عدد بین 1 تا 65535 ارسال کنید.")
+                    return constants.AWAIT_SETTING_VALUE
+                try:
+                    import database as _db
+                    _db.set_setting("mini_app_port", port)
+                except Exception as e:
+                    await update.effective_message.reply_text(f"ذخیره پورت با خطا مواجه شد: {e}")
+                    return constants.AWAIT_SETTING_VALUE
+                await update.effective_message.reply_text("پورت مینی‌اپ با موفقیت ذخیره شد ✅")
+            else:
+                # mini_app_subdomain
+                sub = text_val.lower()
+                import re
+                if (not sub) or (not re.fullmatch(r"[a-z0-9][a-z0-9\-\.]{0,62}", sub)):
+                    await update.effective_message.reply_text("ساب‌دامین نامعتبر است. فقط حروف انگلیسی، عدد، - و . مجاز است.")
+                    return constants.AWAIT_SETTING_VALUE
+                try:
+                    import database as _db
+                    _db.set_setting("mini_app_subdomain", sub)
+                except Exception as e:
+                    await update.effective_message.reply_text(f"ذخیره ساب‌دامین با خطا مواجه شد: {e}")
+                    return constants.AWAIT_SETTING_VALUE
+                await update.effective_message.reply_text("ساب‌دامین مینی‌اپ با موفقیت ذخیره شد ✅")
+
+            # برگرد به زیرمنوی مینی‌اپ در گزارش‌ها
+            try:
+                return await admin_reports.miniapp_settings_menu(update, context)
+            except Exception:
+                return await admin_reports.reports_menu(update, context)
+
+        # Default: generic settings value handler
         return await admin_settings.setting_value_received(update, context)
 
     # --- Helper to exit charge conversation cleanly ---
@@ -159,6 +206,28 @@ def build_application():
         await charge_h.charge_cancel(update, context)
         await start_h.show_account_info(update, context)
         return ConversationHandler.END
+
+    # --- Miniapp settings editor (from Reports) ---
+    async def edit_miniapp_setting_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        q = update.callback_query
+        if q:
+            await q.answer()
+        cdata = q.data if q else ""
+        if cdata.endswith("_port"):
+            context.user_data['awaiting_miniapp_setting'] = "mini_app_port"
+            prompt = "پورت جدید Mini‑App را وارد کنید (۱ تا ۶۵۵۳۵):"
+        else:
+            context.user_data['awaiting_miniapp_setting'] = "mini_app_subdomain"
+            prompt = "ساب‌دامین جدید Mini‑App را وارد کنید (فقط a-z, 0-9, - و .):"
+        back_kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ بازگشت", callback_data="rep_miniapp")]])
+        try:
+            if q and q.message:
+                await q.message.edit_text(prompt, reply_markup=back_kb)
+            else:
+                await context.bot.send_message(chat_id=update.effective_user.id, text=prompt, reply_markup=back_kb)
+        except Exception:
+            await context.bot.send_message(chat_id=update.effective_user.id, text=prompt, reply_markup=back_kb)
+        return constants.AWAIT_SETTING_VALUE
 
     # --------- BUY FLOW ----------
     buy_conv = ConversationHandler(
@@ -218,7 +287,7 @@ def build_application():
                 CallbackQueryHandler(charge_h.charge_menu_start, pattern=r"^charge_menu_main$"),
             ],
             constants.AWAIT_CUSTOM_AMOUNT: [
-                MessageHandler(filters.Regex(r'^\s*[\d۰-۹ ,]+\s*$'), charge_h.charge_amount_received),
+                MessageHandler(filters.Regex(r'^\s*[\د۰-۹ ,]+\s*$') | filters.Regex(r'^\s*[\d۰-۹ ,]+\s*$'), charge_h.charge_amount_received),
                 CallbackQueryHandler(charge_h.charge_start_payment, pattern=r"^charge_start_payment_back$"),
             ],
             constants.CHARGE_RECEIPT: [
@@ -313,7 +382,7 @@ def build_application():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, admin_plans.edit_plan_category_received),
                 CommandHandler('skip', admin_plans.skip_edit_plan_category)
             ],
-        },
+        ],
         fallbacks=[CommandHandler('cancel', admin_plans.cancel_edit_plan)],
         map_to_parent={ConversationHandler.END: constants.PLAN_MENU},
         per_user=True, per_chat=True, allow_reentry=True
@@ -458,7 +527,7 @@ def build_application():
         per_user=True, per_chat=True, allow_reentry=True
     )
 
-    # --------- ADMIN STATES DICT (as a single literal to avoid bracket mismatches) ----------
+    # --------- ADMIN STATES DICT (single literal to avoid bracket mismatches) ----------
     admin_states = {
         constants.ADMIN_MENU: [
             MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
@@ -497,9 +566,12 @@ def build_application():
             CallbackQueryHandler(admin_reports.show_daily_report, pattern=r"^rep_daily$"),
             CallbackQueryHandler(admin_reports.show_weekly_report, pattern=r"^rep_weekly$"),
             CallbackQueryHandler(admin_reports.show_popular_plans_report, pattern=r"^rep_popular$"),
-            CallbackQueryHandler(admin_reports.miniapp_settings_menu, pattern=r"^rep_miniapp$"),
-            CallbackQueryHandler(admin_settings.edit_setting_start, pattern=r"^admin_edit_setting_mini_app_(port|subdomain)$"),
 
+            # Reports > MiniApp settings
+            CallbackQueryHandler(admin_reports.miniapp_settings_menu, pattern=r"^rep_miniapp$"),
+            CallbackQueryHandler(edit_miniapp_setting_start, pattern=r"^admin_edit_setting_mini_app_(port|subdomain)$"),
+
+            # Gift codes (inline)
             CallbackQueryHandler(admin_gift.gift_code_management_menu, pattern=r'^gift_root_menu$'),
             CallbackQueryHandler(admin_gift.admin_gift_codes_submenu, pattern=r'^gift_menu_gift$'),
             CallbackQueryHandler(admin_gift.admin_promo_codes_submenu, pattern=r'^gift_menu_promo$'),
@@ -518,6 +590,7 @@ def build_application():
             CallbackQueryHandler(admin_settings.global_discount_submenu, pattern=r'^global_discount_submenu$'),
             CallbackQueryHandler(admin_settings.toggle_global_discount, pattern=r'^toggle_global_discount$'),
 
+            # Backup (inline)
             CallbackQueryHandler(admin_backup.backup_restore_menu, pattern=r"^back_to_backup_menu$"),
             CallbackQueryHandler(admin_backup.send_backup_file, pattern=r"^backup_download$"),
             CallbackQueryHandler(admin_backup.restore_start, pattern=r"^backup_restore$"),
@@ -536,6 +609,7 @@ def build_application():
             broadcast_conv,  # inline broadcast conv
         ],
 
+        # REPORTS MENU (state-specific; includes MiniApp edit handlers)
         constants.REPORTS_MENU: [
             MessageHandler(filters.Regex(r'^➕ مدیریت پلن‌ها$') & admin_filter, admin_plans.plan_management_menu),
             MessageHandler(filters.Regex(r'^📈 گزارش‌ها و آمار$') & admin_filter, admin_reports.reports_menu),
@@ -550,7 +624,7 @@ def build_application():
             CallbackQueryHandler(admin_reports.show_weekly_report, pattern=r"^rep_weekly$"),
             CallbackQueryHandler(admin_reports.show_popular_plans_report, pattern=r"^rep_popular$"),
             CallbackQueryHandler(admin_reports.miniapp_settings_menu, pattern=r"^rep_miniapp$"),
-            CallbackQueryHandler(admin_settings.edit_setting_start, pattern=r"^admin_edit_setting_mini_app_(port|subdomain)$"),
+            CallbackQueryHandler(edit_miniapp_setting_start, pattern=r"^admin_edit_setting_mini_app_(port|subdomain)$"),
             CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
         ],
 
@@ -679,7 +753,7 @@ def build_application():
             MessageHandler(filters.Regex(r'^🎁 مدیریت کد هدیه$') & admin_filter, admin_gift.gift_code_management_menu),
             MessageHandler(filters.Regex(r'^⚙️ تنظیمات$') & admin_filter, admin_settings.settings_menu),
             MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, admin_users.manage_user_amount_received),
-            CallbackQueryHandler(admin_users.admin_user_amount_cancel_cb, pattern=r'^admin_user_amount_cancel_\d+$'),
+            CallbackQueryHandler(admin_users.admin_user_amount_cancel_cb, pattern=r'^admin_user_amount_cancel_\د+$') | CallbackQueryHandler(admin_users.admin_user_amount_cancel_cb, pattern=r'^admin_user_amount_cancel_\d+$'),
             CallbackQueryHandler(admin_c.admin_entry, pattern=r"^admin_panel$"),
         ],
     }
